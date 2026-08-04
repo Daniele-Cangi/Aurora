@@ -1,381 +1,362 @@
-# Aurora-X – Bio-Inspired Extreme Overlay Engine
+# Aurora-X
 
-Aurora-X is a research-grade C++ engine for **extreme networks**: energy-constrained nodes, harsh wireless channels, RIS-assisted links, and secure delivery with Ed25519.
+> Bio-inspired adaptive transport and cross-layer control research engine for resilient heterogeneous networks.
 
-In the current line of work, Aurora-X integrates a **bio-inspired, self-adapting FEC organism** with a full **closed-loop safety & optimizer stack**:
+Aurora-X is an ambitious systems research project exploring a long-term goal:
 
-> **Channel → AlienFountainOrganism → FlowHealth → SafetyMonitor → Optimizer Mode → Engine → Channel**
+> Can a network transport substrate observe its own condition, protect different classes of information according to intent, adapt coding and physical-link decisions under stress, preserve energy and duty-cycle constraints, and recover safely after severe disruption?
 
-This repo is not a generic UDP demo: it is a sandbox for **adaptive, immune-like transport** under stress.
+The current repository contains a substantial C++20 research implementation covering fountain-style forward error correction, adaptive redundancy, traffic classes, simulated RF/optical/backscatter links, energy and RIS models, supervisory state, cross-layer optimization, signed payloads, telemetry, UDP experiments, and an interactive dashboard.
 
----
+Aurora-X is **not yet a field-deployed extreme-network stack**, a validated replacement for established FEC standards, or a production security system. Several parts are implemented as simulation models or experimental control logic, and the present end-to-end path still contains integration inconsistencies that must be resolved before quantitative claims can be made.
 
-## 1. Core Ideas
-
-### 1.1 AlienFountainOrganism (Adaptive FEC Core)
-
-Aurora-X replaces fixed FEC parameters (and the old RaptorQ integration) with an internal, LT/fountain-based engine called **`AlienFountainOrganism`**:
-
-- Splits each payload into:
-  - **critical segment** (headers / vital bytes),
-  - **bulk segment** (rest of the payload).
-- Maintains separate encoders/decoders for:
-  - critical symbols (`enc_crit`),
-  - bulk symbols (`enc_bulk`).
-- Dynamically adjusts redundancy via **overhead factors**:
-  - `crit_overhead`, `bulk_overhead` ∈ [1.0, 4.0],
-  - with **genetic baselines** per traffic class.
-
-Traffic is classified biologically into:
-
-- **NERVE** – latency-critical (short deadlines, high reliability),
-- **GLAND** – high-reliability control/state flows,
-- **MUSCLE** – bulk / elastic traffic.
-
-Each (FlowClass, priority) pair has its own **FlowState** with:
-
-- adaptive overhead (crit/bulk),
-- coverage EWMA,
-- success/fail counters,
-- good/bad streaks,
-- a `panic_boost` field for acute reactions.
-
-### 1.2 Immunological Adaptation & Panic Mode
-
-On every decode (`integrate()`):
-
-- Compute:
-  - `coverage` ∈ [0, 1],
-  - `symbols_used`, `total_symbols_seen`,
-  - boolean `delivered`.
-- Update FlowState via **immunological rules**:
-  - **Failure (`delivered == false`)**:
-    - increase `crit_overhead` and `bulk_overhead` (fast `alpha_up`),
-    - for NERVE/GLAND: trigger **panic mode**:
-      - set `panic_boost` for the next N spawns,
-      - temporarily multiply redundancy (e.g. 2× on critical).
-  - **Success with excess redundancy**:
-    - if we used "too many" symbols, slowly **slim down**:
-      - decrease overhead by `alpha_down`,
-      - never below genetic baselines.
-
-Panic mode behaves like an **acute inflammatory response**: violent, short-lived boosts of redundancy to survive a shock.
+The project is not being reduced in scope. Its engineering path and maximum target architecture are defined in [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md).
 
 ---
 
-## 2. Closed-Loop Safety & Optimizer
+## Mission
 
-Above the organism, Aurora-X aggregates and reacts to flow-level health.
+Aurora-X aims to become an intent-aware, self-observing transport layer for environments where conventional assumptions fail:
 
-### 2.1 FlowHealth (NERVE / GLAND / MUSCLE)
+- intermittent and asymmetric connectivity;
+- severe packet loss and rapidly changing channels;
+- constrained batteries and harvested energy;
+- regulatory duty-cycle limits;
+- heterogeneous links such as RF, optical, backscatter, and future physical interfaces;
+- delay-tolerant, store-and-forward, and multi-node operation;
+- high-value payloads requiring integrity, provenance, and differentiated protection;
+- links assisted by programmable surfaces or other environmental infrastructure.
 
-Per class, Aurora-X builds a **FlowHealth** summary:
+The biological terminology is a design metaphor for control behaviour, not a claim of biological equivalence:
 
-- `ewma_cov` – exponentially weighted coverage,
-- `ewma_fail_rate` – long-term failure rate,
-- `good_streak` / `bad_streak`,
-- `recent_good_ratio` – short-term success ratio (EWMA),
-- small window counters.
-
-This is the **"vital signs" vector** for each organ-class.
-
-### 2.2 AuroraSafetyMonitor (SafetyState)
-
-`AuroraSafetyMonitor` consumes FlowHealth and keeps a discrete **`SafetyState`**:
-
-- `HEALTHY`
-- `DEGRADED`
-- `CRITICAL`
-
-Key behaviours:
-
-- **Shock detection**:
-  - if GLAND fail rate & bad streak explode → enter **CRITICAL** fast.
-- **Hysteresis & recovery**:
-  - separate thresholds for enter/exit CRITICAL,
-  - requires *sustained* good evidence to climb back:
-    - GLAND recent_good_ratio high,
-    - ewma_fail_rate low,
-    - long good streak, zero recent failures,
-    - maintained for a configurable number of steps.
-- Logs transitions:
-  - `[SAFETY][STATE] ...`
-  - `[SAFETY][RECOVERY] state: CRITICAL→DEGRADED`
-  - `[SAFETY][RECOVERY] state: DEGRADED→HEALTHY`
-
-### 2.3 Optimizer Mode & Genotypes
-
-The **Optimizer** maps SafetyState + FlowHealth to a **Mode**:
-
-- `CONSERVATIVE` – high redundancy, cautious use of resources.
-- `NORMAL` – baseline.
-- `AGGRESSIVE` – minimal redundancy, exploratory.
-
-Transitions are logged with `[OPT][MODE]` / `[OPT][RECOVERY]`.
-
-Internally the system can also emit **genotype hints** per flow class:
-
-- `BASELINE`, `HYPERVIGILANT`, `STOIC`, `EXPERIMENTAL`
-
-to bias how aggressively each class should defend or experiment. In the current configuration, **EXPERIMENTAL/STOIC** are only allowed in genuinely healthy regimes (low failure, AGGRESSIVE mode, zero recent bad streaks).
+- **NERVE** — latency-sensitive traffic;
+- **GLAND** — high-reliability state or control traffic;
+- **MUSCLE** — elastic or bulk traffic;
+- **panic response** — temporary fast increase in protection after failure;
+- **memory** — persistent per-flow adaptation state;
+- **recovery** — controlled return toward lower overhead after sustained success.
 
 ---
 
-## 3. Repository Layout (Main Components)
+## Current status
 
-- `aurora_x.cpp`  
-  Main orchestrator and simulation harness:
-  - parses intentions,
-  - drives `Engine`,
-  - manages **FlowHealth**, SafetyMonitor, Optimizer,
-  - includes **three-phase shock/recovery scenario**.
+**Stage:** advanced cross-layer research prototype and simulator  
+**Language:** C++20, with optional Python dashboard tooling  
+**Primary current task:** establish one coherent encoder → channel → decoder → health → controller loop
 
-- `aurora_extreme.hpp`  
-  Core types and optimizer:
-  - `FlowClass`, `FlowHealth`,
-  - `Mode` and update logic,
-  - duty, redundancy, SoC, channel/routing abstractions.
-
-- `aurora_organism.hpp`  
-  **AlienFountainOrganism**:
-  - flow profiling (NERVE / GLAND / MUSCLE),
-  - critical/bulk segmentation,
-  - adaptive overhead + panic mode,
-  - immunological update rules.
-
-- `src/core/AuroraSafetyMonitor.hpp`  
-  Safety supervisor:
-  - `SafetyState` + hysteresis,
-  - shock detection and recovery.
-
-- `aurora_batch_test.cpp`  
-  Batch experiments:
-  - sweep intentions / parameters,
-  - write `aurora_results.csv` for analysis.
-
-- `analyze_health_log.py`  
-  Python helper to analyse **health logs** (CSV) generated by the Engine:
-  - timeline of SafetyState / Mode,
-  - flow-class health metrics.
-
-- `aurora_udp_*_test.cpp`  
-  Real-world UDP demos (local LAN and Internet).
+| Area | Current state | What is already present | Important limitation |
+|---|---|---|---|
+| LT-like fountain FEC | Implemented prototype | XOR-based symbol generation and GF(2) matrix decoding | Not yet benchmarked against robust LT, RaptorQ, Reed–Solomon, repetition, or no-FEC baselines |
+| Adaptive FEC organism | Substantial prototype | Critical/bulk segmentation, flow classes, overhead memory, failure response, panic boost, gradual relaxation | State describing critical/bulk generations is currently stored globally per organism instance rather than per token |
+| Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; controller benefits are not yet isolated by controlled benchmarks |
+| FlowHealth | Implemented prototype | Coverage and failure EWMAs, success/failure counters, good/bad streaks | The main execution path can currently feed it decode results produced by a model incompatible with the actual transmitted generation |
+| Safety supervision | Basic prototype | HEALTHY, DEGRADED, and CRITICAL states from recent failure and duty data | Current implementation is simpler than the intended hysteretic, class-aware recovery supervisor |
+| Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | Some transitions are unreachable in the default single-flow scenario because inactive classes retain empty health state |
+| Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, duty limiter, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations |
+| Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade | `FIELD_BUILD` currently still uses stubbed device operations |
+| Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
+| UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
+| Telemetry | Implemented prototype | JSONL engine telemetry and JSON health events | Schema and provenance need consolidation; some advertised CSV fields are placeholders |
+| Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
+| Automated tests | Partial | Organism scenarios, crypto demonstration, PoD-M and optional RaptorQ-related targets | Tests are not yet a complete reproducible benchmark suite and historically were not registered with CTest |
+| Reproducible build | Being stabilized | CMake project and optional dependency switches | Previous defaults required optional dependencies and documentation contained conflicting instructions |
 
 ---
-<img width="2816" height="1536" alt="Gemini_Generated_Image_n0jga2n0jga2n0jg" src="https://github.com/user-attachments/assets/f7726fd8-7921-44e1-9533-207cf81e6458" />
 
+## What has been achieved
 
-## 4. Build & Run
+### 1. A real fountain-style coding experiment
 
-### 4.1 Minimal Build (Single File)
+Aurora-X includes an internal FEC implementation that:
 
-On a system with `g++` and (optionally) `libsodium`:
+1. splits a payload into source symbols;
+2. emits seeded XOR combinations;
+3. reconstructs the corresponding binary equations at the receiver;
+4. solves the system over GF(2);
+5. returns the recovered payload when the generation reaches sufficient rank.
 
-```sh
-g++ -std=c++20 -O3 -pthread aurora_x.cpp -o aurora_x
-./aurora_x
+This is a real encoder/decoder experiment. It is intentionally described as **LT-like** rather than as a standards-compliant RaptorQ replacement.
+
+### 2. Intent-derived traffic protection
+
+An `Intention` is converted into a flow profile containing deadline, reliability target, duty constraint, priority, and biological traffic class. The adaptive organism maintains different redundancy behaviour for NERVE, GLAND, and MUSCLE traffic.
+
+### 3. Adaptive protection with memory
+
+Per flow class and priority, the organism tracks:
+
+- critical and bulk overhead;
+- genetic baseline overhead;
+- average coverage;
+- success and failure counts;
+- good and bad streaks;
+- temporary panic state;
+- a configurable genotype policy.
+
+Failures can increase future redundancy rapidly, while sustained successful operation can reduce it gradually toward the baseline.
+
+### 4. A cross-layer simulation environment
+
+The engine combines coding decisions with models of:
+
+- RF, optical, and backscatter transmission;
+- energy expenditure and harvesting;
+- duty-cycle availability;
+- listen-before-talk behaviour;
+- synthetic SNR, fading, and packet error probability;
+- obstacles and programmable-surface paths;
+- deadline pressure and remaining decode work.
+
+### 5. Supervisory and optimization layers
+
+Aurora-X includes experimental layers for:
+
+- aggregated flow health;
+- safety state classification;
+- conservative, normal, and aggressive operation;
+- SNR-based or UCB-based physical-link selection;
+- telemetry-driven feedback.
+
+These layers exist in code, but the next engineering phase must make the health signal and transmitted FEC generation fully consistent.
+
+### 6. Security and provenance experiments
+
+The repository includes:
+
+- token serialization;
+- signatures;
+- optional real Ed25519 through libsodium;
+- Merkle-style proof-of-delivery experiments.
+
+Secure claims apply only to builds explicitly using the real cryptographic backend.
+
+### 7. Real socket experiments
+
+The UDP tools demonstrate that Aurora-related payloads and sequence data can be serialized and moved through actual operating-system sockets across local or Internet paths. They are useful transport experiments, but they do not by themselves validate Aurora's simulated RF, RIS, energy, or adaptive-FEC models.
+
+---
+
+## Current end-to-end inconsistency
+
+The most important technical issue is explicit.
+
+The main engine currently creates transmitted symbols through the monolithic `fec::Encoder` path, or the optional RaptorQ path. The same received packets are also passed into `AlienFountainOrganism::integrate()` to create health feedback, even though they were not generated through the organism's matching critical/bulk `spawn()` path.
+
+That means the delivery decoder and the health decoder can interpret the same packets under different generation assumptions.
+
+The immediate architectural repair is:
+
+```text
+Intention
+   ↓
+GenerationContext for token_id
+   ↓
+AlienFountainOrganism::spawn()
+   ↓
+Channel / nodes / custody
+   ↓
+AlienFountainOrganism::integrate()
+   ↓
+DecodeReport
+   ↓
+FlowHealth → SafetySupervisor → Optimizer
+   ↓
+policy for the next generation
 ```
 
-The current default path uses the internal AlienFountainOrganism FEC and does not require RaptorQ.
+One generation must have one source of truth for:
 
-### 4.2 CMake (Recommended)
+- symbol count;
+- original payload length;
+- critical and bulk boundaries;
+- symbol size;
+- encoder identity and version;
+- generation identifier;
+- adaptation parameters used at spawn time.
 
-Example CMake invocation:
+---
 
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-      -DUSE_SODIUM=ON \
-      -DUSE_RAPTORQ=OFF \
-      -DBUILD_FIELD=OFF \
-      -DBUILD_UDP_DEMOS=ON
-cmake --build build --config Release --target aurora_x
+## Target architecture
+
+Aurora-X is intended to evolve toward the following layered system:
+
+```text
+Application intent and mission constraints
+                  ↓
+        Intent compiler / policy contract
+                  ↓
+     Adaptive coding and generation manager
+                  ↓
+  Custody, fragmentation, provenance and security
+                  ↓
+ Cross-layer optimizer and safety supervisor
+                  ↓
+Link abstraction: RF | optical | backscatter | future
+                  ↓
+ Network, hardware-in-the-loop, or physical hardware
+                  ↓
+      Telemetry, digital twin and verification
 ```
 
-- `USE_SODIUM=ON` – enable real Ed25519 via libsodium.
-- `USE_RAPTORQ=OFF` – the current engine relies on AlienFountainOrganism; RaptorQ integration is legacy/experimental.
-- `BUILD_UDP_DEMOS=ON` – build the UDP tools (aurora_udp_demo, aurora_udp_extreme_*_test, …).
+The complete target includes:
+
+- concurrent, independently decodable generations;
+- class-aware and deadline-aware coding;
+- online channel estimation;
+- constrained adaptation rather than unconstrained heuristic tuning;
+- multi-hop custody and delay-tolerant forwarding;
+- authenticated generation metadata;
+- hardware-backed keys where available;
+- real link adapters;
+- digital-twin replay;
+- reproducible benchmark scenarios;
+- formal safety invariants for adaptation boundaries;
+- comparison against established baselines.
+
+See [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md) for the complete path.
+
+---
+
+## Repository structure
+
+```text
+aurora_x.cpp                 Main simulation/orchestration harness
+aurora_extreme.hpp           Channel, energy, optimizer and shared models
+aurora_organism.hpp          Adaptive critical/bulk FEC organism
+aurora_intention.hpp         Intention parser and constraints
+aurora_hal.hpp               Hardware abstraction and current mock backends
+src/core/
+  AuroraSafetyMonitor.hpp    Current safety-state prototype
+tests/
+  test_aurora_organism.cpp   Good/bad/adaptation scenarios
+aurora_batch_test.cpp        Experimental parameter sweep harness
+aurora_udp_*.cpp             UDP transport experiments
+aurora_dash_lab.py           Live monitoring dashboard
+Orginal/                     Historical source snapshot; not the active implementation
+```
+
+---
+
+## Build
+
+### Core research build
+
+The dependency-light build uses the internal LT-like FEC and placeholder signatures:
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DUSE_SODIUM=OFF \
+  -DUSE_RAPTORQ=OFF \
+  -DBUILD_NET_TOOLS=ON \
+  -DBUILD_TESTING=ON
+
+cmake --build build --config Debug
+ctest --test-dir build --output-on-failure
+```
 
 Run:
 
-```sh
+```bash
 ./build/bin/aurora_x
 ```
 
----
+On multi-configuration Windows generators the executable may be under `build/bin/Debug/`.
 
-## 5. Automatic Batch Tests
+### Real Ed25519 build
 
-### 5.1 Batch Test (Parameter Sweep)
+Install libsodium and configure:
 
-`aurora_batch_test.cpp` runs a series of simulations and writes the results to CSV:
+```bash
+cmake -S . -B build-secure \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DUSE_SODIUM=ON \
+  -DUSE_RAPTORQ=OFF \
+  -DBUILD_NET_TOOLS=ON \
+  -DBUILD_TESTING=ON
 
-```sh
-g++ -std=c++20 -O3 -pthread aurora_batch_test.cpp -o aurora_batch_test
-./aurora_batch_test
+cmake --build build-secure --config Release
 ```
 
-This generates:
+Only this path may be described as using real Ed25519.
 
-- `aurora_results.csv` – per-run metrics:
-  - deadlines, target reliability, duty,
-  - RIS tiles,
-  - delivered / not delivered,
-  - energy / SoC,
-  - delivery time, etc.
+### Optional RaptorQ path
 
-You can analyse it with Python, pandas, Excel, R, etc.
+The RaptorQ adapter is legacy/experimental and requires an explicitly supplied compatible implementation. It is not required for the current internal-organism research path.
 
----
-
-## 6. Shock–Recovery Scenario & Health Logs
-
-### 6.1 Three-Phase Scenario
-
-`aurora_x.cpp` includes a three-phase stress scenario:
-
-**Phase A – Shock**
-- GLAND success ≈ 10% (brutal failure),
-- NERVE / MUSCLE ≈ 90%.
-
-**Phase B – Recovery**
-- GLAND success ≈ 100%,
-- NERVE / MUSCLE ≈ 95–98%.
-
-**Phase C – Stable Healthy Regime**
-- All classes ≈ 99% success.
-
-Internally:
-- Engine adjusts crit_overhead / bulk_overhead,
-- FlowHealth encodes long/short-term trauma vs healing,
-- SafetyMonitor updates SafetyState,
-- Optimizer updates Mode.
-
-### 6.2 Health Logger (CSV)
-
-During long runs, Aurora-X emits a CSV health timeline, e.g. `aurora_health_log.csv`:
-
-**Columns** (per step, per FlowClass):
-- `step`
-- `time_s`
-- `flow_class` (NERVE / GLAND / MUSCLE)
-- `ewma_cov`
-- `ewma_fail`
-- `good_streak`
-- `bad_streak`
-- `safety_state`
-- `opt_mode`
-
-Use the Python helper to inspect it:
-
-```sh
-python analyze_health_log.py aurora_health_log.csv
+```bash
+cmake -S . -B build-rq \
+  -DUSE_RAPTORQ=ON \
+  -DRAPTORQ_ROOT=/path/to/libRaptorQ \
+  -DUSE_SODIUM=ON
 ```
-
-It reports, for example:
-- how many steps spent in each SafetyState,
-- how often the optimizer switched mode,
-- whether GLAND successfully recovered from a CRITICAL shock.
 
 ---
 
-## 7. Real-World UDP Demos
+## Interactive dashboard
 
-Aurora-X includes several tools to project the engine on real networks.
+The dashboard can launch the engine in interactive-lab mode and visualize streamed health events:
 
-### 7.1 UDP Echo over the Internet
-
-`aurora_udp_extreme_echo_test.cpp` sends Aurora packets to a UDP echo server and measures RTT / loss:
-
-```sh
-g++ aurora_udp_extreme_echo_test.cpp -o aurora_udp_extreme_echo_test -lws2_32
-.\aurora_udp_extreme_echo_test.exe 18.133.69.55 7 10
+```bash
+python -m pip install dash plotly
+python aurora_dash_lab.py
 ```
 
-Typical output:
+Current status:
 
-```
-[ECHO] seq=1 RTT=98.2 ms
-[ECHO] seq=2 RTT=101.5 ms
-...
----
-Sent: 10, Received: 9, Loss: 10.0%
-Avg RTT: 102.3 ms
-```
-
-You can also use DNS servers as "UDP echo-like" endpoints (e.g. 208.67.222.222:53, 8.8.8.8:53, etc.).
-
-### 7.2 DNS-Based Global Tests
-
-Example from Denmark to Taiwan DNS (168.95.1.1:53):
-
-```sh
-.\aurora_udp_extreme_echo_test.exe 168.95.1.1 53 10
-```
-
-Example measured output:
-
-```
-[ECHO] seq=1 RTT=284.2 ms
-...
-Sent: 10, Received: 10, Loss: 0.0%
-Avg RTT: 289.0 ms
-```
-
-This demonstrates:
-- Aurora-X traffic crossing NAT, firewall, ISPs,
-- realistic RTTs for intercontinental paths.
-
-### 7.3 Local Sequence & Bidirectional Tests
-
-- `aurora_udp_extreme_seq_test.cpp` – send/receive numbered Aurora packets across LAN.
-- `aurora_udp_extreme_bidir_test.cpp` – bidirectional state exchange between two nodes:
-
-```sh
-# Receiver
-.\aurora_udp_extreme_bidir_test.exe recv 5000
-
-# Sender
-.\aurora_udp_extreme_bidir_test.exe send 127.0.0.1 5000
-```
-
-These demos show that Aurora states and telemetry can be serialized, transported, and updated across real networks.
+- monitoring works as an experimental process bridge;
+- slider values are written to `aurora_interactive_config.json`;
+- the C++ reload path is currently disabled, so controls do not yet change the live engine.
 
 ---
 
-## 8. Applications
+## Testing and validation policy
 
-- Research on adaptive, immune-like FEC and closed-loop safety controllers.
-- Simulation of energy-aware, RIS-assisted wireless networks.
-- Prototyping of secure IoT / sensor networks under extreme conditions.
-- Teaching advanced topics:
-  - hybrid systems,
-  - supervisory control,
-  - error-control coding + safety logic integration.
+Aurora-X will distinguish four levels of evidence:
+
+1. **Unit evidence** — exact behaviour of codecs, parsers, controllers, and state machines.
+2. **Simulation evidence** — results under declared synthetic channel and energy models.
+3. **Emulation evidence** — real processes and sockets under controlled network impairment.
+4. **Field evidence** — physical hardware, measured channels, and calibrated energy use.
+
+Results from one level must not be presented as proof of another.
+
+The first decisive benchmark will compare, under identical seeds and constraints:
+
+- no FEC;
+- fixed repetition;
+- fixed LT-like overhead;
+- adaptive Aurora policy;
+- optional established-code baseline when available.
+
+Primary metrics:
+
+- delivery probability;
+- useful goodput;
+- transmitted bytes per delivered byte;
+- decode latency distribution;
+- energy per delivered byte;
+- deadline success rate;
+- adaptation settling time;
+- overshoot and oscillation;
+- false panic and delayed recovery rates.
 
 ---
 
-## 9. License
+## Visual concept
 
-This software is proprietary and provided for evaluation, research, and demonstration purposes only.
+<img width="2816" height="1536" alt="Aurora-X conceptual visualization" src="https://github.com/user-attachments/assets/f7726fd8-7921-44e1-9533-207cf81e6458" />
 
-Commercial, industrial, or production use is strictly prohibited without explicit written consent from the copyright holder.
-
-For commercial licensing, contact: Daniele Cangi (GitHub Profile).
-
-See LICENSE for full terms.
+*Conceptual visualization of the Aurora-X research direction. It represents the intended autonomous and resilient network substrate; it is not a diagram of currently deployed hardware.*
 
 ---
 
-## 10. Relation to Prior Work
+## License
 
-Aurora-X sits at the intersection of several research domains:
+Aurora-X is source-available under the repository's custom evaluation, research, and demonstration license. Commercial, industrial, production, redistribution, and modification rights are restricted unless separately authorized.
 
-- **Adaptive FEC**: Unlike fixed-rate codes (e.g., Reed-Solomon, LDPC), Aurora-X uses fountain codes with dynamic redundancy that adapts to channel conditions and traffic class requirements.
+See [`LICENSE`](LICENSE).
 
-- **Artificial Immune Systems (AIS)**: The panic mode and immunological adaptation rules draw inspiration from biological immune responses—rapid, temporary boosts in defense when threats are detected.
+---
 
-- **Supervisory Control Theory**: The SafetyMonitor implements a discrete-state supervisor with hysteresis, ensuring stable transitions between operational modes (HEALTHY/DEGRADED/CRITICAL).
-
-- **Network Coding & Fountain Codes**: Builds on LT codes and fountain coding principles, but extends them with class-aware segmentation (critical vs. bulk) and adaptive overhead factors.
-
-- **Extreme Networks Research**: Targets scenarios where traditional protocols fail—energy-constrained nodes, intermittent connectivity, and harsh wireless environments typical of IoT, sensor networks, and space communications.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. It is a high-ambition research system with several implemented foundations and one immediate obligation: make the adaptive coding loop internally coherent, measurable, and reproducible before extending it further.
