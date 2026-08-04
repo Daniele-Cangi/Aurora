@@ -1,87 +1,100 @@
-<<<<<<< HEAD
 # Aurora-X Requirements
 
-## Software Requirements
-- C++17 compatible compiler (e.g., g++, clang++)
-- [libsodium](https://libsodium.gitbook.io/doc/) (for Ed25519 cryptography)
-- CMake (optional, for advanced builds)
-- Git (for version control)
-- Visual Studio Code or another C++ IDE (recommended)
+Aurora-X is a C++20 research project with optional cryptographic, RaptorQ, network-tool, and Python dashboard components.
 
-## Platform Support
-- Windows (tested with MinGW-w64)
-- Linux (tested with GCC/Clang)
-- macOS (should work with Clang and Homebrew-installed libsodium)
+## Core research build
 
-## Build Instructions
-1. Install a C++17 compiler and libsodium.
-2. Clone the repository:
-   ```sh
-   git clone https://github.com/Daniele-Cangi/Aurora-X.git
-   cd Aurora-X
-   ```
-3. Build the main orchestrator:
-   ```sh
-   g++ -std=c++17 aurora_x.cpp -o aurora_x -lsodium
-   ```
-4. Run:
-   ```sh
-   ./aurora_x
-   ```
+Required:
 
-## Optional/Advanced
-- CMake build scripts can be added for multi-platform support.
-- For Windows, use vcpkg or MSYS2 to install libsodium easily.
-- For large simulations, more RAM/CPU is recommended.
+- CMake 3.20 or newer
+- A C++20 compiler
+  - GCC 11 or newer recommended
+  - Clang 14 or newer recommended
+  - Visual Studio 2022 recommended on Windows
+- A working C++ threads implementation
 
-## External Dependencies
-- [libsodium](https://libsodium.gitbook.io/doc/): cryptographic library for Ed25519
+The dependency-light core build uses:
 
-## Notes
-- No external Python or Java dependencies.
-- All code is C++ and self-contained except for libsodium.
-- For commercial/industrial use, a separate license is required (see LICENSE).
-=======
-# Aurora-X Requirements
+- the internal LT-like fountain-code prototype;
+- mock/simulation HAL backends;
+- placeholder signatures marked as insecure test behaviour.
 
-## Software Requirements
-- C++17 compatible compiler (e.g., g++, clang++)
-- [libsodium](https://libsodium.gitbook.io/doc/) (for Ed25519 cryptography)
-- CMake (optional, for advanced builds)
-- Git (for version control)
-- Visual Studio Code or another C++ IDE (recommended)
+Configure and build:
 
-## Platform Support
-- Windows (tested with MinGW-w64)
-- Linux (tested with GCC/Clang)
-- macOS (should work with Clang and Homebrew-installed libsodium)
+```sh
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DUSE_SODIUM=OFF \
+  -DUSE_RAPTORQ=OFF \
+  -DBUILD_NET_TOOLS=ON \
+  -DBUILD_TESTING=ON
 
-## Build Instructions
-1. Install a C++17 compiler and libsodium.
-2. Clone the repository:
-   ```sh
-   git clone https://github.com/Daniele-Cangi/Aurora-X.git
-   cd Aurora-X
-   ```
-3. Build the main orchestrator:
-   ```sh
-   g++ -std=c++17 aurora_x.cpp -o aurora_x -lsodium
-   ```
-4. Run:
-   ```sh
-   ./aurora_x
-   ```
+cmake --build build --config Debug
+ctest --test-dir build --output-on-failure
+```
 
-## Optional/Advanced
-- CMake build scripts can be added for multi-platform support.
-- For Windows, use vcpkg or MSYS2 to install libsodium easily.
-- For large simulations, more RAM/CPU is recommended.
+## Optional real Ed25519
 
-## External Dependencies
-- [libsodium](https://libsodium.gitbook.io/doc/): cryptographic library for Ed25519
+For real Ed25519 signing and verification, install libsodium and configure with:
 
-## Notes
-- No external Python or Java dependencies.
-- All code is C++ and self-contained except for libsodium.
-- For commercial/industrial use, a separate license is required (see LICENSE).
->>>>>>> 35b45839e0d7f45212b140c579b10c4f76c1d263
+```sh
+cmake -S . -B build-secure \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DUSE_SODIUM=ON \
+  -DUSE_RAPTORQ=OFF \
+  -DBUILD_NET_TOOLS=ON \
+  -DBUILD_TESTING=ON
+```
+
+Without `USE_SODIUM=ON`, the signature functions are deterministic placeholders for integration testing and are not secure.
+
+## Optional RaptorQ adapter
+
+The external RaptorQ path is legacy/experimental and is not required for the current internal FEC research path.
+
+To enable it, provide a compatible implementation explicitly:
+
+```sh
+cmake -S . -B build-rq \
+  -DUSE_RAPTORQ=ON \
+  -DRAPTORQ_ROOT=/path/to/libRaptorQ \
+  -DUSE_SODIUM=ON
+```
+
+The exact external implementation and adapter compatibility must be verified before treating this profile as supported.
+
+## Python dashboard
+
+Optional dashboard requirements:
+
+- Python 3.10 or newer recommended
+- Dash
+- Plotly
+
+Install:
+
+```sh
+python -m pip install dash plotly
+```
+
+Run after building or copying the `aurora_x` executable into the working directory expected by the script:
+
+```sh
+python aurora_dash_lab.py
+```
+
+Current limitation: the dashboard writes `aurora_interactive_config.json`, but live configuration reload is disabled in the C++ engine. The dashboard is currently a monitoring interface, not a functioning closed-loop parameter controller.
+
+## Platform status
+
+- Windows: primary historical development environment; UDP tools link against `ws2_32`.
+- Linux: intended supported environment for core simulation and future network emulation.
+- macOS: expected to compile with a suitable C++20 compiler, but not currently part of an automated support matrix.
+
+## Current hardware status
+
+The HAL contains interfaces and simulation/mock implementations for radio, optical, backscatter, RIS, SPI, I2C, and GPIO. `FIELD_BUILD` does not yet provide complete physical device drivers. Hardware claims require a separately validated adapter.
+
+## Recommended development profile
+
+Use the dependency-light Debug profile until the core encoder/decoder/health loop is coherent and all tests pass. Add real crypto, external FEC, optimized builds, emulation, and hardware profiles explicitly rather than allowing optional dependencies to change the meaning of a build silently.
