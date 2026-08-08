@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 using aurora::AlienFountainOrganism;
@@ -69,6 +70,15 @@ int main() {
     state.now_ms = 1001;
     const auto expired = envelope.constrain(contract, spawned.descriptor, state, proposed);
     assert(!expired.decision.permitted);
+
+    state.now_ms = 20;
+    state.observed_at_ms = 20;
+    state.source_energy_reserve = std::numeric_limits<double>::quiet_NaN();
+    const auto invalid_energy = envelope.constrain(
+        contract, spawned.descriptor, state, proposed);
+    assert(!invalid_energy.decision.permitted);
+    assert(invalid_energy.constraints_applied.front() ==
+           "invalid source energy observation");
 
     std::cout << "safety envelope tests passed\n";
     return 0;

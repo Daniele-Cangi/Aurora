@@ -28,6 +28,7 @@ using namespace std; using namespace chrono;
 #include "aurora_organism.hpp"
 #include "src/core/AuroraSafetyMonitor.hpp"
 #include "include/aurora/safety/SafetyEnvelope.hpp"
+#include "include/aurora/telemetry/DecisionReplayLog.hpp"
 #ifdef AURORA_USE_LIBRAPTORQ
 #include "fec/AuroraRaptorQ.hpp"
 #endif
@@ -290,7 +291,7 @@ struct Engine {
   // FASE 4: SafetyMonitor
   aurora::safety::SafetyMonitor safety_monitor;
   aurora::safety::SafetyEnvelope safety_envelope;
-  vector<aurora::safety::TransportDecisionTrace> decision_traces;
+  aurora::telemetry::DecisionReplayLog decision_trace_log;
   
   // T1: Flag per stream interattivo e stato corrente
   bool interactive_stream_ = false;
@@ -558,7 +559,7 @@ struct Engine {
       observed.decoder_rank = last_decode_report.decoder_rank;
       observed.required_rank = static_cast<uint32_t>(K);
       auto decision_trace = safety_envelope.constrain(I, generation_descriptor, observed, proposed);
-      decision_traces.push_back(decision_trace);
+      decision_trace_log.record(I, generation_descriptor, decision_trace);
       dec.mode = phy_link(decision_trace.decision.link);
       double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
       HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
@@ -761,7 +762,12 @@ struct Engine {
 bool aurora_run(const std::string& intention, Engine* outE = nullptr) {
   ios::sync_with_stdio(false);
   cout<<"=== AURORA-X - Extreme Field Orchestrator (UPDATED) ===\n";
-  Engine* E = outE ? outE : new Engine();
+  std::unique_ptr<Engine> owned_engine;
+  Engine* E = outE;
+  if (!E) {
+    owned_engine = std::make_unique<Engine>();
+    E = owned_engine.get();
+  }
   E->init(intention);
   bool ok = E->run();
   cout<<(ok? ">>> SUCCESS\n" : ">>> INCOMPLETE - ritenta con piu RIS/epsilon\n");
@@ -868,7 +874,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     observed.required_rank = static_cast<uint32_t>(engine.K);
     auto decision_trace = engine.safety_envelope.constrain(
       engine.I, engine.generation_descriptor, observed, proposed);
-    engine.decision_traces.push_back(decision_trace);
+    engine.decision_trace_log.record(
+      engine.I, engine.generation_descriptor, decision_trace);
     dec.mode = phy_link(decision_trace.decision.link);
     double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
     HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
@@ -1023,21 +1030,38 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
 int main(int argc, char* argv[]){
   // T2: Parsing argomenti per modalità interattiva
   bool interactive_lab = false;
+  std::string decision_trace_path;
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--interactive-lab") {
       interactive_lab = true;
-      break;
+    } else if (std::string(argv[i]) == "--decision-trace") {
+      if (i + 1 >= argc) {
+        std::cerr << "--decision-trace requires a file path\n";
+        return 2;
+      }
+      decision_trace_path = argv[++i];
     }
   }
-  
+
+  auto engine = std::make_unique<Engine>();
+  bool ok = false;
   if (interactive_lab) {
-    Engine engine;
-    bool ok = aurora_run_interactive_lab(engine, 5000);
-    return ok ? 0 : 1;
+    ok = aurora_run_interactive_lab(*engine, 5000);
   } else {
     std::string intention = "deadline:600; reliability:0.99; duty:0.01; optical:on; backscatter:on; ris:16; selector:argmax";
-    bool ok = aurora_run(intention);
-    return ok?0:1;
+    ok = aurora_run(intention, engine.get());
   }
+
+  if (!decision_trace_path.empty()) {
+    try {
+      engine->decision_trace_log.save(decision_trace_path);
+      std::cerr << "[REPLAY] decision trace saved: " << decision_trace_path
+                << " records=" << engine->decision_trace_log.records().size() << '\n';
+    } catch (const std::exception& error) {
+      std::cerr << "[REPLAY] failed to save decision trace: " << error.what() << '\n';
+      return 2;
+    }
+  }
+  return ok ? 0 : 1;
 }
 #endif

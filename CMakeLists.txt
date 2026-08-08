@@ -159,6 +159,17 @@ endif()
 # Helper for common dependencies
 function(aurora_link_common target)
   target_link_libraries(${target} PRIVATE aurora_headers Threads::Threads)
+  if(MINGW)
+    # Avoid loading ABI-incompatible GCC runtime DLLs from another Windows
+    # application that happens to appear earlier on PATH. A user-supplied
+    # libsodium build may itself be dynamic, so that profile keeps only the
+    # compiler runtimes static.
+    if(USE_SODIUM)
+      target_link_options(${target} PRIVATE -static-libgcc -static-libstdc++)
+    else()
+      target_link_options(${target} PRIVATE -static)
+    endif()
+  endif()
   if(TARGET aurora_sodium)
     target_link_libraries(${target} PRIVATE aurora_sodium)
   endif()
@@ -171,6 +182,12 @@ endfunction()
 # Main executable
 add_executable(aurora_x aurora_x.cpp ${AURORA_FEC_SOURCES})
 aurora_link_common(aurora_x)
+
+add_executable(aurora_replay apps/aurora_replay.cpp)
+aurora_link_common(aurora_replay)
+
+add_executable(aurora_benchmark apps/aurora_benchmark.cpp)
+aurora_link_common(aurora_benchmark)
 
 # -------------------------------------------------------------------
 # Tests
@@ -187,15 +204,33 @@ if(BUILD_TESTING)
   aurora_link_common(test_safety_envelope)
   add_test(NAME aurora.safety_envelope COMMAND test_safety_envelope)
 
+  add_executable(test_decision_replay tests/test_decision_replay.cpp)
+  aurora_link_common(test_decision_replay)
+  add_test(NAME aurora.decision_replay COMMAND test_decision_replay)
+
+  add_executable(test_modular_transport tests/test_modular_transport.cpp)
+  aurora_link_common(test_modular_transport)
+  add_test(NAME aurora.modular_transport COMMAND test_modular_transport)
+
+  add_executable(test_baseline_benchmark tests/test_baseline_benchmark.cpp)
+  aurora_link_common(test_baseline_benchmark)
+  add_test(NAME aurora.baseline_benchmark COMMAND test_baseline_benchmark)
+
   # Keep standard assert() checks active even in optimized test configurations.
   if(MSVC)
     target_compile_options(test_aurora_organism PRIVATE /UNDEBUG)
     target_compile_options(test_transport_contract PRIVATE /UNDEBUG)
     target_compile_options(test_safety_envelope PRIVATE /UNDEBUG)
+    target_compile_options(test_decision_replay PRIVATE /UNDEBUG)
+    target_compile_options(test_modular_transport PRIVATE /UNDEBUG)
+    target_compile_options(test_baseline_benchmark PRIVATE /UNDEBUG)
   else()
     target_compile_options(test_aurora_organism PRIVATE -UNDEBUG)
     target_compile_options(test_transport_contract PRIVATE -UNDEBUG)
     target_compile_options(test_safety_envelope PRIVATE -UNDEBUG)
+    target_compile_options(test_decision_replay PRIVATE -UNDEBUG)
+    target_compile_options(test_modular_transport PRIVATE -UNDEBUG)
+    target_compile_options(test_baseline_benchmark PRIVATE -UNDEBUG)
   endif()
 
   if(USE_RAPTORQ)
@@ -250,10 +285,15 @@ endif()
 # Warning levels
 set(_AURORA_ALL_TARGETS
   aurora_x
+  aurora_replay
+  aurora_benchmark
   test_raptorq_adapter
   test_aurora_organism
   test_transport_contract
   test_safety_envelope
+  test_decision_replay
+  test_modular_transport
+  test_baseline_benchmark
   aurora_batch_test
   aurora_deadline_sweep
   aurora_selector_test

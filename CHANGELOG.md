@@ -8,15 +8,22 @@ All notable changes to Aurora-X will be documented in this file.
 - Parsed and validated transport-only `TransportContract`, including caller-declared byte ranges.
 - Immutable `GenerationDescriptor`, authoritative `DecodeReport`, generation-indexed decoder state, and bounded active-generation storage.
 - Hard `SafetyEnvelope` and `TransportDecisionTrace` for expiry, stale observations, energy reserve, allowed links, RF duty availability, and repair caps.
+- Canonical, checksum-chained `DecisionReplayLog` plus the `aurora_replay` verifier; replay recomputes safety decisions from recorded safety-relevant contract/descriptor fields, observation and proposal inputs.
+- Deterministic shared-seed `aurora_benchmark` comparisons for no FEC, 2x repetition, fixed LT-like overhead, class-aware fixed overhead and the adaptive biological policy under IID loss.
+- Injectable `GenerationCodec`, `TransportPolicy` and `GenerationManager` boundaries with fixed and biological policy implementations.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, delayed completion, exact lengths, empty/tiny payloads, expiry, malformed metadata, integrity failure, bounded state, health consistency, and safety constraints.
 
 ### Changed
 - Routed the dependency-light simulator through `AlienFountainOrganism::spawn()` and `integrate()` exclusively; delivery and health now consume the same report.
+- Reduced `AlienFountainOrganism` to a compatibility facade over separately testable codec, policy and generation-state components.
 - Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
 - Made simulation and coding randomness reproducible from the contract seed.
+- Added `--decision-trace <path>` to the main simulator.
+- MinGW executables now link the GCC runtime statically to avoid accidental loading of an ABI-incompatible `libstdc++-6.dll` from unrelated Windows applications on `PATH`.
 
 ### Removed
 - Removed the active simulator's incompatible parallel delivery decoder and the nonexistent `test_podm.cpp` CMake target.
+- Removed transport-policy console logging from the core adaptive component; policy state remains queryable without coupling the reusable control path to simulator output.
 
 ### Added
 - **FASE 3b**: Adaptive weight loss mechanism based on success streaks

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -59,6 +60,16 @@ public:
             reject(trace, "generation expired");
             return trace;
         }
+        if (!std::isfinite(state.source_energy_reserve) ||
+            state.source_energy_reserve < 0.0 || state.source_energy_reserve > 1.0) {
+            reject(trace, "invalid source energy observation");
+            return trace;
+        }
+        if (!std::isfinite(state.rf_duty_remaining) ||
+            state.rf_duty_remaining < 0.0 || state.rf_duty_remaining > 1.0) {
+            reject(trace, "invalid RF duty observation");
+            return trace;
+        }
         if (state.now_ms < state.observed_at_ms ||
             state.now_ms - state.observed_at_ms > contract.maximum_observation_age_ms) {
             reject(trace, "observation too stale");
@@ -80,9 +91,11 @@ public:
             trace.constraints_applied.push_back("proposed link replaced by an allowed link");
         }
 
-        const auto maximum_total = static_cast<std::uint32_t>(
-            std::ceil(static_cast<double>(descriptor.total_source_symbols) *
-                      contract.maximum_repair_amplification));
+        const auto bounded_total = std::min<long double>(
+            std::ceil(static_cast<long double>(descriptor.total_source_symbols) *
+                      static_cast<long double>(contract.maximum_repair_amplification)),
+            std::numeric_limits<std::uint32_t>::max());
+        const auto maximum_total = static_cast<std::uint32_t>(bounded_total);
         const auto maximum_repairs = maximum_total > descriptor.total_source_symbols
             ? maximum_total - descriptor.total_source_symbols
             : 0U;
@@ -98,8 +111,12 @@ public:
             }
         }
         if (critical_sources > 0 && trace.decision.critical_only) {
-            const auto protected_total = static_cast<std::uint32_t>(std::ceil(
-                static_cast<double>(critical_sources) * contract.minimum_critical_overhead));
+            const auto bounded_protected_total = std::min<long double>(
+                std::ceil(static_cast<long double>(critical_sources) *
+                          static_cast<long double>(contract.minimum_critical_overhead)),
+                std::numeric_limits<std::uint32_t>::max());
+            const auto protected_total = static_cast<std::uint32_t>(
+                bounded_protected_total);
             const auto minimum_repairs = protected_total > critical_sources
                 ? protected_total - critical_sources
                 : 0U;

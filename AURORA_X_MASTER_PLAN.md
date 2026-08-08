@@ -395,6 +395,8 @@ Implement interchangeable policies:
 
 The biological policy earns its place by outperforming or stabilizing better than explicit baselines, not by terminology.
 
+**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The implemented decision trace records and replays the hard safety-envelope decision; full controller-state replay is not yet complete.
+
 ### Exit gate
 
 Each controller is deterministic under a fixed event stream, independently testable and produces a complete decision trace.
@@ -416,6 +418,8 @@ At minimum compare:
 5. adaptive Aurora policy;
 6. Reed–Solomon or another block-code baseline where appropriate;
 7. RaptorQ baseline when a verified implementation is available.
+
+**Current status:** items 1–5 have a deterministic IID-loss harness with shared packet-identity outcomes. Items 6–7 and statistically qualified conclusions remain pending.
 
 ## Phase 3B — Channel scenarios
 
@@ -443,6 +447,8 @@ For every scenario:
 - complete failed-run retention;
 - configuration and commit hash in every output;
 - deterministic replay of individual runs.
+
+**Current status:** shared seeds and deterministic safety-decision replay are implemented. Confidence intervals, build/commit provenance in every result, retained run-level records and broader channel scenarios remain pending.
 
 ## Primary metrics
 
@@ -513,6 +519,8 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 ## Phase 4C — Digital-twin replay
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
+
+The current `DecisionReplayLog` is a narrower precursor: it verifies safety decisions from canonical recorded inputs and detects accidental corruption/reordering. It does not yet replay channel contacts, generation arrivals or simulated time.
 
 ### Exit gate
 

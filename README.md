@@ -42,14 +42,14 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** turn the coherent internal generation lifecycle into a controlled comparison and replay platform
+**Primary current task:** extend the new controlled comparison and safety-decision replay core into statistically disciplined channel scenarios
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
-| LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | Not yet benchmarked against robust LT, RaptorQ, Reed–Solomon, repetition, or no-FEC baselines |
+| LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | The deterministic harness includes no-FEC, repetition and internal LT-like comparisons, but not an established external codec |
 | Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed decoder state, expiry, exact length, integrity result and authoritative `DecodeReport` | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
-| Adaptive FEC organism | Substantial prototype | NERVE/GLAND/MUSCLE policy profiles, class-aware overhead, failure response, panic boost and gradual relaxation | Biological policy remains coupled to the first generation manager implementation and needs an interchangeable controller interface |
-| Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; controller benefits are not yet isolated by controlled benchmarks |
+| Adaptive transport policy | Modular prototype | Injected codec and policy interfaces, fixed policies, NERVE/GLAND/MUSCLE adaptive policy, bounded per-generation manager, failure response and gradual relaxation | Threshold, PID and risk-sensitive alternatives are not implemented; adaptation evidence is still limited to synthetic IID loss |
+| Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; the new benchmark isolates coding policy, not the complete cross-layer optimizer |
 | Transport health | Implemented first slice | Consumes only `DecodeReport`; progress polls update coverage without being counted as delivery failures | Aggregation/confidence and multi-flow recovery semantics still need development |
 | Safety supervision | Partial | Hard envelope enforces expiry, observation freshness, reserve floor, allowed links, RF duty availability and repair-amplification caps; legacy HEALTHY/DEGRADED/CRITICAL monitor remains | The legacy state monitor still needs replacement by a hysteretic, evidence-aware supervisor |
 | Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | Some transitions are unreachable in the default single-flow scenario because inactive classes retain empty health state |
@@ -57,10 +57,10 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade | `FIELD_BUILD` currently still uses stubbed device operations |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
-| Telemetry | Implemented prototype | JSONL engine telemetry and JSON health events | Schema and provenance need consolidation; some advertised CSV fields are placeholders |
+| Telemetry and replay | Implemented prototype | JSONL engine telemetry, JSON health events, canonical safety-decision log, checksum chain and independent replay verifier | Replay records the safety-relevant input projection and recomputes `SafetyEnvelope` decisions only; it is not yet full channel or discrete-event replay |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest | Contract parsing, deterministic codec behaviour, concurrent/interleaved generations, expiry, malformed input, integrity, exact length, bounded state, health and safety invariants | Property fuzzing, CI, cross-platform runs and benchmark statistics are still missing |
-| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seed for coding and simulator RNG, optional insecure/secure dependency profiles | Linux CI and full event-trace replay are not implemented |
+| Automated tests | Registered with CTest | Contract parsing, deterministic codec behaviour, concurrent/interleaved generations, modular injection, expiry, malformed input, integrity, exact length, bounded state, safety replay and benchmark determinism | Property fuzzing, CI, cross-platform runs and confidence intervals are still missing |
+| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, deterministic shared-loss benchmark and safety-decision replay, optional insecure/secure dependency profiles | Linux CI and complete simulator event replay are not implemented |
 
 ---
 
@@ -146,19 +146,19 @@ The dependency-light simulator now follows one path:
 ```text
 TransportContract
    ↓
-GenerationDescriptor
+TransportPolicy + GenerationCodec
    ↓
-AlienFountainOrganism::spawn()
+GenerationManager::spawn() → GenerationDescriptor
    ↓
 Channel / nodes / custody
    ↓
-AlienFountainOrganism::integrate()
+GenerationManager::integrate()
    ↓
-DecodeReport
+authoritative DecodeReport
    ↓
-FlowHealth → SafetySupervisor → Optimizer
+FlowHealth → Optimizer → SafetyEnvelope
    ↓
-policy for the next generation
+DecisionReplayLog + bounded policy feedback
 ```
 
 The same report determines delivery, coverage/rank, critical completion, integrity outcome, and health feedback. The former monolithic delivery decoder and parallel organism health decoder were removed from the active simulator path.
@@ -174,7 +174,7 @@ The current boundary is intentionally narrow:
 - adaptation parameters used at spawn time;
 - bounded in-memory state for concurrent generations.
 
-The optional external RaptorQ adapter is not part of this lifecycle and remains a disabled legacy experiment until it can implement the same descriptor/report contract.
+`AlienFountainOrganism` remains as a compatibility facade that composes the biological policy, the experimental LT-like codec and the generation manager. Fixed policies and tagged codecs can be injected independently in tests and benchmark runs. The optional external RaptorQ adapter is not part of this lifecycle and remains a disabled legacy experiment until it can implement the same descriptor/report contract.
 
 ---
 
@@ -224,19 +224,28 @@ See [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md) for the complete path.
 ```text
 aurora_x.cpp                 Main simulation/orchestration harness
 aurora_extreme.hpp           Channel, energy, optimizer and shared models
-aurora_organism.hpp          Generation manager and biological adaptive policy
+aurora_organism.hpp          Compatibility facade for the biological policy
 aurora_intention.hpp         Transitional include for TransportContract
 aurora_hal.hpp               Hardware abstraction and current mock backends
 include/aurora/
-  fec/LtLikeCodec.hpp        Deterministic experimental LT-like codec
-  transport/                 Contract, descriptor, report and health types
+  control/TransportPolicy.hpp  Fixed/adaptive transport policy interfaces
+  fec/                       Codec interface and deterministic LT-like codec
+  transport/                 Contract, descriptor, manager, report and health
   safety/SafetyEnvelope.hpp  Hard transport-decision constraints and trace
+  telemetry/DecisionReplayLog.hpp  Canonical decision log and verifier
+  simulation/BaselineBenchmark.hpp Shared-seed comparison harness
+apps/
+  aurora_replay.cpp          Independent safety-decision replay tool
+  aurora_benchmark.cpp       CSV baseline runner
 src/core/
   AuroraSafetyMonitor.hpp    Legacy safety-state prototype
 tests/
   test_aurora_organism.cpp   Generation/FEC lifecycle invariants
   test_transport_contract.cpp
   test_safety_envelope.cpp
+  test_decision_replay.cpp
+  test_modular_transport.cpp
+  test_baseline_benchmark.cpp
 aurora_batch_test.cpp        Experimental parameter sweep harness
 aurora_udp_*.cpp             UDP transport experiments
 aurora_dash_lab.py           Live monitoring dashboard
@@ -270,6 +279,21 @@ Run:
 ```
 
 On multi-configuration Windows generators the executable may be under `build/bin/Debug/`.
+
+Record and independently replay safety decisions:
+
+```bash
+./build/bin/aurora_x --decision-trace decision-trace.log
+./build/bin/aurora_replay decision-trace.log
+```
+
+Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
+
+```bash
+./build/bin/aurora_benchmark 0.25 200 0xA607A
+```
+
+The CSV output is simulation evidence. Common symbol identities share channel outcomes across policies, and repeated runs with the same configuration are byte-for-byte deterministic.
 
 ### Real Ed25519 build
 
@@ -329,13 +353,15 @@ Aurora-X will distinguish four levels of evidence:
 
 Results from one level must not be presented as proof of another.
 
-The first decisive benchmark will compare, under identical seeds and constraints:
+The current baseline harness compares, under identical seeds and constraints:
 
 - no FEC;
 - fixed repetition;
 - fixed LT-like overhead;
+- class-aware fixed overhead;
 - adaptive Aurora policy;
-- optional established-code baseline when available.
+
+An established block or fountain codec, burst/stale/contact channel models, confidence intervals and resource-cost distributions remain required before comparative claims can be made.
 
 Primary metrics:
 
@@ -367,4 +393,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. It is a high-ambition research system with several implemented foundations and one immediate obligation: make the adaptive coding loop internally coherent, measurable, and reproducible before extending it further.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is now coherent, modular and reproducible for the implemented research path. The next obligation is to broaden controlled scenarios and statistical evidence before extending into more links, custody or hardware claims.

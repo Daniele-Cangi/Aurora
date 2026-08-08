@@ -52,6 +52,8 @@ struct GenerationDescriptor {
     std::string token_id;
     std::string codec_id = "experimental-lt-like";
     std::uint16_t codec_version = 1;
+    std::string policy_id = "unspecified";
+    std::uint16_t policy_version = 1;
     std::size_t original_payload_length = 0;
     std::size_t symbol_size = 0;
     std::uint32_t total_source_symbols = 0;
@@ -69,8 +71,11 @@ struct GenerationDescriptor {
         if (generation_id.empty() || token_id.empty()) {
             return "generation and token identifiers are required";
         }
-        if (codec_id != "experimental-lt-like" || codec_version != 1) {
-            return "unsupported codec identity or version";
+        if (codec_id.empty() || codec_version == 0) {
+            return "codec identity and version are required";
+        }
+        if (policy_id.empty() || policy_version == 0) {
+            return "transport policy identity and version are required";
         }
         if (symbol_size == 0) {
             return "symbol size must be positive";
@@ -127,6 +132,8 @@ inline std::uint64_t compute_descriptor_fingerprint(const GenerationDescriptor& 
             << descriptor.token_id << '|'
             << descriptor.codec_id << '|'
             << descriptor.codec_version << '|'
+            << descriptor.policy_id << '|'
+            << descriptor.policy_version << '|'
             << descriptor.original_payload_length << '|'
             << descriptor.symbol_size << '|'
             << descriptor.total_source_symbols << '|'
