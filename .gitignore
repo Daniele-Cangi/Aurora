@@ -14,6 +14,10 @@
 *.opensdf
 *.VC.db
 *.VC.opendb
+build/
+build-*/
+aurora_telemetry.jsonl
+aurora_interactive_config.json
 
 # Visual Studio Code
 .vscode/

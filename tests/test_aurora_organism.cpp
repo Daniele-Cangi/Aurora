@@ -1,480 +1,378 @@
-// test_aurora_organism.cpp
-// Test completo per AlienFountainOrganism con tre scenari:
-// 1. Canale buono: NERVE, GLAND, MUSCLE con delivery=true, overhead stabili
-// 2. Canale cattivo: NERVE/GLAND con perdite, panic_boost, overhead crescenti
-// 3. Adattamento: GLAND che si adatta da canale cattivo a buono
-//
-// Build: cmake --build build --target test_aurora_organism
-// Run: ./build/bin/Release/test_aurora_organism.exe
-
 #include "../aurora_organism.hpp"
-#include "../aurora_intention.hpp"
-#include "../aurora_extreme.hpp"
-#include <iostream>
-#include <iomanip>
-#include <vector>
-#include <random>
+#include "../include/aurora/transport/TransportHealth.hpp"
+
 #include <algorithm>
 #include <cassert>
-#include <map>
-#include <string>
+#include <cstdint>
+#include <iostream>
+#include <random>
+#include <unordered_set>
+#include <vector>
 
-using namespace aurora;
-using namespace std;
+using aurora::AlienFountainOrganism;
+using aurora::OrganismSpawnResult;
+using aurora::transport::DecodeStatus;
+using aurora::transport::TransportContract;
+using aurora::transport::TransportHealth;
 
-// Helper: Genera payload casuale
-std::vector<uint8_t> generate_payload(size_t size, uint32_t seed = 42) {
-    std::mt19937 rng(seed);
-    std::uniform_int_distribution<unsigned int> dist(0, 255);
-    std::vector<uint8_t> payload(size);
-    for (auto& b : payload) b = static_cast<uint8_t>(dist(rng));
-    return payload;
+namespace {
+
+std::vector<std::uint8_t> payload(std::size_t size, std::uint32_t seed) {
+    std::mt19937 random(seed);
+    std::vector<std::uint8_t> bytes(size);
+    for (auto& byte : bytes) {
+        byte = static_cast<std::uint8_t>(random() & 0xFFU);
+    }
+    return bytes;
 }
 
-// Helper: Simula perdita di pacchetti
-std::vector<fec::Pkt> simulate_packet_loss(
-    const std::vector<fec::Pkt>& packets,
-    double loss_rate,
-    uint32_t seed = 1000
-) {
-    if (loss_rate <= 0.0) return packets;
-    
-    std::vector<fec::Pkt> filtered;
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
-    
-    for (const auto& pkt : packets) {
-        if (dist(rng) >= loss_rate) {
-            filtered.push_back(pkt);
+std::vector<fec::Pkt> minimum_decodable_packets(const OrganismSpawnResult& spawn) {
+    std::vector<fec::Pkt> selected;
+    for (const auto& segment : spawn.descriptor.segments) {
+        std::uint32_t count = 0;
+        for (const auto& packet : spawn.packets) {
+            if (packet.segment_id == segment.segment_id && count < segment.source_symbol_count) {
+                selected.push_back(packet);
+                ++count;
+            }
+        }
+        assert(count == segment.source_symbol_count);
+    }
+    return selected;
+}
+
+void assert_same_packets(const OrganismSpawnResult& left, const OrganismSpawnResult& right) {
+    assert(left.descriptor.generation_id == right.descriptor.generation_id);
+    assert(left.descriptor.descriptor_fingerprint == right.descriptor.descriptor_fingerprint);
+    assert(left.packets.size() == right.packets.size());
+    for (std::size_t i = 0; i < left.packets.size(); ++i) {
+        const auto& a = left.packets[i];
+        const auto& b = right.packets[i];
+        assert(a.fp.seed == b.fp.seed);
+        assert(a.fp.deg == b.fp.deg);
+        assert(a.fp.data == b.fp.data);
+        assert(a.segment_id == b.segment_id);
+        assert(a.descriptor_fingerprint == b.descriptor_fingerprint);
+    }
+}
+
+void deterministic_generation_and_exact_length() {
+    const auto contract = TransportContract::parse(
+        "deadline:5s;reliability:0.99;importance:important;seed:12345");
+    const auto bytes = payload(333, 7);
+
+    AlienFountainOrganism first;
+    AlienFountainOrganism replay;
+    const auto generated = first.spawn(contract, "token-exact", bytes, 64, 100);
+    const auto regenerated = replay.spawn(contract, "token-exact", bytes, 64, 100);
+    assert_same_packets(generated, regenerated);
+
+    auto received = minimum_decodable_packets(generated);
+    std::reverse(received.begin(), received.end());
+    received.insert(received.begin() + 1, received.front());
+    const auto report = first.integrate(generated.descriptor.generation_id, received, 200);
+    assert(report.status == DecodeStatus::COMPLETE);
+    assert(report.delivered());
+    assert(report.payload == bytes);
+    assert(report.payload.size() == 333);
+    assert(report.decoder_rank == report.required_rank);
+    assert(report.duplicate_symbols == 1);
+}
+
+void concurrent_interleaved_generations() {
+    const auto contract = TransportContract::parse(
+        "deadline:2s;reliability:0.999;importance:important;seed:99;"
+        "segment:0-63,critical,100ms,0.999");
+    const auto bytes_a = payload(300, 11);
+    const auto bytes_b = payload(197, 12);
+    AlienFountainOrganism controller;
+    const auto a = controller.spawn(contract, "token-a", bytes_a, 32, 0);
+    const auto b = controller.spawn(contract, "token-b", bytes_b, 32, 0);
+    assert(controller.generation_count() == 2);
+
+    std::vector<fec::Pkt> critical_a;
+    const auto critical_k = a.descriptor.segments.front().source_symbol_count;
+    for (const auto& packet : a.packets) {
+        if (packet.segment_id == 0 && critical_a.size() < critical_k) {
+            critical_a.push_back(packet);
         }
     }
-    
-    return filtered;
-}
-
-// Helper: Crea Intention per tipo di flusso
-Intention make_intention_for_flow(FlowClass flow_class, double reliability = 0.99) {
-    Intention I;
-    
-    switch (flow_class) {
-        case FlowClass::NERVE:
-            I.deadline_s = 1.5;  // deadline molto bassa
-            I.reliability = 0.99;
-            break;
-        case FlowClass::GLAND:
-            I.deadline_s = 600.0;  // deadline alta
-            I.reliability = 0.98;  // reliability molto alta
-            break;
-        case FlowClass::MUSCLE:
-        default:
-            I.deadline_s = 300.0;
-            I.reliability = 0.90;
-            break;
+    const auto full_b = minimum_decodable_packets(b);
+    std::vector<fec::Pkt> interleaved;
+    const auto maximum = std::max(critical_a.size(), full_b.size());
+    for (std::size_t i = 0; i < maximum; ++i) {
+        if (i < critical_a.size()) interleaved.push_back(critical_a[i]);
+        if (i < full_b.size()) interleaved.push_back(full_b[i]);
     }
-    
-    I.duty_frac = 0.01;
-    I.allow_optical = true;
-    I.allow_backscatter = true;
-    
-    return I;
+
+    const auto partial_a = controller.integrate(a.descriptor.generation_id, interleaved, 50);
+    assert(partial_a.status == DecodeStatus::CRITICAL_SEGMENT_COMPLETE);
+    assert(partial_a.critical_complete);
+    assert(!partial_a.payload_complete);
+    assert(partial_a.recovered_bytes == 64);
+
+    const auto complete_b = controller.integrate(b.descriptor.generation_id, interleaved, 50);
+    assert(complete_b.delivered());
+    assert(complete_b.payload == bytes_b);
+
+    auto full_a = minimum_decodable_packets(a);
+    std::reverse(full_a.begin(), full_a.end());
+    const auto complete_a = controller.integrate(a.descriptor.generation_id, full_a, 500);
+    assert(complete_a.delivered());
+    assert(complete_a.payload == bytes_a);
 }
 
-// Helper: Stampa risultato integrate
-void print_integrate_result(
-    const std::string& label,
-    const OrganismIntegrateResult& result,
-    int run_idx = -1
-) {
-    std::cout << "  [" << label << "]";
-    if (run_idx >= 0) std::cout << " run=" << run_idx;
-    std::cout << " delivered=" << (result.delivered ? "true " : "false")
-              << " coverage=" << std::fixed << std::setprecision(3) << result.coverage
-              << " symbols_used=" << result.symbols_used
-              << "/" << result.total_symbols_seen
-              << " payload_size=" << result.payload_bytes.size()
-              << std::endl;
-}
-
-// ============================================================================
-// SCENARIO 1: CANALE BUONO - NERVE, GLAND, MUSCLE
-// ============================================================================
-void test_scenario_good_channel() {
-    std::cout << "\n" << string(70, '=') << std::endl;
-    std::cout << "SCENARIO 1: CANALE BUONO" << std::endl;
-    std::cout << string(70, '=') << std::endl;
-    std::cout << "Test con NERVE, GLAND, MUSCLE - nessuna perdita" << std::endl;
-    std::cout << "Atteso: delivered=true, coverage≈1.0, overhead stabili\n" << std::endl;
-    
-    AlienFountainOrganism organism;
-    
-    // Test NERVE
+void expiry_malformed_and_integrity_failures() {
     {
-        std::cout << "--- Testing NERVE flow ---" << std::endl;
-        Intention I = make_intention_for_flow(FlowClass::NERVE);
-        FlowProfile profile = organism.build_profile(I);
-        
-        assert(profile.flow_class == FlowClass::NERVE);
-        std::cout << "  Profile: deadline=" << profile.deadline_s 
-                  << "s, reliability=" << profile.reliability 
-                  << ", priority=" << profile.priority << std::endl;
-        
-        const std::string token_id = "nerve_test_001";
-        std::vector<uint8_t> payload = generate_payload(1024, 100);
-        
-        // Spawn
-        OrganismSpawnResult spawn_res = organism.spawn(profile, token_id, payload, 128);
-        std::cout << "  Spawn: K=" << spawn_res.K 
-                  << ", packets=" << spawn_res.packets.size() << std::endl;
-        
-        // Integrate senza perdite
-        OrganismIntegrateResult integrate_res = organism.integrate(
-            profile, token_id, spawn_res.K, 128, spawn_res.packets
-        );
-        
-        print_integrate_result("NERVE", integrate_res);
-        
-        assert(integrate_res.delivered == true);
-        assert(integrate_res.coverage >= 0.99);
-        assert(integrate_res.payload_bytes == payload);
-        std::cout << "  ✓ NERVE test PASSED\n" << std::endl;
+        const auto contract = TransportContract::parse("deadline:10ms;seed:1");
+        AlienFountainOrganism controller;
+        const auto generated = controller.spawn(contract, "expired", payload(80, 1), 32, 0);
+        const auto expired = controller.integrate(generated.descriptor.generation_id, {}, 11);
+        assert(expired.status == DecodeStatus::EXPIRED);
+
+        TransportHealth health;
+        health.observe(expired);
+        health.observe(expired);
+        assert(health.fail_count == 1);
+        assert(health.success_count == 0);
     }
-    
-    // Test GLAND
+
     {
-        std::cout << "--- Testing GLAND flow ---" << std::endl;
-        Intention I = make_intention_for_flow(FlowClass::GLAND);
-        FlowProfile profile = organism.build_profile(I);
-        
-        assert(profile.flow_class == FlowClass::GLAND);
-        std::cout << "  Profile: deadline=" << profile.deadline_s 
-                  << "s, reliability=" << profile.reliability 
-                  << ", priority=" << profile.priority << std::endl;
-        
-        const std::string token_id = "gland_test_001";
-        std::vector<uint8_t> payload = generate_payload(2048, 200);
-        
-        // Spawn
-        OrganismSpawnResult spawn_res = organism.spawn(profile, token_id, payload, 128);
-        std::cout << "  Spawn: K=" << spawn_res.K 
-                  << ", packets=" << spawn_res.packets.size() << std::endl;
-        
-        // Integrate senza perdite
-        OrganismIntegrateResult integrate_res = organism.integrate(
-            profile, token_id, spawn_res.K, 128, spawn_res.packets
-        );
-        
-        print_integrate_result("GLAND", integrate_res);
-        
-        assert(integrate_res.delivered == true);
-        assert(integrate_res.coverage >= 0.99);
-        assert(integrate_res.payload_bytes == payload);
-        std::cout << "  ✓ GLAND test PASSED\n" << std::endl;
+        const auto contract = TransportContract::parse("deadline:1s;seed:2");
+        AlienFountainOrganism controller;
+        const auto bytes = payload(95, 2);
+        const auto generated = controller.spawn(contract, "mismatch", bytes, 32, 0);
+        auto wrong = generated.packets.front();
+        wrong.descriptor_fingerprint ^= 1U;
+        const auto malformed = controller.integrate(generated.descriptor.generation_id, {wrong}, 1);
+        assert(malformed.status == DecodeStatus::MALFORMED_INPUT);
+        assert(malformed.malformed_symbols == 1);
+
+        const auto recovered = controller.integrate(
+            generated.descriptor.generation_id, minimum_decodable_packets(generated), 2);
+        assert(recovered.delivered());
+        assert(recovered.payload == bytes);
     }
-    
-    // Test MUSCLE
+
     {
-        std::cout << "--- Testing MUSCLE flow ---" << std::endl;
-        Intention I = make_intention_for_flow(FlowClass::MUSCLE);
-        FlowProfile profile = organism.build_profile(I);
-        
-        assert(profile.flow_class == FlowClass::MUSCLE);
-        std::cout << "  Profile: deadline=" << profile.deadline_s 
-                  << "s, reliability=" << profile.reliability 
-                  << ", priority=" << profile.priority << std::endl;
-        
-        const std::string token_id = "muscle_test_001";
-        std::vector<uint8_t> payload = generate_payload(4096, 300);
-        
-        // Spawn
-        OrganismSpawnResult spawn_res = organism.spawn(profile, token_id, payload, 128);
-        std::cout << "  Spawn: K=" << spawn_res.K 
-                  << ", packets=" << spawn_res.packets.size() << std::endl;
-        
-        // Integrate senza perdite
-        OrganismIntegrateResult integrate_res = organism.integrate(
-            profile, token_id, spawn_res.K, 128, spawn_res.packets
-        );
-        
-        print_integrate_result("MUSCLE", integrate_res);
-        
-        assert(integrate_res.delivered == true);
-        assert(integrate_res.coverage >= 0.99);
-        assert(integrate_res.payload_bytes == payload);
-        std::cout << "  ✓ MUSCLE test PASSED\n" << std::endl;
+        const auto contract = TransportContract::parse("deadline:1s;seed:3;integrity:on");
+        AlienFountainOrganism controller;
+        const auto generated = controller.spawn(contract, "corrupted", payload(81, 3), 32, 0);
+        auto corrupted = minimum_decodable_packets(generated);
+        corrupted.front().fp.data.front() ^= 0x40U;
+        const auto failed = controller.integrate(generated.descriptor.generation_id, corrupted, 1);
+        assert(failed.status == DecodeStatus::INTEGRITY_FAILURE);
+        assert(failed.integrity_checked);
+        assert(!failed.integrity_ok);
+        assert(!failed.delivered());
     }
-    
-    std::cout << "✓ SCENARIO 1 COMPLETATO: tutti i flussi hanno delivery=true e coverage≈1.0\n" << std::endl;
 }
 
-// ============================================================================
-// SCENARIO 2: CANALE CATTIVO - NERVE e GLAND con perdite
-// ============================================================================
-void test_scenario_bad_channel() {
-    std::cout << "\n" << string(70, '=') << std::endl;
-    std::cout << "SCENARIO 2: CANALE CATTIVO / RUMOROSO" << std::endl;
-    std::cout << string(70, '=') << std::endl;
-    std::cout << "Test con NERVE e GLAND con perdite elevate (50-60%)" << std::endl;
-    std::cout << "Atteso: delivered=false, panic_boost>0, overhead crescenti\n" << std::endl;
-    
-    AlienFountainOrganism organism;
-    
-    // Test NERVE con perdite
-    {
-        std::cout << "--- Testing NERVE flow con canale cattivo (perdita 50%) ---" << std::endl;
-        Intention I = make_intention_for_flow(FlowClass::NERVE);
-        FlowProfile profile = organism.build_profile(I);
-        
-        const std::string token_id = "nerve_bad_001";
-        std::vector<uint8_t> payload = generate_payload(1024, 400);
-        
-        // Spawn
-        OrganismSpawnResult spawn_res = organism.spawn(profile, token_id, payload, 128);
-        std::cout << "  Spawn: K=" << spawn_res.K 
-                  << ", packets=" << spawn_res.packets.size() << std::endl;
-        
-        // Simula perdita pesante
-        std::vector<fec::Pkt> received_packets = simulate_packet_loss(spawn_res.packets, 0.50, 500);
-        std::cout << "  Canale cattivo: ricevuti " << received_packets.size() 
-                  << " / " << spawn_res.packets.size() << " pacchetti" << std::endl;
-        
-        // Integrate
-        OrganismIntegrateResult integrate_res = organism.integrate(
-            profile, token_id, spawn_res.K, 128, received_packets
-        );
-        
-        print_integrate_result("NERVE", integrate_res);
-        
-        assert(integrate_res.delivered == false);
-        assert(integrate_res.coverage < 0.9);  // Coverage incompleto per perdite elevate
-        std::cout << "  ✓ NERVE fallito come previsto (delivered=false)\n" << std::endl;
-        
-        // Secondo spawn: dovrebbe vedere panic_boost attivo
-        std::cout << "  --- Secondo spawn dopo fallimento (dovrebbe attivare panic_boost) ---" << std::endl;
-        const std::string token_id2 = "nerve_bad_002";
-        std::vector<uint8_t> payload2 = generate_payload(1024, 401);
-        OrganismSpawnResult spawn_res2 = organism.spawn(profile, token_id2, payload2, 128);
-        std::cout << "  Spawn dopo fallimento: K=" << spawn_res2.K 
-                  << ", packets=" << spawn_res2.packets.size() << std::endl;
-        std::cout << "  (Nota: panic_boost dovrebbe essere visibile nell'output [ALIEN][ADAPT])\n" << std::endl;
-    }
-    
-    // Test GLAND con perdite
-    {
-        std::cout << "--- Testing GLAND flow con canale cattivo (perdita 55%) ---" << std::endl;
-        Intention I = make_intention_for_flow(FlowClass::GLAND);
-        FlowProfile profile = organism.build_profile(I);
-        
-        const std::string token_id = "gland_bad_001";
-        std::vector<uint8_t> payload = generate_payload(2048, 500);
-        
-        // Spawn
-        OrganismSpawnResult spawn_res = organism.spawn(profile, token_id, payload, 128);
-        std::cout << "  Spawn: K=" << spawn_res.K 
-                  << ", packets=" << spawn_res.packets.size() << std::endl;
-        
-        // Simula perdita pesante
-        std::vector<fec::Pkt> received_packets = simulate_packet_loss(spawn_res.packets, 0.55, 600);
-        std::cout << "  Canale cattivo: ricevuti " << received_packets.size() 
-                  << " / " << spawn_res.packets.size() << " pacchetti" << std::endl;
-        
-        // Integrate
-        OrganismIntegrateResult integrate_res = organism.integrate(
-            profile, token_id, spawn_res.K, 128, received_packets
-        );
-        
-        print_integrate_result("GLAND", integrate_res);
-        
-        assert(integrate_res.delivered == false);
-        assert(integrate_res.coverage < 0.9);
-        std::cout << "  ✓ GLAND fallito come previsto (delivered=false)\n" << std::endl;
-        
-        // Secondo spawn: dovrebbe vedere panic_boost attivo
-        std::cout << "  --- Secondo spawn dopo fallimento (dovrebbe attivare panic_boost) ---" << std::endl;
-        const std::string token_id2 = "gland_bad_002";
-        std::vector<uint8_t> payload2 = generate_payload(2048, 501);
-        OrganismSpawnResult spawn_res2 = organism.spawn(profile, token_id2, payload2, 128);
-        std::cout << "  Spawn dopo fallimento: K=" << spawn_res2.K 
-                  << ", packets=" << spawn_res2.packets.size() << std::endl;
-        std::cout << "  (Nota: panic_boost dovrebbe essere visibile nell'output [ALIEN][ADAPT])\n" << std::endl;
-    }
-    
-    std::cout << "✓ SCENARIO 2 COMPLETATO: NERVE e GLAND hanno delivery=false e panic_boost attivato\n" << std::endl;
+void empty_and_small_payloads() {
+    const auto contract = TransportContract::parse(
+        "deadline:1s;importance:critical;seed:44");
+    AlienFountainOrganism controller;
+
+    const auto empty = controller.spawn(contract, "empty", {}, 64, 0);
+    assert(empty.K == 0);
+    assert(empty.packets.empty());
+    const auto empty_report = controller.integrate(empty.descriptor.generation_id, {}, 0);
+    assert(empty_report.delivered());
+    assert(empty_report.payload.empty());
+
+    const std::vector<std::uint8_t> one{0xA5};
+    const auto tiny = controller.spawn(contract, "tiny", one, 64, 0);
+    assert(tiny.descriptor.segments.size() == 1);
+    assert(tiny.descriptor.segments.front().source_symbol_count == 1);
+    const auto tiny_report = controller.integrate(
+        tiny.descriptor.generation_id, minimum_decodable_packets(tiny), 1);
+    assert(tiny_report.delivered());
+    assert(tiny_report.payload == one);
 }
 
-// ============================================================================
-// SCENARIO 3: ADATTAMENTO NEL TEMPO - GLAND da cattivo a buono
-// ============================================================================
-struct FlowStateSnapshot {
-    int run_idx;
-    bool delivered;
-    double coverage;
-    int symbols_used;
-    int total_symbols_seen;
-    // Nota: non possiamo accedere direttamente allo stato interno, 
-    // ma possiamo inferirlo dall'output o dalle statistiche
-};
+void codec_rejects_malformed_symbols_and_uses_unique_indexes() {
+    const auto bytes = payload(320, 91);
+    fec::Encoder encoder(bytes, 32, 999);
+    const auto source_count = static_cast<std::uint32_t>(encoder.N());
+    for (std::uint32_t i = 0; i < source_count; ++i) {
+        (void)encoder.emit();
+    }
+    for (int i = 0; i < 100; ++i) {
+        const auto packet = encoder.emit();
+        const auto indexes = fec::detail::source_indexes(source_count, packet.seed, packet.deg);
+        assert(indexes.has_value());
+        std::unordered_set<std::uint32_t> unique(indexes->begin(), indexes->end());
+        assert(unique.size() == indexes->size());
+    }
 
-void test_scenario_adaptation() {
-    std::cout << "\n" << string(70, '=') << std::endl;
-    std::cout << "SCENARIO 3: ADATTAMENTO NEL TEMPO" << std::endl;
-    std::cout << string(70, '=') << std::endl;
-    std::cout << "Test GLAND: prima canale cattivo (aumenta overhead)" << std::endl;
-    std::cout << "           poi canale buono (diminuisce lentamente)" << std::endl;
-    std::cout << "\nNota: Lo stato interno crit_ov/bulk_ov/panic_boost è visibile" << std::endl;
-    std::cout << "      nell'output [ALIEN][ADAPT] dopo ogni integrate().\n" << std::endl;
-    
-    AlienFountainOrganism organism;
-    Intention I = make_intention_for_flow(FlowClass::GLAND);
-    FlowProfile profile = organism.build_profile(I);
-    
-    const int NUM_RUNS_BAD = 5;   // Fase 1: canale cattivo
-    const int NUM_RUNS_GOOD = 10; // Fase 2: canale buono
-    
-    std::vector<FlowStateSnapshot> snapshots;
-    
-    // ===== FASE 1: CANALE CATTIVO (perdita 50%) =====
-    std::cout << "--- FASE 1: CANALE CATTIVO (perdita 50%) ---" << std::endl;
-    std::cout << "Eseguendo " << NUM_RUNS_BAD << " run con perdite elevate...\n" << std::endl;
-    
-    for (int run = 0; run < NUM_RUNS_BAD; ++run) {
-        const std::string token_id = "gland_adapt_" + std::to_string(run);
-        std::vector<uint8_t> payload = generate_payload(2048, 1000 + run);
-        
-        // Spawn
-        OrganismSpawnResult spawn_res = organism.spawn(profile, token_id, payload, 128);
-        
-        // Simula perdita 50%
-        std::vector<fec::Pkt> received_packets = simulate_packet_loss(spawn_res.packets, 0.50, 2000 + run);
-        
-        // Integrate
-        OrganismIntegrateResult integrate_res = organism.integrate(
-            profile, token_id, spawn_res.K, 128, received_packets
-        );
-        
-        FlowStateSnapshot snap;
-        snap.run_idx = run;
-        snap.delivered = integrate_res.delivered;
-        snap.coverage = integrate_res.coverage;
-        snap.symbols_used = integrate_res.symbols_used;
-        snap.total_symbols_seen = integrate_res.total_symbols_seen;
-        snapshots.push_back(snap);
-        
-        std::cout << "  Run " << run << ": delivered=" << (integrate_res.delivered ? "true " : "false")
-                  << ", coverage=" << std::fixed << std::setprecision(3) << integrate_res.coverage
-                  << ", received=" << received_packets.size() << "/" << spawn_res.packets.size()
-                  << std::endl;
-    }
-    
-    std::cout << "\n--- FASE 2: CANALE BUONO (nessuna perdita) ---" << std::endl;
-    std::cout << "Eseguendo " << NUM_RUNS_GOOD << " run senza perdite..." << std::endl;
-    std::cout << "Atteso: overhead che diminuisce lentamente verso valori base\n" << std::endl;
-    
-    // ===== FASE 2: CANALE BUONO (nessuna perdita) =====
-    for (int run = NUM_RUNS_BAD; run < NUM_RUNS_BAD + NUM_RUNS_GOOD; ++run) {
-        const std::string token_id = "gland_adapt_" + std::to_string(run);
-        std::vector<uint8_t> payload = generate_payload(2048, 2000 + run);
-        
-        // Spawn
-        OrganismSpawnResult spawn_res = organism.spawn(profile, token_id, payload, 128);
-        
-        // Nessuna perdita: tutti i pacchetti arrivano
-        std::vector<fec::Pkt> received_packets = spawn_res.packets;
-        
-        // Integrate
-        OrganismIntegrateResult integrate_res = organism.integrate(
-            profile, token_id, spawn_res.K, 128, received_packets
-        );
-        
-        FlowStateSnapshot snap;
-        snap.run_idx = run;
-        snap.delivered = integrate_res.delivered;
-        snap.coverage = integrate_res.coverage;
-        snap.symbols_used = integrate_res.symbols_used;
-        snap.total_symbols_seen = integrate_res.total_symbols_seen;
-        snapshots.push_back(snap);
-        
-        std::cout << "  Run " << run << ": delivered=" << (integrate_res.delivered ? "true " : "false")
-                  << ", coverage=" << std::fixed << std::setprecision(3) << integrate_res.coverage
-                  << ", received=" << received_packets.size() << "/" << spawn_res.packets.size()
-                  << std::endl;
-    }
-    
-    // ===== TABELLA RIASSUNTIVA =====
-    std::cout << "\n" << string(70, '-') << std::endl;
-    std::cout << "TABELLA RIASSUNTIVA - GLAND ADATTAMENTO" << std::endl;
-    std::cout << string(70, '-') << std::endl;
-    std::cout << std::left 
-              << std::setw(6) << "Run"
-              << std::setw(10) << "Delivered"
-              << std::setw(10) << "Coverage"
-              << std::setw(12) << "Symbols"
-              << std::setw(8) << "Efficiency"
-              << std::endl;
-    std::cout << string(70, '-') << std::endl;
-    
-    for (const auto& snap : snapshots) {
-        double efficiency = (snap.total_symbols_seen > 0) 
-            ? static_cast<double>(snap.symbols_used) / static_cast<double>(snap.total_symbols_seen)
-            : 0.0;
-        
-        std::string phase = (snap.run_idx < NUM_RUNS_BAD) ? "[BAD] " : "[GOOD]";
-        
-        std::cout << std::left
-                  << std::setw(6) << (std::to_string(snap.run_idx) + phase)
-                  << std::setw(10) << (snap.delivered ? "true" : "false")
-                  << std::fixed << std::setprecision(3)
-                  << std::setw(10) << snap.coverage
-                  << std::setw(12) << (std::to_string(snap.symbols_used) + "/" + std::to_string(snap.total_symbols_seen))
-                  << std::setprecision(2)
-                  << std::setw(8) << efficiency
-                  << std::endl;
-    }
-    
-    std::cout << string(70, '-') << std::endl;
-    std::cout << "\nNOTA: I valori crit_ov, bulk_ov e panic_boost sono stampati" << std::endl;
-    std::cout << "      nell'output [ALIEN][ADAPT] dopo ogni integrate()." << std::endl;
-    std::cout << "      Nella fase BAD, dovresti vedere:" << std::endl;
-    std::cout << "        - delivered=false, panic_boost > 0, overhead crescenti" << std::endl;
-    std::cout << "      Nella fase GOOD, dovresti vedere:" << std::endl;
-    std::cout << "        - delivered=true, panic_boost=0, overhead che diminuiscono lentamente\n" << std::endl;
-    
-    std::cout << "✓ SCENARIO 3 COMPLETATO: adattamento nel tempo testato\n" << std::endl;
+    fec::Decoder decoder(static_cast<int>(source_count), 32);
+    auto malformed = encoder.emit();
+    malformed.deg = source_count + 1;
+    assert(decoder.push(malformed) == fec::PushResult::MALFORMED);
+    malformed = encoder.emit();
+    malformed.data.pop_back();
+    assert(decoder.push(malformed) == fec::PushResult::MALFORMED);
+    assert(decoder.rank() == 0);
 }
 
-// ============================================================================
-// MAIN
-// ============================================================================
-int main() {
-    std::cout << string(70, '=') << std::endl;
-    std::cout << "TEST COMPLETO - ALIEN FOUNTAIN ORGANISM" << std::endl;
-    std::cout << string(70, '=') << std::endl;
-    std::cout << "\nQuesto test verifica tre scenari:" << std::endl;
-    std::cout << "  1. Canale buono: NERVE, GLAND, MUSCLE con delivery=true" << std::endl;
-    std::cout << "  2. Canale cattivo: NERVE/GLAND con perdite, panic_boost, overhead crescenti" << std::endl;
-    std::cout << "  3. Adattamento: GLAND che si adatta da canale cattivo a buono\n" << std::endl;
-    
+void health_does_not_treat_progress_as_failure() {
+    const auto contract = TransportContract::parse("deadline:1s;seed:55");
+    AlienFountainOrganism controller;
+    const auto generated = controller.spawn(contract, "health", payload(256, 55), 32, 0);
+    auto packets = minimum_decodable_packets(generated);
+
+    TransportHealth health;
+    const auto partial = controller.integrate(
+        generated.descriptor.generation_id, {packets.front()}, 1);
+    assert(partial.status == DecodeStatus::PARTIAL_PROGRESS);
+    health.observe(partial);
+    assert(health.fail_count == 0);
+    assert(health.success_count == 0);
+
+    const auto complete = controller.integrate(generated.descriptor.generation_id, packets, 2);
+    health.observe(complete);
+    assert(complete.delivered());
+    assert(health.success_count == 1);
+    assert(health.fail_count == 0);
+    assert(health.last_status == DecodeStatus::COMPLETE);
+}
+
+void generation_store_is_bounded() {
+    const auto contract = TransportContract::parse("deadline:1s;seed:80");
+    AlienFountainOrganism controller(2);
+    const auto first = controller.spawn(contract, "bounded-a", payload(64, 80), 32, 0);
+    (void)controller.spawn(contract, "bounded-b", payload(64, 81), 32, 0);
+
+    bool rejected = false;
     try {
-        // Scenario 1: Canale buono
-        test_scenario_good_channel();
-        
-        // Scenario 2: Canale cattivo
-        test_scenario_bad_channel();
-        
-        // Scenario 3: Adattamento
-        test_scenario_adaptation();
-        
-        std::cout << string(70, '=') << std::endl;
-        std::cout << "TUTTI I TEST COMPLETATI CON SUCCESSO!" << std::endl;
-        std::cout << string(70, '=') << std::endl;
-        
-        return 0;
-        
-    } catch (const std::exception& e) {
-        std::cerr << "\nERRORE: " << e.what() << std::endl;
-        return 1;
-    } catch (...) {
-        std::cerr << "\nERRORE: eccezione sconosciuta" << std::endl;
-        return 1;
+        (void)controller.spawn(contract, "bounded-c", payload(64, 82), 32, 0);
+    } catch (const std::runtime_error&) {
+        rejected = true;
     }
+    assert(rejected);
+
+    const auto completed = controller.integrate(
+        first.descriptor.generation_id, minimum_decodable_packets(first), 1);
+    assert(completed.delivered());
+    (void)controller.spawn(contract, "bounded-c", payload(64, 82), 32, 2);
+    assert(controller.generation_count() == 2);
 }
 
+void generation_size_limits_are_enforced() {
+    const auto contract = TransportContract::parse(
+        "deadline:1s;max_generation_bytes:64;max_source_symbols:2;seed:90");
+    AlienFountainOrganism controller;
+    bool bytes_rejected = false;
+    try {
+        (void)controller.spawn(contract, "too-many-bytes", payload(65, 90), 64, 0);
+    } catch (const std::invalid_argument&) {
+        bytes_rejected = true;
+    }
+    assert(bytes_rejected);
+
+    auto symbol_limited = contract;
+    symbol_limited.maximum_generation_bytes = 1024;
+    bool symbols_rejected = false;
+    try {
+        (void)controller.spawn(symbol_limited, "too-many-symbols", payload(65, 91), 32, 0);
+    } catch (const std::invalid_argument&) {
+        symbols_rejected = true;
+    }
+    assert(symbols_rejected);
+}
+
+void runtime_repairs_are_deterministic_segment_aware_and_bounded() {
+    const auto contract = TransportContract::parse(
+        "deadline:1s;seed:123;max_repair_amplification:5;"
+        "segment:0-63,critical,100ms,0.999");
+    const auto bytes = payload(192, 123);
+    AlienFountainOrganism first;
+    AlienFountainOrganism replay;
+    const auto generated = first.spawn(contract, "runtime-repair", bytes, 32, 0);
+    const auto regenerated = replay.spawn(contract, "runtime-repair", bytes, 32, 0);
+    const auto descriptor_before = first.descriptor(generated.descriptor.generation_id);
+    assert(descriptor_before.has_value());
+
+    const auto first_repairs = first.emit_repairs(
+        generated.descriptor.generation_id, 2, true);
+    const auto replay_repairs = replay.emit_repairs(
+        regenerated.descriptor.generation_id, 2, true);
+    assert(first_repairs.emitted_symbols == 2);
+    assert(first_repairs.packets.size() == 2);
+    assert(replay_repairs.packets.size() == first_repairs.packets.size());
+
+    std::unordered_set<std::uint64_t> initial_identities;
+    for (const auto& packet : generated.packets) {
+        initial_identities.insert(
+            (static_cast<std::uint64_t>(packet.segment_id) << 32U) | packet.fp.seed);
+    }
+    for (std::size_t i = 0; i < first_repairs.packets.size(); ++i) {
+        const auto& packet = first_repairs.packets[i];
+        const auto& replay_packet = replay_repairs.packets[i];
+        assert(packet.kind == fec::SegmentKind::CRITICAL);
+        assert(packet.segment_id == 0);
+        assert(packet.fp.seed == replay_packet.fp.seed);
+        assert(packet.fp.deg == replay_packet.fp.deg);
+        assert(packet.fp.data == replay_packet.fp.data);
+        const auto identity =
+            (static_cast<std::uint64_t>(packet.segment_id) << 32U) | packet.fp.seed;
+        assert(initial_identities.insert(identity).second);
+    }
+
+    const auto descriptor_after = first.descriptor(generated.descriptor.generation_id);
+    assert(descriptor_after.has_value());
+    assert(descriptor_after->descriptor_fingerprint ==
+           descriptor_before->descriptor_fingerprint);
+    assert(descriptor_after->segments.size() == descriptor_before->segments.size());
+    for (std::size_t i = 0; i < descriptor_after->segments.size(); ++i) {
+        assert(descriptor_after->segments[i].coding.emitted_symbols ==
+               descriptor_before->segments[i].coding.emitted_symbols);
+    }
+
+    const auto capped = first.emit_repairs(
+        generated.descriptor.generation_id, 10'000, true);
+    const auto exhausted = first.emit_repairs(
+        generated.descriptor.generation_id, 1, true);
+    assert(exhausted.emitted_symbols == 0);
+    const auto runtime = first.runtime_state(generated.descriptor.generation_id);
+    assert(runtime.has_value());
+    const auto critical_sources = generated.descriptor.segments.front().source_symbol_count;
+    assert(runtime->critical_emitted_symbols == critical_sources * 5U);
+    assert(capped.emitted_symbols > 0);
+
+    auto no_critical_contract = contract;
+    no_critical_contract.segments.clear();
+    no_critical_contract.importance = aurora::transport::TransportImportance::IMPORTANT;
+    const auto no_critical = first.spawn(
+        no_critical_contract, "no-critical-repair", bytes, 32, 0);
+    assert(first.emit_repairs(
+        no_critical.descriptor.generation_id, 3, true).emitted_symbols == 0);
+
+    const auto rounding_contract = TransportContract::parse(
+        "deadline:10s;reliability:0.99;seed:124;"
+        "max_repair_amplification:1.5;min_critical_overhead:1.5;"
+        "segment:0-0,important;segment:1-1,important");
+    AlienFountainOrganism rounded;
+    const auto rounded_generation = rounded.spawn(
+        rounding_contract, "rounded-budget", {0x01, 0x02}, 1, 0);
+    assert(rounded_generation.descriptor.total_source_symbols == 2);
+    assert(rounded_generation.packets.size() == 3);
+    assert(rounded.emit_repairs(
+        rounded_generation.descriptor.generation_id, 1, false).emitted_symbols == 0);
+}
+
+} // namespace
+
+int main() {
+    deterministic_generation_and_exact_length();
+    concurrent_interleaved_generations();
+    expiry_malformed_and_integrity_failures();
+    empty_and_small_payloads();
+    codec_rejects_malformed_symbols_and_uses_unique_indexes();
+    health_does_not_treat_progress_as_failure();
+    generation_store_is_bounded();
+    generation_size_limits_are_enforced();
+    runtime_repairs_are_deterministic_segment_aware_and_bounded();
+    std::cout << "generation lifecycle tests passed\n";
+    return 0;
+}

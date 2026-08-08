@@ -22,6 +22,8 @@
 using namespace std;
 
 #include "aurora_hal.hpp"
+#include "include/aurora/fec/LtLikeCodec.hpp"
+#include "include/aurora/transport/TransportHealth.hpp"
 #ifdef _WIN32
 #undef byte
 #endif
@@ -43,45 +45,6 @@ namespace CRYPTO {
 #endif
 }
 
-// ===== Fountain / LT-based FEC =====
-namespace fec {
-  struct Fp{ uint32_t seed, deg; vector<uint8_t> data; };
-  
-  // LT fallback "infinite-ish" fountain code implementation
-  struct Encoder{
-    vector<vector<uint8_t>> sym; size_t S;
-    Encoder(const vector<uint8_t>& bytes, size_t s=256):S(s){ size_t n=(bytes.size()+S-1)/S; sym.assign(n, vector<uint8_t>(S,0)); for(size_t i=0;i<bytes.size(); ++i) sym[i/S][i%S]=bytes[i]; }
-    int N() const { return (int)sym.size(); }
-    static int deg(int n){ double u=util::rng.uni(); int k=1; while(k<n && u>(1.0-1.0/(k+1))) ++k; return max(1,min(n,k)); }
-    Fp emit(){ int n=N(); uint32_t seed=(uint32_t)util::rng.next(); mt19937 g(seed); int k=deg(n); vector<uint8_t> mix(S,0); for(int i=0;i<k;++i){ int id=g()%n; for(size_t b=0;b<S;++b) mix[b]^=sym[id][b]; } return {seed,(uint32_t)k,move(mix)}; }
-  };
-  struct Decoder{
-    int n; size_t S; vector<vector<uint8_t>> A, rhs;
-    Decoder(int n,size_t S):n(n),S(S){} 
-    void push(const Fp& p){ mt19937 g(p.seed); vector<int> idx(p.deg); for(uint32_t i=0;i<p.deg;++i) idx[i]=g()%n; vector<uint8_t> row(n,0); for(int id:idx) row[id]^=1; A.push_back(move(row)); rhs.push_back(p.data); }
-    pair<bool, vector<uint8_t>> solve(){ int m=A.size(); if(!m) return {false,{}}; vector<vector<uint8_t>> M=A; int r=0; vector<int> piv; vector<vector<uint8_t>> R=rhs;
-      for(int c=0;c<n && r<m;++c){ int s=-1; for(int i=r;i<m;++i) if(M[i][c]){ s=i; break; } if(s==-1) continue; swap(M[r],M[s]); swap(R[r],R[s]);
-        for(int i=0;i<m;++i) if(i!=r && M[i][c]){ for(int j=c;j<n;++j) M[i][j]^=M[r][j]; for(size_t b=0;b<S;++b) R[i][b]^=R[r][b]; } piv.push_back(c); r++; }
-      if((int)piv.size()<n) return {false,{}}; vector<vector<uint8_t>> sym(n, vector<uint8_t>(S,0));
-      for(int pi=(int)piv.size()-1; pi>=0; --pi){ int c=piv[pi], rr=pi; for(int j=c+1;j<n;++j) if(M[rr][j]) for(size_t b=0;b<S;++b) R[rr][b]^=sym[j][b]; sym[c]=R[rr]; }
-      vector<uint8_t> out; out.reserve(n*S); for(int i=0;i<n;++i) out.insert(out.end(), sym[i].begin(), sym[i].end()); return {true,out};
-    }
-  };
-
-  // Tipo di segmento: parte critica vs bulk
-  enum class SegmentKind : uint8_t {
-      CRITICAL,  // parte critica (es. header logico)
-      BULK       // corpo bulk (default)
-  };
-
-  struct Pkt{ 
-      Fp fp; 
-      uint32_t seq; 
-      string token_id; 
-      SegmentKind kind = SegmentKind::BULK;  // default: bulk
-  };
-}
-
 // ===== PoD-Merkle =====
 namespace podm {
   static inline string leaf(const vector<uint8_t>& v){ return util::h64(string((const char*)v.data(), v.size())); }
@@ -92,7 +55,7 @@ namespace podm {
 // ===== Channel telemetry & estimators (rolling) — PATCH ⬇︎
 namespace telem {
   struct EWMA { double a, v; EWMA(double alpha=0.2):a(alpha),v(NAN){} void push(double x){ v = std::isnan(v)? x : (a*x + (1-a)*v); } double val()const{return v;} };
-  struct Window { deque<double> q; int N; explicit Window(int n=30):N(n){} void push(double x){ q.push_back(x); if((int)q.size()>N) q.pop_back(); } double mean()const{ if(q.empty()) return NAN; double s=0; for(double x:q)s+=x; return s/q.size(); } double var()const{ if((int)q.size()<2) return NAN; double m=mean(), s=0; for(double x:q)s+=(x-m)*(x-m); return s/(q.size()-1); } };
+  struct Window { deque<double> q; int N; explicit Window(int n=30):N(n){} void push(double x){ q.push_back(x); if((int)q.size()>N) q.pop_front(); } double mean()const{ if(q.empty()) return NAN; double s=0; for(double x:q)s+=x; return s/q.size(); } double var()const{ if((int)q.size()<2) return NAN; double m=mean(), s=0; for(double x:q)s+=(x-m)*(x-m); return s/(q.size()-1); } };
   struct ChannelState {
     EWMA snr_rf{0.25}, snr_ir{0.25}, snr_bs{0.25};
     Window per_rf{50}, per_ir{50}, per_bs{50};
@@ -205,16 +168,7 @@ namespace cl {
     void update(int idx, double r){ N[idx]++; reward[idx]+=r; }
   };
 
-  // FASE 4: FlowHealth struct per tracking stato per FlowClass
-  struct FlowHealth {
-    double ewma_coverage = 0.0;
-    double ewma_fail_rate = 0.0;
-    double ewma_panic_rate = 0.0;
-    int success_count = 0;
-    int fail_count = 0;
-    int recent_good_streak = 0;
-    int recent_bad_streak = 0;
-  };
+  using FlowHealth = aurora::transport::TransportHealth;
 
   // FASE 4: Mode enum per Optimizer
   enum class Mode {
@@ -338,14 +292,14 @@ namespace cl {
                      const FlowHealth& nerve_health,
                      const FlowHealth& gland_health,
                      const FlowHealth& muscle_health) {
-        // Convert SafetyState to int (assumes it can be cast to int: 0=HEALTHY, 1=DEGRADED, 2=CRITICAL)
+        // SafetyState preserves 0=HEALTHY, 1=DEGRADED, 2=CRITICAL and uses
+        // -1 for NO_EVIDENCE. No evidence keeps the optimizer NORMAL.
         int safety_state_int = static_cast<int>(safety_state);
         double nerve_fail_rate = nerve_health.ewma_fail_rate;
         double gland_fail_rate = gland_health.ewma_fail_rate;
-        double muscle_fail_rate = muscle_health.ewma_fail_rate;
         double nerve_cov = nerve_health.ewma_coverage;
         double gland_cov = gland_health.ewma_coverage;
-        double muscle_cov = muscle_health.ewma_coverage;
+        (void)muscle_health;
         
         Mode old_mode = mode_;
         

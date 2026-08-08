@@ -22,6 +22,7 @@ find_package(Threads REQUIRED)
 add_library(aurora_headers INTERFACE)
 target_include_directories(aurora_headers INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
@@ -158,6 +159,17 @@ endif()
 # Helper for common dependencies
 function(aurora_link_common target)
   target_link_libraries(${target} PRIVATE aurora_headers Threads::Threads)
+  if(MINGW)
+    # Avoid loading ABI-incompatible GCC runtime DLLs from another Windows
+    # application that happens to appear earlier on PATH. A user-supplied
+    # libsodium build may itself be dynamic, so that profile keeps only the
+    # compiler runtimes static.
+    if(USE_SODIUM)
+      target_link_options(${target} PRIVATE -static-libgcc -static-libstdc++)
+    else()
+      target_link_options(${target} PRIVATE -static)
+    endif()
+  endif()
   if(TARGET aurora_sodium)
     target_link_libraries(${target} PRIVATE aurora_sodium)
   endif()
@@ -171,22 +183,66 @@ endfunction()
 add_executable(aurora_x aurora_x.cpp ${AURORA_FEC_SOURCES})
 aurora_link_common(aurora_x)
 
+add_executable(aurora_replay apps/aurora_replay.cpp)
+aurora_link_common(aurora_replay)
+
+add_executable(aurora_benchmark apps/aurora_benchmark.cpp)
+aurora_link_common(aurora_benchmark)
+
 # -------------------------------------------------------------------
 # Tests
 if(BUILD_TESTING)
-  add_executable(test_podm test_podm.cpp)
-  aurora_link_common(test_podm)
-  add_test(NAME aurora.podm COMMAND test_podm)
-
   add_executable(test_aurora_organism tests/test_aurora_organism.cpp)
   aurora_link_common(test_aurora_organism)
-  add_test(NAME aurora.organism COMMAND test_aurora_organism)
+  add_test(NAME aurora.generation_lifecycle COMMAND test_aurora_organism)
+
+  add_executable(test_transport_contract tests/test_transport_contract.cpp)
+  aurora_link_common(test_transport_contract)
+  add_test(NAME aurora.transport_contract COMMAND test_transport_contract)
+
+  add_executable(test_safety_envelope tests/test_safety_envelope.cpp)
+  aurora_link_common(test_safety_envelope)
+  add_test(NAME aurora.safety_envelope COMMAND test_safety_envelope)
+
+  add_executable(test_decision_replay tests/test_decision_replay.cpp)
+  aurora_link_common(test_decision_replay)
+  add_test(NAME aurora.decision_replay COMMAND test_decision_replay)
+
+  add_executable(test_modular_transport tests/test_modular_transport.cpp)
+  aurora_link_common(test_modular_transport)
+  add_test(NAME aurora.modular_transport COMMAND test_modular_transport)
+
+  add_executable(test_baseline_benchmark tests/test_baseline_benchmark.cpp)
+  aurora_link_common(test_baseline_benchmark)
+  add_test(NAME aurora.baseline_benchmark COMMAND test_baseline_benchmark)
+
+  add_executable(test_channel_trace tests/test_channel_trace.cpp)
+  aurora_link_common(test_channel_trace)
+  add_test(NAME aurora.channel_trace COMMAND test_channel_trace)
+
+  add_executable(test_runtime_correctness tests/test_runtime_correctness.cpp)
+  aurora_link_common(test_runtime_correctness)
+  add_test(NAME aurora.runtime_correctness COMMAND test_runtime_correctness)
 
   # Keep standard assert() checks active even in optimized test configurations.
   if(MSVC)
     target_compile_options(test_aurora_organism PRIVATE /UNDEBUG)
+    target_compile_options(test_transport_contract PRIVATE /UNDEBUG)
+    target_compile_options(test_safety_envelope PRIVATE /UNDEBUG)
+    target_compile_options(test_decision_replay PRIVATE /UNDEBUG)
+    target_compile_options(test_modular_transport PRIVATE /UNDEBUG)
+    target_compile_options(test_baseline_benchmark PRIVATE /UNDEBUG)
+    target_compile_options(test_channel_trace PRIVATE /UNDEBUG)
+    target_compile_options(test_runtime_correctness PRIVATE /UNDEBUG)
   else()
     target_compile_options(test_aurora_organism PRIVATE -UNDEBUG)
+    target_compile_options(test_transport_contract PRIVATE -UNDEBUG)
+    target_compile_options(test_safety_envelope PRIVATE -UNDEBUG)
+    target_compile_options(test_decision_replay PRIVATE -UNDEBUG)
+    target_compile_options(test_modular_transport PRIVATE -UNDEBUG)
+    target_compile_options(test_baseline_benchmark PRIVATE -UNDEBUG)
+    target_compile_options(test_channel_trace PRIVATE -UNDEBUG)
+    target_compile_options(test_runtime_correctness PRIVATE -UNDEBUG)
   endif()
 
   if(USE_RAPTORQ)
@@ -229,7 +285,6 @@ if(BUILD_NET_TOOLS)
 
   foreach(tool
       aurora_unit_dedup_test
-      aurora_batch_test
       aurora_deadline_sweep
       aurora_selector_test)
     if(TARGET ${tool})
@@ -242,9 +297,17 @@ endif()
 # Warning levels
 set(_AURORA_ALL_TARGETS
   aurora_x
-  test_podm
+  aurora_replay
+  aurora_benchmark
   test_raptorq_adapter
   test_aurora_organism
+  test_transport_contract
+  test_safety_envelope
+  test_decision_replay
+  test_modular_transport
+  test_baseline_benchmark
+  test_channel_trace
+  test_runtime_correctness
   aurora_batch_test
   aurora_deadline_sweep
   aurora_selector_test
