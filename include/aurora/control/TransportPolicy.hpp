@@ -205,6 +205,9 @@ public:
         if (state.panic_boost > 0) {
             critical *= 2.0;
             important *= 1.5;
+            // Panic is a generation budget: consume one unit when a new
+            // generation is planned, regardless of that generation's outcome.
+            --state.panic_boost;
         }
 
         ProtectionPlan result;
@@ -235,9 +238,6 @@ public:
             ++state.success_count;
             ++state.good_streak;
             state.bad_streak = 0;
-            if (state.panic_boost > 0) {
-                --state.panic_boost;
-            }
             if (state.good_streak >= 4 && state.panic_boost == 0 &&
                 state.average_coverage >= 0.85) {
                 state.critical_overhead = std::max(

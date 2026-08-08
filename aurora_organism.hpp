@@ -26,6 +26,8 @@ using Genotype = control::Genotype;
 using GenotypeHint = control::GenotypeHint;
 using FlowProfile = control::FlowProfile;
 using OrganismSpawnResult = transport::GenerationSpawnResult;
+using OrganismRepairResult = transport::GenerationRepairResult;
+using GenerationRuntimeState = transport::GenerationRuntimeState;
 
 // Historical view retained at the simulator boundary. New code should consume
 // control::BiologicalFlowState directly.
@@ -64,7 +66,15 @@ public:
         const std::vector<::fec::Pkt>& received_packets,
         std::uint64_t now_ms) = 0;
 
+    virtual OrganismRepairResult emit_repairs(
+        const std::string& generation_id,
+        std::uint32_t requested_symbols,
+        bool critical_only) = 0;
+
     [[nodiscard]] virtual std::optional<GenerationDescriptor> descriptor(
+        const std::string& generation_id) const = 0;
+
+    [[nodiscard]] virtual std::optional<GenerationRuntimeState> runtime_state(
         const std::string& generation_id) const = 0;
 };
 
@@ -105,9 +115,22 @@ public:
         return manager_.integrate(generation_id, received_packets, now_ms);
     }
 
+    OrganismRepairResult emit_repairs(
+        const std::string& generation_id,
+        std::uint32_t requested_symbols,
+        bool critical_only) override {
+        return manager_.emit_repairs(
+            generation_id, requested_symbols, critical_only);
+    }
+
     [[nodiscard]] std::optional<GenerationDescriptor> descriptor(
         const std::string& generation_id) const override {
         return manager_.descriptor(generation_id);
+    }
+
+    [[nodiscard]] std::optional<GenerationRuntimeState> runtime_state(
+        const std::string& generation_id) const override {
+        return manager_.runtime_state(generation_id);
     }
 
     [[nodiscard]] std::size_t generation_count() const {

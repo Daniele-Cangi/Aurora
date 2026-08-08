@@ -102,6 +102,58 @@ int main() {
     assert(legacy.descriptor.codec_id == "experimental-lt-like");
     assert(legacy.descriptor.policy_id == "biological-adaptive");
 
+    aurora::control::AdaptivePolicyConfig adaptive_config;
+    adaptive_config.panic_boost_generations = 3;
+    aurora::control::BiologicalAdaptivePolicy adaptive(adaptive_config);
+    auto adaptive_contract = contract;
+    adaptive_contract.deadline_s = 10.0;
+    adaptive_contract.reliability = 0.99;
+    adaptive_contract.maximum_repair_amplification = 6.0;
+    const auto profile = adaptive.profile_for(adaptive_contract);
+    const auto baseline_plan = adaptive.plan(adaptive_contract);
+
+    aurora::transport::DecodeReport failure;
+    failure.generation_id = "failed-generation";
+    failure.status = aurora::transport::DecodeStatus::EXPIRED;
+    failure.coverage = 0.0;
+    adaptive.observe(profile, failure);
+    const auto failed_state = adaptive.flow_state(profile);
+    assert(failed_state.has_value());
+    assert(failed_state->panic_boost == 3);
+    assert(failed_state->important_overhead > baseline_plan.important_overhead);
+
+    for (int generation = 0; generation < 3; ++generation) {
+        const auto boosted = adaptive.plan(adaptive_contract);
+        const auto state = adaptive.flow_state(profile);
+        assert(state.has_value());
+        assert(boosted.critical_overhead > state->critical_overhead);
+        assert(boosted.important_overhead > state->important_overhead);
+        assert(state->panic_boost == 2 - generation);
+    }
+    const auto unboosted = adaptive.plan(adaptive_contract);
+    const auto post_panic = adaptive.flow_state(profile);
+    assert(post_panic.has_value());
+    assert(post_panic->panic_boost == 0);
+    assert(unboosted.critical_overhead == post_panic->critical_overhead);
+    assert(unboosted.important_overhead == post_panic->important_overhead);
+
+    const double overhead_after_failure = post_panic->important_overhead;
+    aurora::transport::DecodeReport success;
+    success.status = aurora::transport::DecodeStatus::COMPLETE;
+    success.payload_complete = true;
+    success.coverage = 1.0;
+    for (int generation = 0; generation < 12; ++generation) {
+        success.generation_id = "successful-generation-" + std::to_string(generation);
+        (void)adaptive.plan(adaptive_contract);
+        adaptive.observe(profile, success);
+    }
+    const auto recovered = adaptive.flow_state(profile);
+    assert(recovered.has_value());
+    assert(recovered->panic_boost == 0);
+    assert(recovered->good_streak == 12);
+    assert(recovered->important_overhead < overhead_after_failure);
+    assert(recovered->important_overhead >= recovered->base_important_overhead);
+
     std::cout << "modular transport tests passed\n";
     return 0;
 }

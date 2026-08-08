@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -24,9 +25,51 @@ struct SegmentRequirement {
     std::size_t offset = 0;
     std::size_t length = 0;
     TransportImportance importance = TransportImportance::IMPORTANT;
+    // These two values are currently retained as declared metadata. Global
+    // generation expiry and policy selection are operational; independent
+    // segment expiry/reliability enforcement is intentionally not claimed.
     std::uint64_t deadline_ms = 0;
     double target_reliability = 0.99;
 };
+
+enum class ContractFieldSemantics : std::uint8_t {
+    ENFORCED,
+    POLICY_INPUT,
+    METADATA_ONLY,
+    UNSUPPORTED
+};
+
+struct ContractFieldAudit {
+    std::string_view field;
+    ContractFieldSemantics semantics;
+    std::string_view runtime_effect;
+};
+
+// Truth table for the public contract surface. Keep this list synchronized with
+// TransportContract; tests make omissions and accidental semantic inflation visible.
+inline constexpr std::array<ContractFieldAudit, 21> transport_contract_semantic_audit{{
+    {"version", ContractFieldSemantics::ENFORCED, "validated parser/API version"},
+    {"deadline_s", ContractFieldSemantics::ENFORCED, "absolute generation expiry"},
+    {"reliability", ContractFieldSemantics::POLICY_INPUT, "flow class and protection plan input; not an SLA"},
+    {"duty_frac", ContractFieldSemantics::ENFORCED, "simulation-time RF airtime budget and policy input"},
+    {"allowed_links", ContractFieldSemantics::ENFORCED, "SafetyEnvelope link admission/replacement"},
+    {"ris_tiles", ContractFieldSemantics::ENFORCED, "simulator RIS tile count"},
+    {"selector_argmax", ContractFieldSemantics::POLICY_INPUT, "link selector choice"},
+    {"importance", ContractFieldSemantics::POLICY_INPUT, "default segmentation and protection"},
+    {"minimum_source_reserve", ContractFieldSemantics::ENFORCED, "pre-action energy floor"},
+    {"maximum_observation_age_ms", ContractFieldSemantics::ENFORCED, "SafetyEnvelope freshness bound"},
+    {"maximum_repair_amplification", ContractFieldSemantics::ENFORCED, "initial and runtime repair cap"},
+    {"minimum_critical_overhead", ContractFieldSemantics::ENFORCED, "critical protection floor"},
+    {"maximum_generation_bytes", ContractFieldSemantics::ENFORCED, "spawn size limit"},
+    {"maximum_source_symbols", ContractFieldSemantics::ENFORCED, "spawn source-symbol limit"},
+    {"require_payload_integrity", ContractFieldSemantics::ENFORCED, "terminal payload digest check"},
+    {"experiment_seed", ContractFieldSemantics::ENFORCED, "deterministic generation and simulator randomness"},
+    {"segments.range", ContractFieldSemantics::ENFORCED, "explicit byte segmentation"},
+    {"segments.importance", ContractFieldSemantics::ENFORCED, "segment protection and critical scheduling"},
+    {"segments.deadline_ms", ContractFieldSemantics::METADATA_ONLY, "recorded in descriptor; no independent expiry"},
+    {"segments.target_reliability", ContractFieldSemantics::METADATA_ONLY, "recorded in descriptor; no independent guarantee"},
+    {"payload_semantics", ContractFieldSemantics::UNSUPPORTED, "opaque bytes only"},
+}};
 
 // Application-facing requirements for moving opaque bytes.  This type deliberately
 // contains transport properties only; it has no payload-semantic fields.
@@ -60,6 +103,9 @@ struct TransportContract {
     }
 
     void validate() const {
+        if (version != 1) {
+            throw std::invalid_argument("transport contract: unsupported version");
+        }
         if (!std::isfinite(deadline_s) || deadline_s < 0.0) {
             throw std::invalid_argument("transport contract: deadline must be finite and non-negative");
         }

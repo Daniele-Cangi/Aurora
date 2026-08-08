@@ -281,6 +281,86 @@ void generation_size_limits_are_enforced() {
     assert(symbols_rejected);
 }
 
+void runtime_repairs_are_deterministic_segment_aware_and_bounded() {
+    const auto contract = TransportContract::parse(
+        "deadline:1s;seed:123;max_repair_amplification:5;"
+        "segment:0-63,critical,100ms,0.999");
+    const auto bytes = payload(192, 123);
+    AlienFountainOrganism first;
+    AlienFountainOrganism replay;
+    const auto generated = first.spawn(contract, "runtime-repair", bytes, 32, 0);
+    const auto regenerated = replay.spawn(contract, "runtime-repair", bytes, 32, 0);
+    const auto descriptor_before = first.descriptor(generated.descriptor.generation_id);
+    assert(descriptor_before.has_value());
+
+    const auto first_repairs = first.emit_repairs(
+        generated.descriptor.generation_id, 2, true);
+    const auto replay_repairs = replay.emit_repairs(
+        regenerated.descriptor.generation_id, 2, true);
+    assert(first_repairs.emitted_symbols == 2);
+    assert(first_repairs.packets.size() == 2);
+    assert(replay_repairs.packets.size() == first_repairs.packets.size());
+
+    std::unordered_set<std::uint64_t> initial_identities;
+    for (const auto& packet : generated.packets) {
+        initial_identities.insert(
+            (static_cast<std::uint64_t>(packet.segment_id) << 32U) | packet.fp.seed);
+    }
+    for (std::size_t i = 0; i < first_repairs.packets.size(); ++i) {
+        const auto& packet = first_repairs.packets[i];
+        const auto& replay_packet = replay_repairs.packets[i];
+        assert(packet.kind == fec::SegmentKind::CRITICAL);
+        assert(packet.segment_id == 0);
+        assert(packet.fp.seed == replay_packet.fp.seed);
+        assert(packet.fp.deg == replay_packet.fp.deg);
+        assert(packet.fp.data == replay_packet.fp.data);
+        const auto identity =
+            (static_cast<std::uint64_t>(packet.segment_id) << 32U) | packet.fp.seed;
+        assert(initial_identities.insert(identity).second);
+    }
+
+    const auto descriptor_after = first.descriptor(generated.descriptor.generation_id);
+    assert(descriptor_after.has_value());
+    assert(descriptor_after->descriptor_fingerprint ==
+           descriptor_before->descriptor_fingerprint);
+    assert(descriptor_after->segments.size() == descriptor_before->segments.size());
+    for (std::size_t i = 0; i < descriptor_after->segments.size(); ++i) {
+        assert(descriptor_after->segments[i].coding.emitted_symbols ==
+               descriptor_before->segments[i].coding.emitted_symbols);
+    }
+
+    const auto capped = first.emit_repairs(
+        generated.descriptor.generation_id, 10'000, true);
+    const auto exhausted = first.emit_repairs(
+        generated.descriptor.generation_id, 1, true);
+    assert(exhausted.emitted_symbols == 0);
+    const auto runtime = first.runtime_state(generated.descriptor.generation_id);
+    assert(runtime.has_value());
+    const auto critical_sources = generated.descriptor.segments.front().source_symbol_count;
+    assert(runtime->critical_emitted_symbols == critical_sources * 5U);
+    assert(capped.emitted_symbols > 0);
+
+    auto no_critical_contract = contract;
+    no_critical_contract.segments.clear();
+    no_critical_contract.importance = aurora::transport::TransportImportance::IMPORTANT;
+    const auto no_critical = first.spawn(
+        no_critical_contract, "no-critical-repair", bytes, 32, 0);
+    assert(first.emit_repairs(
+        no_critical.descriptor.generation_id, 3, true).emitted_symbols == 0);
+
+    const auto rounding_contract = TransportContract::parse(
+        "deadline:10s;reliability:0.99;seed:124;"
+        "max_repair_amplification:1.5;min_critical_overhead:1.5;"
+        "segment:0-0,important;segment:1-1,important");
+    AlienFountainOrganism rounded;
+    const auto rounded_generation = rounded.spawn(
+        rounding_contract, "rounded-budget", {0x01, 0x02}, 1, 0);
+    assert(rounded_generation.descriptor.total_source_symbols == 2);
+    assert(rounded_generation.packets.size() == 3);
+    assert(rounded.emit_repairs(
+        rounded_generation.descriptor.generation_id, 1, false).emitted_symbols == 0);
+}
+
 } // namespace
 
 int main() {
@@ -292,6 +372,7 @@ int main() {
     health_does_not_treat_progress_as_failure();
     generation_store_is_bounded();
     generation_size_limits_are_enforced();
+    runtime_repairs_are_deterministic_segment_aware_and_bounded();
     std::cout << "generation lifecycle tests passed\n";
     return 0;
 }

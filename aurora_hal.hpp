@@ -18,6 +18,7 @@
 #include <deque>
 #include <random>
 #include <chrono>
+#include <cstdint>
 #include <thread>
 using namespace std;
 using namespace chrono;
@@ -42,6 +43,45 @@ struct DutyLimiter {
   }
   double left_frac() const {
     double cap=max_frac*window_s; return cap>0? max(0.0, (cap-used_s)/cap):0.0;
+  }
+};
+
+// Deterministic fixed-window accounting for the simulator. It is deliberately
+// separate from DutyLimiter's steady_clock accounting used by real-time HAL calls.
+struct SimulationDutyLimiter {
+  uint64_t window_ms = 60'000;
+  double max_frac = 0.01;
+  uint64_t window_start_ms = 0;
+  double used_s = 0.0;
+
+  void configure(double fraction, uint64_t window=60'000) {
+    max_frac = clamp(fraction, 0.0, 1.0);
+    window_ms = max<uint64_t>(1, window);
+    window_start_ms = 0;
+    used_s = 0.0;
+  }
+  void advance(uint64_t now_ms) {
+    if(now_ms < window_start_ms || now_ms - window_start_ms >= window_ms) {
+      window_start_ms = now_ms;
+      used_s = 0.0;
+    }
+  }
+  double capacity_s() const { return max_frac * (static_cast<double>(window_ms) / 1000.0); }
+  double remaining_s(uint64_t now_ms) {
+    advance(now_ms);
+    return max(0.0, capacity_s() - used_s);
+  }
+  double remaining_fraction(uint64_t now_ms) {
+    const double cap = capacity_s();
+    return cap > 0.0 ? remaining_s(now_ms) / cap : 0.0;
+  }
+  bool can_allow(uint64_t now_ms, double burst_s) {
+    return isfinite(burst_s) && burst_s >= 0.0 && burst_s <= remaining_s(now_ms) + 1e-12;
+  }
+  bool consume(uint64_t now_ms, double burst_s) {
+    if(!can_allow(now_ms, burst_s)) return false;
+    used_s += burst_s;
+    return true;
   }
 };
 struct LBT { double thresh_dBm=-95; int dwell_ms=5; bool clear(function<int(void)> rssi){ int a=rssi(); if(a<thresh_dBm){ this_thread::sleep_for(milliseconds(dwell_ms)); int b=rssi(); return b<thresh_dBm; } return false; } };
@@ -71,6 +111,12 @@ struct SX1262 {
     this_thread::sleep_for(milliseconds((int)(t_s*1000)));
     return true;
   }
+  bool tx_simulation(const uint8_t*, size_t len){
+    double t_s=max(0.005, len / (125000.0/8.0));
+    if(!lbt.clear([&](){return rssi();})) return false;
+    this_thread::sleep_for(milliseconds((int)(t_s*1000)));
+    return true;
+  }
   bool tx_cw(double secs){
     if(!duty.allow(min(1.0,secs))) return false;
     this_thread::sleep_for(milliseconds((int)(secs*1000)));
@@ -86,7 +132,9 @@ struct RIS { I2C i2c; uint8_t addr=0x20; int cells=16; bool init(){ i2c.init(); 
   vector<uint8_t> reg; reg.reserve((cells+3)/4);
   uint8_t acc=0; int cnt=0;
   for(int i=0;i<cells; ++i){ uint8_t two=(i<(int)p.size()? p[i]&0x3:0); acc |= (two << (2*(i%4))); if(++cnt==4){ reg.push_back(acc); acc=0; cnt=0; } }
-  if(cnt) reg.push_back(acc); return i2c.write(addr, reg.data(), reg.size()); } };
+  if(cnt) reg.push_back(acc);
+  return i2c.write(addr, reg.data(), reg.size());
+} };
 
 // Facade
 static SX1262& radio(){ static SX1262 r; static bool inited=false; if(!inited){ r.init(); inited=true;} return r; }
@@ -98,6 +146,7 @@ static RIS& ris(){ static RIS x; static bool inited=false; if(!inited){ x.init()
 inline bool RADIO_INIT(){ radio().init(); return true; }
 inline bool LORA_CFG(double f,int bw_khz,int sf,int cr,int preamble_sym){ (void)f;(void)bw_khz;(void)sf;(void)cr;(void)preamble_sym; return radio().cfg(f,bw_khz,sf,cr,preamble_sym); }
 inline bool LORA_TX(const uint8_t* b,size_t n){ return radio().tx(b,n); }
+inline bool LORA_TX_SIMULATION(const uint8_t* b,size_t n){ return radio().tx_simulation(b,n); }
 inline int  LORA_RSSI(){ return radio().rssi(); }
 inline bool CW_ON(double s){ return radio().tx_cw(s); }
 inline bool CW_OFF(){ return true; }
@@ -105,6 +154,7 @@ inline bool IR_TX(const uint8_t* b, size_t n, int bitrate){ return ir().tx(b,n,b
 inline bool BS_MODULATE(const uint8_t* bits, size_t nbits, int bitrate){ return bs().mod(bits,nbits,bitrate); }
 inline bool RIS_SET_PHASES(const vector<uint8_t>& p){ return ris().set(p); }
 inline double DutyLeftHint(){ return radio().duty_left(); }
+inline double LoraAirtimeSeconds(size_t bytes){ return max(0.005, bytes / (125000.0/8.0)); }
 
 // PHY stuff shared
 } // namespace HAL
@@ -127,7 +177,7 @@ namespace HAL {
 }
 
 // Energy
-namespace energy { struct Store{ double cap_J, E; Store(double c,double e):cap_J(c),E(e){} bool spend(double J){ if(E>=J){ E-=J; return true;} return false;} void harvest(double W,double dt){ E=min(cap_J, E+W*dt*0.4);} double soc() const { return E/cap_J; } }; }
+namespace energy { struct Store{ double cap_J, E; Store(double c,double e):cap_J(c),E(e){} bool can_spend(double J) const { return isfinite(J) && J>=0.0 && E>=J; } bool spend(double J){ if(can_spend(J)){ E-=J; return true;} return false;} void harvest(double W,double dt){ E=min(cap_J, E+W*dt*0.4);} double soc() const { return E/cap_J; } }; }
 
 // Geometry/World/RIS
 namespace geom { struct Vec2{ double x=0,y=0; }; static inline double dist(const Vec2&a,const Vec2&b){ double dx=a.x-b.x, dy=a.y-b.y; return sqrt(dx*dx+dy*dy); } }

@@ -42,24 +42,24 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** extend the replayable channel benchmark with deadline/contact semantics, established-code baselines and build provenance
+**Primary current task:** consolidate contract, decision, safety and runtime truthfulness before further feature work
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
 | LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | The deterministic harness includes no-FEC, repetition and internal LT-like comparisons, but not an established external codec |
-| Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed decoder state, expiry, exact length, integrity result and authoritative `DecodeReport` | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
+| Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed encoder/decoder state, bounded deterministic runtime repair emission, expiry, exact length, integrity result and authoritative `DecodeReport` | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
 | Adaptive transport policy | Modular prototype | Injected codec and policy interfaces, fixed policies, NERVE/GLAND/MUSCLE adaptive policy, bounded per-generation manager, failure response and gradual relaxation | Threshold, PID and risk-sensitive alternatives are not implemented; current evidence remains synthetic despite covering multiple channel traces |
 | Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; the new benchmark isolates coding policy, not the complete cross-layer optimizer |
 | Transport health | Implemented first slice | Consumes only `DecodeReport`; progress polls update coverage without being counted as delivery failures | Aggregation/confidence and multi-flow recovery semantics still need development |
-| Safety supervision | Partial | Hard envelope enforces expiry, observation freshness, reserve floor, allowed links, RF duty availability and repair-amplification caps; legacy HEALTHY/DEGRADED/CRITICAL monitor remains | The legacy state monitor still needs replacement by a hysteretic, evidence-aware supervisor |
-| Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | Some transitions are unreachable in the default single-flow scenario because inactive classes retain empty health state |
-| Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, duty limiter, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations |
+| Safety supervision | Partial | Hard envelope constrains expiry, freshness, post-action reserve, allowed links, simulated RF airtime, repair amplification and critical protection; the legacy monitor distinguishes `NO_EVIDENCE` | The legacy monitor still lacks hysteresis and calibrated severity thresholds |
+| Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | The default single-flow scenario provides limited transition evidence |
+| Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade | `FIELD_BUILD` currently still uses stubbed device operations |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
-| Telemetry and replay | Implemented prototype | JSONL engine telemetry, canonical safety-decision replay, and checksum-chained channel traces shared across benchmark policies | Channel replay covers delivered/lost transmission slots, not contact topology, generation arrivals, energy evolution or the complete simulator time line |
+| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V2 decision traces with actual repair/attempt/HAL/delivery execution counts, and checksum-chained benchmark channel traces | Replay verifies envelope decisions and execution invariants but does not reproduce HAL/channel physics or the complete simulator time line |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest | Contract parsing, deterministic codec behaviour, concurrent/interleaved generations, modular injection, expiry, malformed input, integrity, exact length, bounded state, safety replay, channel-trace integrity and benchmark determinism | Property fuzzing, hosted CI and cross-platform runs are still missing |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty refusal, critical scheduling, safety replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, replayable channel traces, Wilson confidence intervals, per-trial records and safety-decision replay | Build/commit provenance and complete simulator event replay are not implemented |
 
 ---
@@ -84,6 +84,17 @@ This is a real encoder/decoder experiment. It is intentionally described as **LT
 
 Each spawn produces an immutable `GenerationDescriptor` containing codec identity/version, generation and token IDs, exact payload length, symbol size/count, segment requirements, coding seeds/overhead, creation/expiry, and research integrity fingerprints. Decoder state is stored per generation ID in a bounded store, so multiple generations can be active and integrated out of order.
 
+The current contract surface is classified explicitly in `transport_contract_semantic_audit`:
+
+| Classification | Fields |
+|---|---|
+| Enforced | version, global deadline, duty fraction, allowed links, RIS tile count, minimum source reserve, observation freshness, maximum repair amplification, minimum critical overhead, generation/source limits, integrity requirement, experiment seed, segment ranges and segment importance |
+| Policy input | global reliability, selector choice, generation importance |
+| Metadata-only | per-segment deadline and target reliability; they are recorded but do not independently expire or guarantee a segment |
+| Unsupported | payload-semantic interpretation; Aurora transports opaque bytes |
+
+“Policy input” does not mean an achieved SLA. In particular, global reliability selects protection behaviour but is not a measured guarantee.
+
 ### 3. Adaptive protection with memory
 
 Per flow class and priority, the organism tracks:
@@ -93,7 +104,7 @@ Per flow class and priority, the organism tracks:
 - average coverage;
 - success and failure counts;
 - good and bad streaks;
-- temporary panic state;
+- temporary panic state consumed by exactly the next configured number of generated generations;
 - a configurable genotype policy.
 
 Failures can increase future redundancy rapidly, while sustained successful operation can reduce it gradually toward the baseline.
@@ -120,7 +131,7 @@ Aurora-X includes experimental layers for:
 - SNR-based or UCB-based physical-link selection;
 - telemetry-driven feedback.
 
-The main simulator now applies the optimizer through a hard `SafetyEnvelope`, transmits the organism's spawned packets, and feeds the same authoritative `DecodeReport` to delivery and transport health. The older three-state safety monitor remains as a supervisory prototype and is not presented as a complete safety system.
+The main simulator now applies the optimizer through a hard `SafetyEnvelope`, transmits the organism's spawned packets, and feeds the same authoritative `DecodeReport` to delivery and transport health. The older safety monitor remains a supervisory prototype. It now reports `NO_EVIDENCE` until active-flow observations exist and does not average inactive classes as healthy samples, but it is not presented as a complete hysteretic safety system.
 
 ### 6. Security and provenance experiments
 
@@ -150,7 +161,9 @@ TransportPolicy + GenerationCodec
    ↓
 GenerationManager::spawn() → GenerationDescriptor
    ↓
-Channel / nodes / custody
+SafetyEnvelope → deterministic repair emission → exact recorded execution
+   ↓
+HAL acceptance → simulated channel → receiver
    ↓
 GenerationManager::integrate()
    ↓
@@ -158,10 +171,10 @@ authoritative DecodeReport
    ↓
 FlowHealth → Optimizer → SafetyEnvelope
    ↓
-DecisionReplayLog + bounded policy feedback
+DecisionReplayLog V2 + bounded policy feedback
 ```
 
-The same report determines delivery, coverage/rank, critical completion, integrity outcome, and health feedback. The former monolithic delivery decoder and parallel organism health decoder were removed from the active simulator path.
+The same report determines delivery, coverage/rank, critical completion, integrity outcome, and health feedback. A decision trace is saved only after runtime execution counts have been attached and checked against the constrained decision. The former monolithic delivery decoder and parallel organism health decoder were removed from the active simulator path.
 
 The current boundary is intentionally narrow:
 
@@ -289,6 +302,8 @@ Record and independently replay safety decisions:
 ./build/bin/aurora_replay decision-trace.log
 ```
 
+The V2 replay recomputes each `SafetyEnvelope` decision and validates that the recorded link, critical-only scheduling, repair emission and attempt counts match execution. HAL acceptance and channel delivery counts are retained as observed outcomes, not recomputed physical evidence.
+
 Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
 
 ```bash
@@ -305,7 +320,7 @@ Generate and replay a burst-loss campaign while retaining its raw trials:
 ./build/bin/aurora_benchmark --trace-in burst.trace
 ```
 
-Available synthetic scenarios are `iid`, `burst` (Gilbert–Elliott), `outage`, `drift`, and `shock`. Every policy consumes the same delivered/lost result for a given transmission slot. The trace contains canonical scenario parameters, seed, exact outcomes, a checksum chain and an end marker. Summary CSV includes Wilson 95% intervals; the optional run CSV retains successes and failures per baseline/trial.
+Available synthetic scenarios are `iid`, `burst` (Gilbert–Elliott), `outage`, `drift`, and `shock`. Every policy consumes the same delivered/lost result for a given transmission slot. The trace contains canonical scenario parameters, seed, exact outcomes, a checksum chain and an end marker. Summary CSV includes Wilson 95% intervals; the optional run CSV retains successes and failures per baseline/trial. The biological policy updates protection between generations/trials, so a shock trace is not evidence of intra-generation adaptation.
 
 These outputs are simulation evidence. Repeated generation or replay of the same trace is byte-for-byte deterministic.
 
@@ -375,7 +390,7 @@ The current baseline harness compares, under identical seeds and constraints:
 - class-aware fixed overhead;
 - adaptive Aurora policy;
 
-The harness now supports IID loss, Gilbert–Elliott bursts, scheduled outages, slow drift and shock/recovery traces, per-trial retention, Wilson confidence intervals, goodput, transmitted-byte cost, innovative-symbol ratio and overhead-direction changes.
+The harness now supports IID loss, Gilbert–Elliott bursts, scheduled outages, slow drift and shock/recovery traces, per-trial retention, Wilson confidence intervals, goodput, transmitted-byte cost, innovative-symbol ratio and overhead-direction changes. Innovative-symbol ratio is reported only for coded policies; overhead-direction changes only for the adaptive policy; and cost per delivered byte is `N/A` when no payload is delivered.
 
 An established block or fountain codec, asymmetric/contact/deadline scenarios, build provenance and calibrated resource/energy costs remain required before comparative claims can be made.
 

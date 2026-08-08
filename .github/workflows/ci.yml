@@ -1,0 +1,30 @@
+name: dependency-light-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure dependency-light profile
+        run: >-
+          cmake -S . -B build
+          -DBUILD_NET_TOOLS=OFF
+          -DUSE_SODIUM=OFF
+          -DUSE_RAPTORQ=OFF
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure

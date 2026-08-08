@@ -267,11 +267,25 @@ int main(int argc, char* argv[]) {
                       << result.critical_delivery_rate << ','
                       << result.critical_delivery_ci95_low << ','
                       << result.critical_delivery_ci95_high << ','
-                      << result.goodput << ','
-                      << result.transmitted_bytes_per_delivered_byte << ','
-                      << result.innovative_symbol_ratio << ','
-                      << result.mean_effective_overhead << ','
-                      << result.overhead_direction_changes << ','
+                      << result.goodput << ',';
+            if (result.transmitted_bytes_per_delivered_byte) {
+                std::cout << *result.transmitted_bytes_per_delivered_byte;
+            } else {
+                std::cout << "N/A";
+            }
+            std::cout << ',';
+            if (result.innovative_symbol_ratio) {
+                std::cout << *result.innovative_symbol_ratio;
+            } else {
+                std::cout << "N/A";
+            }
+            std::cout << ',' << result.mean_effective_overhead << ',';
+            if (result.overhead_direction_changes) {
+                std::cout << *result.overhead_direction_changes;
+            } else {
+                std::cout << "N/A";
+            }
+            std::cout << ','
                       << result.transmitted_bytes << ','
                       << result.received_bytes << '\n';
         }

@@ -13,7 +13,9 @@ All notable changes to Aurora-X will be documented in this file.
 - Canonical, checksum-chained channel-trace corpora for IID, Gilbert–Elliott burst, scheduled-outage, slow-drift and shock/recovery scenarios, including exact trace replay and truncation/corruption rejection.
 - Per-trial benchmark retention, trace/configuration fingerprints, Wilson 95% delivery intervals, transmitted-byte cost, innovative-symbol ratio and overhead-direction-change metrics.
 - Injectable `GenerationCodec`, `TransportPolicy` and `GenerationManager` boundaries with fixed and biological policy implementations.
-- CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, delayed completion, exact lengths, empty/tiny payloads, expiry, malformed metadata, integrity failure, bounded state, health consistency, and safety constraints.
+- Generation-scoped deterministic runtime repair emission with segment-aware critical scheduling and immutable descriptors.
+- Dependency-light GitHub Actions build and CTest jobs for Linux and Windows.
+- CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
 
 ### Changed
 - Routed the dependency-light simulator through `AlienFountainOrganism::spawn()` and `integrate()` exclusively; delivery and health now consume the same report.
@@ -21,12 +23,23 @@ All notable changes to Aurora-X will be documented in this file.
 - Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
 - Made simulation and coding randomness reproducible from the contract seed.
 - Added `--decision-trace <path>` to the main simulator.
+- Upgraded decision provenance to V2 with actual repair, attempt, HAL-acceptance and delivery counts; inconsistent execution traces are rejected.
+- Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
+- Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.
 - MinGW executables now link the GCC runtime statically to avoid accidental loading of an ABI-incompatible `libstdc++-6.dll` from unrelated Windows applications on `PATH`.
 
 ### Removed
 - Removed the active simulator's incompatible parallel delivery decoder and the nonexistent `test_podm.cpp` CMake target.
 - Removed transport-policy console logging from the core adaptive component; policy state remains queryable without coupling the reusable control path to simulator output.
+
+### Fixed
+- Made biological panic apply to exactly the next configured number of generated generations instead of lasting until that many successful deliveries.
+- Corrected rolling channel windows to evict the oldest observation rather than the newest.
+- Prevented receiver delivery when energy, simulation duty, LBT/HAL or the simulated channel rejects a transmission.
+- Made the safety envelope cap known action energy, RF airtime and remaining repair budget before authorization.
+- Stopped inactive flow classes from diluting active failures in the legacy safety monitor; insufficient active evidence is now explicit.
+- Normalized per-segment rounding so initial and runtime emission cannot exceed the global repair-amplification limit.
 
 ### Added
 - **FASE 3b**: Adaptive weight loss mechanism based on success streaks

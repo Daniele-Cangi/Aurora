@@ -12,6 +12,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -60,7 +61,7 @@ struct BenchmarkTrialResult {
     std::uint32_t transmitted_symbols = 0;
     std::uint32_t received_symbols = 0;
     std::uint32_t source_symbols_recovered = 0;
-    std::uint32_t innovative_symbols = 0;
+    std::optional<std::uint32_t> innovative_symbols;
     std::uint32_t required_source_symbols = 0;
     double effective_overhead = 0.0;
     transport::DecodeStatus final_status = transport::DecodeStatus::NO_PROGRESS;
@@ -79,7 +80,7 @@ struct BenchmarkResult {
     std::uint64_t useful_critical_bytes = 0;
     std::uint64_t transmitted_symbols = 0;
     std::uint64_t received_symbols = 0;
-    std::uint64_t innovative_symbols = 0;
+    std::optional<std::uint64_t> innovative_symbols;
     double delivery_rate = 0.0;
     double delivery_ci95_low = 0.0;
     double delivery_ci95_high = 0.0;
@@ -87,10 +88,10 @@ struct BenchmarkResult {
     double critical_delivery_ci95_low = 0.0;
     double critical_delivery_ci95_high = 0.0;
     double goodput = 0.0;
-    double transmitted_bytes_per_delivered_byte = 0.0;
-    double innovative_symbol_ratio = 0.0;
+    std::optional<double> transmitted_bytes_per_delivered_byte;
+    std::optional<double> innovative_symbol_ratio;
     double mean_effective_overhead = 0.0;
-    std::size_t overhead_direction_changes = 0;
+    std::optional<std::size_t> overhead_direction_changes;
 
     bool operator==(const BenchmarkResult&) const = default;
 };
@@ -436,7 +437,10 @@ private:
         found->received_bytes += trial.received_bytes;
         found->transmitted_symbols += trial.transmitted_symbols;
         found->received_symbols += trial.received_symbols;
-        found->innovative_symbols += trial.innovative_symbols;
+        if (trial.innovative_symbols.has_value()) {
+            found->innovative_symbols = found->innovative_symbols.value_or(0) +
+                                        *trial.innovative_symbols;
+        }
         report.trial_results.push_back(std::move(trial));
     }
 
@@ -473,14 +477,16 @@ private:
             ? 0.0
             : static_cast<double>(result.useful_payload_bytes) /
               static_cast<double>(result.transmitted_bytes);
-        result.transmitted_bytes_per_delivered_byte = result.useful_payload_bytes == 0
-            ? 0.0
-            : static_cast<double>(result.transmitted_bytes) /
-              static_cast<double>(result.useful_payload_bytes);
-        result.innovative_symbol_ratio = result.received_symbols == 0
-            ? 0.0
-            : static_cast<double>(result.innovative_symbols) /
-              static_cast<double>(result.received_symbols);
+        if (result.useful_payload_bytes > 0) {
+            result.transmitted_bytes_per_delivered_byte =
+                static_cast<double>(result.transmitted_bytes) /
+                static_cast<double>(result.useful_payload_bytes);
+        }
+        if (result.innovative_symbols.has_value() && result.received_symbols > 0) {
+            result.innovative_symbol_ratio =
+                static_cast<double>(*result.innovative_symbols) /
+                static_cast<double>(result.received_symbols);
+        }
 
         double overhead_sum = 0.0;
         double previous_overhead = 0.0;
@@ -493,7 +499,8 @@ private:
                 const auto delta = trial.effective_overhead - previous_overhead;
                 const auto direction = delta > 0.0 ? 1 : delta < 0.0 ? -1 : 0;
                 if (direction != 0 && previous_direction != 0 && direction != previous_direction) {
-                    ++result.overhead_direction_changes;
+                    result.overhead_direction_changes =
+                        result.overhead_direction_changes.value_or(0) + 1;
                 }
                 if (direction != 0) previous_direction = direction;
             }
@@ -502,6 +509,10 @@ private:
         }
         result.mean_effective_overhead = overhead_sum /
                                          static_cast<double>(result.trials);
+        if (result.baseline == BaselineKind::ADAPTIVE_AURORA &&
+            !result.overhead_direction_changes.has_value()) {
+            result.overhead_direction_changes = 0;
+        }
     }
 };
 
@@ -530,7 +541,9 @@ inline void save_benchmark_trial_csv(const BenchmarkReport& report,
                << trial.transmitted_symbols << ','
                << trial.received_symbols << ','
                << trial.source_symbols_recovered << ','
-               << trial.innovative_symbols << ','
+               << (trial.innovative_symbols.has_value()
+                       ? std::to_string(*trial.innovative_symbols)
+                       : std::string("N/A")) << ','
                << trial.required_source_symbols << ','
                << trial.effective_overhead << ','
                << static_cast<unsigned>(trial.final_status) << '\n';

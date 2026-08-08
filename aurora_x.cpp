@@ -73,6 +73,7 @@ static std::string flowclass_to_string(aurora::FlowClass cls) {
 
 static std::string safetystate_to_string(aurora::safety::SafetyState state) {
   switch(state) {
+    case aurora::safety::SafetyState::NO_EVIDENCE: return "NO_EVIDENCE";
     case aurora::safety::SafetyState::HEALTHY: return "HEALTHY";
     case aurora::safety::SafetyState::DEGRADED: return "DEGRADED";
     case aurora::safety::SafetyState::CRITICAL: return "CRITICAL";
@@ -117,6 +118,9 @@ struct TelemetrySample {
   int nerve_bad_streak = 0;
   int gland_bad_streak = 0;
   int muscle_bad_streak = 0;
+  bool nerve_has_evidence = false;
+  bool gland_has_evidence = false;
+  bool muscle_has_evidence = false;
 };
 
 class TelemetrySink {
@@ -223,43 +227,85 @@ static Token bytes2tok(const vector<uint8_t>& v){
 
 // ---------- Network state ----------
 struct Node {
+  enum class SendRefusal { NONE, EMPTY_BUFFER, NO_ELIGIBLE_PACKET, ENERGY, DUTY, HAL };
+  struct SendResult {
+    bool attempted = false;
+    bool transmitted = false;
+    bool delivered = false;
+    fec::SegmentKind segment_kind = fec::SegmentKind::BULK;
+    SendRefusal refusal = SendRefusal::NONE;
+  };
+  using HalTransmit = function<bool(phy::Mode, const fec::Pkt&)>;
+
   string id; geom::Vec2 pos;
   energy::Store bat{10.0, 6.0};
   vector<fec::Pkt> buf, inbox; unordered_set<string> seen;
   double harvest_W = 0.2;
   size_t tx_idx = 0; // NEW: rotating cursor to avoid resending same packet
+  HAL::SimulationDutyLimiter simulated_rf_duty;
 
   static string packet_key(const fec::Pkt& packet) {
     return packet.generation_id + ":" + to_string(packet.segment_id) + ":" + to_string(packet.fp.seed);
   }
   void tick(double dt){ bat.harvest(harvest_W, dt); }
   void ingest(){ for(auto&p: inbox) { auto key=packet_key(p); if(!seen.count(key)){ buf.push_back(p); seen.insert(move(key));} } inbox.clear(); }
-  bool send_one(world::World& W, Node& rx, phy::Mode m){
-    if(buf.empty()) return false;
+  void configure_simulation_duty(double duty_frac){ simulated_rf_duty.configure(duty_frac); }
+  double duty_remaining_fraction(uint64_t now_ms){ return simulated_rf_duty.remaining_fraction(now_ms); }
+  double duty_remaining_seconds(uint64_t now_ms){ return simulated_rf_duty.remaining_s(now_ms); }
+
+  SendResult send_one(world::World& W, Node& rx, phy::Mode m,
+                      uint64_t simulated_now_ms=0, bool critical_only=false,
+                      const HalTransmit& injected_hal={}){
+    SendResult result;
+    if(buf.empty()) { result.refusal=SendRefusal::EMPTY_BUFFER; return result; }
     if(tx_idx >= buf.size()) tx_idx = 0; // ring safety
-    auto pkt = buf[tx_idx];              // rotate across distinct packets
-    tx_idx = (tx_idx + 1) % max<size_t>(1, buf.size());
+    size_t selected = buf.size();
+    for(size_t checked=0; checked<buf.size(); ++checked){
+      const size_t candidate=(tx_idx+checked)%buf.size();
+      if(!critical_only || buf[candidate].kind==fec::SegmentKind::CRITICAL){ selected=candidate; break; }
+    }
+    if(selected==buf.size()){ result.refusal=SendRefusal::NO_ELIGIBLE_PACKET; return result; }
+    auto pkt = buf[selected];
+    tx_idx = (selected + 1) % buf.size();
+    result.attempted = true;
+    result.segment_kind = pkt.kind;
 
     size_t B = pkt.fp.data.size()+8;
-    double J = phy::Jpkt(m,B); if(!bat.spend(J)) return false;
+    double J = phy::Jpkt(m,B);
+    if(!bat.can_spend(J)){ result.refusal=SendRefusal::ENERGY; return result; }
+    const double rf_airtime = HAL::LoraAirtimeSeconds(pkt.fp.data.size());
+    if(m==phy::Mode::RF &&
+       !simulated_rf_duty.can_allow(simulated_now_ms, rf_airtime)){
+      result.refusal=SendRefusal::DUTY;
+      return result;
+    }
+
+    const auto default_hal = [&](phy::Mode mode, const fec::Pkt& packet){
+      if(mode==phy::Mode::RF){
+        return HAL::LORA_TX_SIMULATION(packet.fp.data.data(), packet.fp.data.size());
+      }
+      if(mode==phy::Mode::IR){
+        return HAL::IR_TX(packet.fp.data.data(), packet.fp.data.size(), 3500);
+      }
+      vector<uint8_t> bits(packet.fp.data.size()*8, 1);
+      return HAL::BS_MODULATE(bits.data(), bits.size(), 450);
+    };
+    const bool hal_ok = injected_hal ? injected_hal(m, pkt) : default_hal(m, pkt);
+    if(!hal_ok){ result.refusal=SendRefusal::HAL; return result; }
+
+    if(!bat.spend(J)) { result.refusal=SendRefusal::ENERGY; return result; }
+    if(m==phy::Mode::RF &&
+       !simulated_rf_duty.consume(simulated_now_ms, rf_airtime)){
+      result.refusal=SendRefusal::DUTY;
+      return result;
+    }
+    result.transmitted = true;
     double g  = W.multibounce_best(pos, rx.pos, 2);
     double SNR= phy::snr_db(g,m,W.illum);
     double coding_gain = (m==phy::Mode::RF? 8.0 : m==phy::Mode::IR? 3.0 : 4.0);
-    bool ok = channel::pass_realistic(SNR, m, coding_gain, /*rician*/ false);
-    if(ok && !rx.seen.count(packet_key(pkt))) rx.inbox.push_back(pkt);
-
-    // size shaping safe - padding solo nel frame PHY (non parte del FEC/Merkle)
-    if(m==phy::Mode::RF){
-      int pad = (int)(util::rng.uni()*12);
-      vector<uint8_t> frame = pkt.fp.data; frame.resize(frame.size()+pad, (uint8_t)(0xA5 ^ pad));
-      HAL::LORA_TX(frame.data(), frame.size());
-    } else if(m==phy::Mode::IR){
-      HAL::IR_TX(pkt.fp.data.data(), pkt.fp.data.size(), 3500 + (int)(util::rng.uni()*1200));
-    } else {
-      vector<uint8_t> bits( pkt.fp.data.size()*8, 1 );
-      HAL::BS_MODULATE(bits.data(), bits.size(), 450 + (int)(util::rng.uni()*200));
-    }
-    return ok;
+    result.delivered = channel::pass_realistic(SNR, m, coding_gain, /*rician*/ false);
+    if(result.delivered && !rx.seen.count(packet_key(pkt))) rx.inbox.push_back(pkt);
+    return result;
   }
 };
 
@@ -275,7 +321,6 @@ struct Engine {
   Net net; Intention I; string token_id, bundle_id, generation_id; int K;
   size_t T=128;  // mantenuto 128 per FEC piu rapido
   size_t payload_size;
-  uint32_t seqc=1;
   aurora::transport::GenerationDescriptor generation_descriptor;
   aurora::transport::DecodeReport last_decode_report;
   TelemetrySink telemetry;
@@ -295,7 +340,7 @@ struct Engine {
   
   // T1: Flag per stream interattivo e stato corrente
   bool interactive_stream_ = false;
-  aurora::safety::SafetyState current_safety_state_ = aurora::safety::SafetyState::HEALTHY;
+  aurora::safety::SafetyState current_safety_state_ = aurora::safety::SafetyState::NO_EVIDENCE;
   cl::Mode current_mode_ = cl::Mode::NORMAL;
   
   Engine() : safety_monitor(aurora::safety::SafetyConfig::default_config()) {
@@ -310,7 +355,9 @@ struct Engine {
     for(int i=0;i<I.ris_tiles; ++i){ double u=(i+1.0)/(I.ris_tiles+1.0); net.W.ris.push_back({{0.12+0.78*u, 0.12+0.78*u}, (uint8_t)(i%4)}); }
     HAL::RADIO_INIT();
     HAL::LORA_CFG(phy::EU868_CH[0], 125, 12, 5, 12);
-    net.add("SRC",{0.06,0.08}); net.add("DST",{0.94,0.92});
+    Node& source = net.add("SRC",{0.06,0.08});
+    source.configure_simulation_duty(I.duty_frac);
+    net.add("DST",{0.94,0.92});
 
     const uint64_t deterministic_epoch_s = 1'700'000'000ULL + (I.experiment_seed % 1'000'000ULL);
     Token t = Token::make("ACCESS:TEMP_KEY=abc123;ZONE=42;TTL=24h;CLASS=NORM;", 24*3600,
@@ -323,7 +370,6 @@ struct Engine {
     generation_id = generation_descriptor.generation_id;
     K = spawned.K;
     for (auto& packet : spawned.packets) {
-      packet.seq = seqc++;
       net.get("SRC")->buf.push_back(std::move(packet));
     }
     cout << "[GENERATION] id=" << generation_id
@@ -333,6 +379,114 @@ struct Engine {
   }
 
   static double entropy_residual(int have, int need){ double e=max(0, need-have)/(double)need; return min(1.0,max(0.0,e)); }
+
+  bool has_critical_segments() const {
+    return any_of(generation_descriptor.segments.begin(), generation_descriptor.segments.end(),
+      [](const auto& segment){
+        return segment.importance == aurora::transport::TransportImportance::CRITICAL;
+      });
+  }
+
+  aurora::safety::TransportState transport_state(
+      Node& source, uint64_t simulated_now_ms) const {
+    aurora::safety::TransportState observed;
+    observed.observed_at_ms = simulated_now_ms;
+    observed.now_ms = simulated_now_ms;
+    observed.source_energy_reserve = source.bat.soc();
+    observed.rf_duty_remaining = source.duty_remaining_fraction(simulated_now_ms);
+    observed.source_energy_capacity_j = source.bat.cap_J;
+    const size_t packet_bytes = generation_descriptor.symbol_size + 8;
+    observed.rf_energy_cost_per_attempt_j = phy::Jpkt(phy::Mode::RF, packet_bytes);
+    observed.optical_energy_cost_per_attempt_j = phy::Jpkt(phy::Mode::IR, packet_bytes);
+    observed.backscatter_energy_cost_per_attempt_j =
+      phy::Jpkt(phy::Mode::BACKSCATTER, packet_bytes);
+    observed.rf_duty_remaining_s = source.duty_remaining_seconds(simulated_now_ms);
+    observed.rf_airtime_per_attempt_s =
+      HAL::LoraAirtimeSeconds(generation_descriptor.symbol_size);
+    if (const auto runtime = organism->runtime_state(generation_id)) {
+      observed.emitted_symbols = runtime->emitted_symbols;
+      observed.critical_emitted_symbols = runtime->critical_emitted_symbols;
+    }
+    observed.decoder_rank = last_decode_report.decoder_rank;
+    observed.required_rank = static_cast<uint32_t>(K);
+    return observed;
+  }
+
+  struct ActionExecutionSummary {
+    int attempts = 0;
+    int hal_accepted = 0;
+    int delivered = 0;
+    string mode;
+  };
+
+  ActionExecutionSummary execute_decision(
+      Node& source,
+      Node& destination,
+      telem::ChannelState& channel_state,
+      aurora::safety::TransportDecisionTrace& trace,
+      uint64_t simulated_now_ms,
+      int min_spacing_ms,
+      int jitter_ms,
+      int step,
+      bool debug_steps) {
+    ActionExecutionSummary summary;
+    const auto mode = phy_link(trace.decision.link);
+    summary.mode = mode_to_string(mode);
+
+    if (trace.decision.permitted && trace.decision.repair_symbols > 0) {
+      auto repairs = organism->emit_repairs(
+        generation_id,
+        trace.decision.repair_symbols,
+        trace.decision.critical_only);
+      if (repairs.emitted_symbols != trace.decision.repair_symbols) {
+        throw logic_error("runtime repair emission disagrees with SafetyEnvelope decision");
+      }
+      for (auto& packet : repairs.packets) {
+        source.buf.push_back(std::move(packet));
+      }
+    }
+
+    auto do_sleep = [&](int base_ms, int random_ms){
+      if(base_ms<=0 && random_ms<=0) return;
+      int extra = random_ms>0 ? static_cast<int>(util::rng.uni()*random_ms) : 0;
+      this_thread::sleep_for(std::chrono::milliseconds(base_ms + extra));
+    };
+
+    for(uint32_t i=0; i<trace.decision.transmission_attempts; ++i){
+      const auto sent = source.send_one(
+        net.W, destination, mode, simulated_now_ms, trace.decision.critical_only);
+      if(sent.attempted) ++summary.attempts;
+      if(sent.transmitted) ++summary.hal_accepted;
+      if(sent.delivered) ++summary.delivered;
+      if(trace.decision.critical_only && sent.attempted &&
+         sent.segment_kind != fec::SegmentKind::CRITICAL) {
+        throw logic_error("critical-only decision selected a non-critical packet");
+      }
+      channel_state.push_outcome(mode, sent.delivered);
+      if(debug_steps && step < 3) {
+        const double snr_world = phy::snr_db(
+          net.W.multibounce_best(source.pos, destination.pos, 2), mode, net.W.illum);
+        cout << "[STEP " << step << "] mode=" << summary.mode
+             << " SNR(world)=" << fixed << setprecision(1) << snr_world
+             << " outcome=" << (sent.delivered?"OK":"FAIL") << endl;
+      }
+      do_sleep(min_spacing_ms, jitter_ms);
+    }
+
+    trace.execution.recorded = true;
+    trace.execution.link = trace.decision.link;
+    trace.execution.transmission_attempts = static_cast<uint32_t>(summary.attempts);
+    trace.execution.hal_accepted_attempts = static_cast<uint32_t>(summary.hal_accepted);
+    trace.execution.delivered_attempts = static_cast<uint32_t>(summary.delivered);
+    trace.execution.repair_symbols_emitted = trace.decision.permitted
+      ? trace.decision.repair_symbols : 0;
+    trace.execution.critical_only = trace.decision.critical_only;
+    if (const auto error = trace.execution_error()) {
+      throw logic_error("transport execution trace mismatch: " + *error);
+    }
+    decision_trace_log.record(I, generation_descriptor, trace);
+    return summary;
+  }
   
   // T1: Emette evento JSON health su stdout
   void emit_health_event(int step, const FlowHealth& h, aurora::FlowClass cls) {
@@ -517,9 +671,19 @@ struct Engine {
       // **PATCH**: RIS illumination ramp (attiva presto, rampa 0.10->0.35)
       {
         double on = (eres - 0.10) / 0.25;  // 0.10 -> 0.35
-        if (on < 0.0) on = 0.0; if (on > 1.0) on = 1.0;
+        if (on < 0.0) on = 0.0;
+        if (on > 1.0) on = 1.0;
         net.W.illum = on;
-        if(net.W.illum > 0.0) HAL::CW_ON(0.05); else HAL::CW_OFF();
+#ifdef FIELD_BUILD
+        // FIELD_BUILD keeps the real-time HAL result authoritative. In the
+        // simulator, world illumination is a synthetic environment input and
+        // must not consume the radio's wall-clock duty limiter.
+        if(net.W.illum > 0.0) {
+          if(!HAL::CW_ON(0.05)) net.W.illum = 0.0;
+        } else {
+          HAL::CW_OFF();
+        }
+#endif
       }
 
       const uint64_t simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
@@ -529,7 +693,7 @@ struct Engine {
       cl::NetworkState Sx{};
       Sx.soc_src=S.bat.soc(); Sx.symbols_have=have; Sx.symbols_need=K;
       Sx.deadline_left_s=max(0.0, I.deadline_s-elapsed);
-      Sx.duty_left_rf=HAL::DutyLeftHint();
+      Sx.duty_left_rf=S.duty_remaining_fraction(simulated_now_ms);
 
       double g_probe = net.W.multibounce_best(S.pos, D.pos, 2);
       Sx.chan = chan;
@@ -550,64 +714,26 @@ struct Engine {
       proposed.link = safety_link(dec.mode);
       proposed.transmission_attempts = static_cast<uint32_t>(dec.tries & 0xFF);
       proposed.repair_symbols = static_cast<uint32_t>(dec.overhead & 0x7FFF);
-      proposed.critical_only = Sx.prio == cl::Priority::CRITICAL;
-      aurora::safety::TransportState observed;
-      observed.observed_at_ms = simulated_now_ms;
-      observed.now_ms = simulated_now_ms;
-      observed.source_energy_reserve = S.bat.soc();
-      observed.rf_duty_remaining = Sx.duty_left_rf;
-      observed.decoder_rank = last_decode_report.decoder_rank;
-      observed.required_rank = static_cast<uint32_t>(K);
+      proposed.critical_only =
+        Sx.prio == cl::Priority::CRITICAL && has_critical_segments();
+      if (proposed.critical_only) {
+        proposed.transmission_attempts = max(2U, proposed.transmission_attempts);
+      }
+      const auto observed = transport_state(S, simulated_now_ms);
       auto decision_trace = safety_envelope.constrain(I, generation_descriptor, observed, proposed);
-      decision_trace_log.record(I, generation_descriptor, decision_trace);
       dec.mode = phy_link(decision_trace.decision.link);
       double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
       HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
 
-      // invio con jitter/spacing + feedback
-      int tries_real = decision_trace.decision.permitted
-        ? static_cast<int>(decision_trace.decision.transmission_attempts)
-        : 0;
-      if (decision_trace.decision.permitted && Sx.prio == cl::Priority::CRITICAL) {
-        tries_real = std::max(tries_real, 2);
-      }
       uint8_t covert_seq = (dec.tries >> 8) & 0xFF;
       bool emergency = (dec.overhead & 0x8000) != 0;
-      int overhead_real = static_cast<int>(decision_trace.decision.repair_symbols);
-
-      auto do_sleep = [&](int base_ms, int jitter_ms){
-        if(base_ms<=0 && jitter_ms<=0) return;
-        int extra = (jitter_ms>0 ? (int)(util::rng.uni()*jitter_ms) : 0);
-        this_thread::sleep_for(std::chrono::milliseconds(base_ms + extra));
-      };
-
-      int ok_cnt=0; string mode_chosen;
-      for(int i=0;i<tries_real; ++i){
-        // invia sempre, decisione canale gia realistica in send_one()
-        bool ok = S.send_one(net.W, D, dec.mode);
-        if(i==0) mode_chosen = mode_to_string(dec.mode);
-
-        // **LOG** SNR di mondo (coerente) solo per debug
-        double snr_world = phy::snr_db(net.W.multibounce_best(S.pos, D.pos, 2), dec.mode, net.W.illum);
-        if(step < 3) {
-          std::cout << "[STEP " << step << "] mode=" << mode_chosen
-                    << " SNR(world)=" << fixed << setprecision(1) << snr_world
-                    << " outcome=" << (ok?"OK":"FAIL") << std::endl;
-        }
-
-        chan.push_outcome(dec.mode, ok); ok_cnt += (ok?1:0);
-        do_sleep(dec.min_spacing_ms, dec.jitter_ms);
-      }
+      const auto executed = execute_decision(
+        S, D, chan, decision_trace, simulated_now_ms,
+        dec.min_spacing_ms, dec.jitter_ms, step, true);
+      const int tries_real = executed.attempts;
+      const int ok_cnt = executed.delivered;
+      const string mode_chosen = executed.mode;
       if(step < 3) std::cout << "[ADAPTIVE] step=" << step << " mode_chosen=" << mode_chosen << std::endl;
-
-      if(decision_trace.decision.permitted && S.bat.soc()<0.25 && I.allow_backscatter){
-        int extra = std::min(8, std::max(2, overhead_real/3));
-        for(int k=0;k<extra; ++k){
-          bool ok = S.send_one(net.W, D, phy::Mode::BACKSCATTER);
-          chan.push_outcome(phy::Mode::BACKSCATTER, ok);
-          do_sleep(dec.min_spacing_ms+5, dec.jitter_ms+10);
-        }
-      }
 
       double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
       if (tries_real > 0) opt.feedback(dec.mode, reward);
@@ -668,6 +794,12 @@ struct Engine {
       sample.nerve_bad_streak = nerve_health_.recent_bad_streak;
       sample.gland_bad_streak = gland_health_.recent_bad_streak;
       sample.muscle_bad_streak = muscle_health_.recent_bad_streak;
+      sample.nerve_has_evidence =
+        nerve_health_.success_count + nerve_health_.fail_count > 0;
+      sample.gland_has_evidence =
+        gland_health_.success_count + gland_health_.fail_count > 0;
+      sample.muscle_has_evidence =
+        muscle_health_.success_count + muscle_health_.fail_count > 0;
       
       // FASE 4: Converti TelemetrySample locale a aurora::safety::TelemetrySample
       aurora::safety::TelemetrySample safety_sample;
@@ -693,6 +825,9 @@ struct Engine {
       safety_sample.nerve_bad_streak = sample.nerve_bad_streak;
       safety_sample.gland_bad_streak = sample.gland_bad_streak;
       safety_sample.muscle_bad_streak = sample.muscle_bad_streak;
+      safety_sample.nerve_has_evidence = sample.nerve_has_evidence;
+      safety_sample.gland_has_evidence = sample.gland_has_evidence;
+      safety_sample.muscle_has_evidence = sample.muscle_has_evidence;
       
       // FASE 4: Aggiorna SafetyMonitor con sample esteso
       safety_monitor.observe(safety_sample);
@@ -832,9 +967,16 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     // RIS illumination ramp
     {
       double on = (eres - 0.10) / 0.25;
-      if (on < 0.0) on = 0.0; if (on > 1.0) on = 1.0;
+      if (on < 0.0) on = 0.0;
+      if (on > 1.0) on = 1.0;
       engine.net.W.illum = on;
-      if(engine.net.W.illum > 0.0) HAL::CW_ON(0.05); else HAL::CW_OFF();
+#ifdef FIELD_BUILD
+      if(engine.net.W.illum > 0.0) {
+        if(!HAL::CW_ON(0.05)) engine.net.W.illum = 0.0;
+      } else {
+        HAL::CW_OFF();
+      }
+#endif
     }
 
     const uint64_t simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
@@ -844,7 +986,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     cl::NetworkState Sx{};
     Sx.soc_src=S.bat.soc(); Sx.symbols_have=have; Sx.symbols_need=engine.K;
     Sx.deadline_left_s=max(0.0, engine.I.deadline_s-elapsed);
-    Sx.duty_left_rf=HAL::DutyLeftHint();
+    Sx.duty_left_rf=S.duty_remaining_fraction(simulated_now_ms);
 
     double g_probe = engine.net.W.multibounce_best(S.pos, D.pos, 2);
     Sx.chan = chan;
@@ -864,54 +1006,26 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     proposed.link = safety_link(dec.mode);
     proposed.transmission_attempts = static_cast<uint32_t>(dec.tries & 0xFF);
     proposed.repair_symbols = static_cast<uint32_t>(dec.overhead & 0x7FFF);
-    proposed.critical_only = Sx.prio == cl::Priority::CRITICAL;
-    aurora::safety::TransportState observed;
-    observed.observed_at_ms = simulated_now_ms;
-    observed.now_ms = simulated_now_ms;
-    observed.source_energy_reserve = S.bat.soc();
-    observed.rf_duty_remaining = Sx.duty_left_rf;
-    observed.decoder_rank = engine.last_decode_report.decoder_rank;
-    observed.required_rank = static_cast<uint32_t>(engine.K);
+    proposed.critical_only =
+      Sx.prio == cl::Priority::CRITICAL && engine.has_critical_segments();
+    if (proposed.critical_only) {
+      proposed.transmission_attempts = max(2U, proposed.transmission_attempts);
+    }
+    const auto observed = engine.transport_state(S, simulated_now_ms);
     auto decision_trace = engine.safety_envelope.constrain(
       engine.I, engine.generation_descriptor, observed, proposed);
-    engine.decision_trace_log.record(
-      engine.I, engine.generation_descriptor, decision_trace);
     dec.mode = phy_link(decision_trace.decision.link);
     double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
     HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
 
-    int tries_real = decision_trace.decision.permitted
-      ? static_cast<int>(decision_trace.decision.transmission_attempts)
-      : 0;
-    if (decision_trace.decision.permitted && Sx.prio == cl::Priority::CRITICAL) {
-      tries_real = std::max(tries_real, 2);
-    }
     uint8_t covert_seq = (dec.tries >> 8) & 0xFF;
     bool emergency = (dec.overhead & 0x8000) != 0;
-    int overhead_real = static_cast<int>(decision_trace.decision.repair_symbols);
-
-    auto do_sleep = [&](int base_ms, int jitter_ms){
-      if(base_ms<=0 && jitter_ms<=0) return;
-      int extra = (jitter_ms>0 ? (int)(util::rng.uni()*jitter_ms) : 0);
-      this_thread::sleep_for(std::chrono::milliseconds(base_ms + extra));
-    };
-
-    int ok_cnt=0; string mode_chosen;
-    for(int i=0;i<tries_real; ++i){
-      bool ok = S.send_one(engine.net.W, D, dec.mode);
-      if(i==0) mode_chosen = mode_to_string(dec.mode);
-      chan.push_outcome(dec.mode, ok); ok_cnt += (ok?1:0);
-      do_sleep(dec.min_spacing_ms, dec.jitter_ms);
-    }
-
-    if(decision_trace.decision.permitted && S.bat.soc()<0.25 && engine.I.allow_backscatter){
-      int extra = std::min(8, std::max(2, overhead_real/3));
-      for(int k=0;k<extra; ++k){
-        bool ok = S.send_one(engine.net.W, D, phy::Mode::BACKSCATTER);
-        chan.push_outcome(phy::Mode::BACKSCATTER, ok);
-        do_sleep(dec.min_spacing_ms+5, dec.jitter_ms+10);
-      }
-    }
+    const auto executed = engine.execute_decision(
+      S, D, chan, decision_trace, simulated_now_ms,
+      dec.min_spacing_ms, dec.jitter_ms, step, false);
+    const int tries_real = executed.attempts;
+    const int ok_cnt = executed.delivered;
+    const string mode_chosen = executed.mode;
 
     double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
     if (tries_real > 0) opt.feedback(dec.mode, reward);
@@ -969,6 +1083,12 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     sample.nerve_bad_streak = engine.nerve_health_.recent_bad_streak;
     sample.gland_bad_streak = engine.gland_health_.recent_bad_streak;
     sample.muscle_bad_streak = engine.muscle_health_.recent_bad_streak;
+    sample.nerve_has_evidence =
+      engine.nerve_health_.success_count + engine.nerve_health_.fail_count > 0;
+    sample.gland_has_evidence =
+      engine.gland_health_.success_count + engine.gland_health_.fail_count > 0;
+    sample.muscle_has_evidence =
+      engine.muscle_health_.success_count + engine.muscle_health_.fail_count > 0;
     
     aurora::safety::TelemetrySample safety_sample;
     safety_sample.step = sample.step;
@@ -993,6 +1113,9 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     safety_sample.nerve_bad_streak = sample.nerve_bad_streak;
     safety_sample.gland_bad_streak = sample.gland_bad_streak;
     safety_sample.muscle_bad_streak = sample.muscle_bad_streak;
+    safety_sample.nerve_has_evidence = sample.nerve_has_evidence;
+    safety_sample.gland_has_evidence = sample.gland_has_evidence;
+    safety_sample.muscle_has_evidence = sample.muscle_has_evidence;
     
     engine.safety_monitor.observe(safety_sample);
     

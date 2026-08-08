@@ -35,7 +35,7 @@ struct ReplayVerification {
 // detects accidental corruption and reordering; it is not a cryptographic signature.
 class DecisionReplayLog {
 public:
-    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V1";
+    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V2";
 
     void record(const transport::TransportContract& contract,
                 const transport::GenerationDescriptor& descriptor,
@@ -45,6 +45,9 @@ public:
             trace.generation_id != descriptor.generation_id) {
             throw std::invalid_argument(
                 "decision trace: trace and descriptor generation IDs must match");
+        }
+        if (const auto error = trace.execution_error()) {
+            throw std::invalid_argument("decision trace: " + *error);
         }
         records_.push_back({contract, descriptor, trace});
     }
@@ -151,6 +154,12 @@ public:
                 verification.ok = false;
                 verification.failure_reason =
                     "decision mismatch at record " + std::to_string(index);
+                return verification;
+            }
+            if (const auto error = record.trace.execution_error()) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "execution mismatch at record " + std::to_string(index) + ": " + *error;
                 return verification;
             }
             ++verification.records_verified;
@@ -267,6 +276,36 @@ private:
         return decision;
     }
 
+    static void append_execution(std::ostringstream& output,
+                                 const safety::TransportExecution& execution) {
+        output << '|' << execution.recorded
+               << '|' << static_cast<unsigned>(execution.link)
+               << '|' << execution.transmission_attempts
+               << '|' << execution.hal_accepted_attempts
+               << '|' << execution.delivered_attempts
+               << '|' << execution.repair_symbols_emitted
+               << '|' << execution.critical_only;
+    }
+
+    static safety::TransportExecution parse_execution(
+        const std::vector<std::string>& fields,
+        std::size_t& cursor) {
+        safety::TransportExecution execution;
+        execution.recorded = parse_bool(fields.at(cursor++), "execution-recorded flag");
+        execution.link = parse_link(fields.at(cursor++));
+        execution.transmission_attempts = parse_u32(
+            fields.at(cursor++), "executed transmission attempts");
+        execution.hal_accepted_attempts = parse_u32(
+            fields.at(cursor++), "HAL-accepted attempts");
+        execution.delivered_attempts = parse_u32(
+            fields.at(cursor++), "delivered attempts");
+        execution.repair_symbols_emitted = parse_u32(
+            fields.at(cursor++), "emitted repair symbols");
+        execution.critical_only = parse_bool(
+            fields.at(cursor++), "executed critical-only flag");
+        return execution;
+    }
+
     static std::uint32_t critical_source_count(
         const transport::GenerationDescriptor& descriptor) {
         std::uint32_t count = 0;
@@ -328,10 +367,19 @@ private:
                << '|' << trace.observed.now_ms
                << '|' << hex_u64(double_bits(trace.observed.source_energy_reserve))
                << '|' << hex_u64(double_bits(trace.observed.rf_duty_remaining))
+               << '|' << hex_u64(double_bits(trace.observed.source_energy_capacity_j))
+               << '|' << hex_u64(double_bits(trace.observed.rf_energy_cost_per_attempt_j))
+               << '|' << hex_u64(double_bits(trace.observed.optical_energy_cost_per_attempt_j))
+               << '|' << hex_u64(double_bits(trace.observed.backscatter_energy_cost_per_attempt_j))
+               << '|' << hex_u64(double_bits(trace.observed.rf_duty_remaining_s))
+               << '|' << hex_u64(double_bits(trace.observed.rf_airtime_per_attempt_s))
+               << '|' << trace.observed.emitted_symbols
+               << '|' << trace.observed.critical_emitted_symbols
                << '|' << trace.observed.decoder_rank
                << '|' << trace.observed.required_rank;
         append_decision(output, trace.proposed);
         append_decision(output, trace.decision);
+        append_execution(output, trace.execution);
         output << '|' << trace.constraints_applied.size()
                << '|' << encode_constraints(trace.constraints_applied);
         return output.str();
@@ -370,7 +418,7 @@ private:
                                                std::size_t expected_index,
                                                std::uint64_t expected_previous_checksum) {
         const auto fields = split_fields(payload);
-        if (fields.size() != 32 || fields.front() != "R") {
+        if (fields.size() != 47 || fields.front() != "R") {
             throw std::invalid_argument("decision trace: malformed record field count");
         }
         std::size_t cursor = 1;
@@ -417,10 +465,27 @@ private:
             parse_u64(fields.at(cursor++), 16, "source energy reserve"));
         trace.observed.rf_duty_remaining = bits_double(
             parse_u64(fields.at(cursor++), 16, "RF duty remaining"));
+        trace.observed.source_energy_capacity_j = bits_double(
+            parse_u64(fields.at(cursor++), 16, "source energy capacity"));
+        trace.observed.rf_energy_cost_per_attempt_j = bits_double(
+            parse_u64(fields.at(cursor++), 16, "RF energy cost"));
+        trace.observed.optical_energy_cost_per_attempt_j = bits_double(
+            parse_u64(fields.at(cursor++), 16, "optical energy cost"));
+        trace.observed.backscatter_energy_cost_per_attempt_j = bits_double(
+            parse_u64(fields.at(cursor++), 16, "backscatter energy cost"));
+        trace.observed.rf_duty_remaining_s = bits_double(
+            parse_u64(fields.at(cursor++), 16, "RF duty seconds remaining"));
+        trace.observed.rf_airtime_per_attempt_s = bits_double(
+            parse_u64(fields.at(cursor++), 16, "RF airtime cost"));
+        trace.observed.emitted_symbols = parse_u64(
+            fields.at(cursor++), 10, "emitted symbols");
+        trace.observed.critical_emitted_symbols = parse_u64(
+            fields.at(cursor++), 10, "critical emitted symbols");
         trace.observed.decoder_rank = parse_u32(fields.at(cursor++), "decoder rank");
         trace.observed.required_rank = parse_u32(fields.at(cursor++), "required rank");
         trace.proposed = parse_decision(fields, cursor);
         trace.decision = parse_decision(fields, cursor);
+        trace.execution = parse_execution(fields, cursor);
         const auto constraint_count = static_cast<std::size_t>(
             parse_u64(fields.at(cursor++), 10, "constraint count"));
         trace.constraints_applied = decode_constraints(fields.at(cursor++), constraint_count);
@@ -449,6 +514,14 @@ private:
                left.now_ms == right.now_ms &&
                double_bits(left.source_energy_reserve) == double_bits(right.source_energy_reserve) &&
                double_bits(left.rf_duty_remaining) == double_bits(right.rf_duty_remaining) &&
+               double_bits(left.source_energy_capacity_j) == double_bits(right.source_energy_capacity_j) &&
+               double_bits(left.rf_energy_cost_per_attempt_j) == double_bits(right.rf_energy_cost_per_attempt_j) &&
+               double_bits(left.optical_energy_cost_per_attempt_j) == double_bits(right.optical_energy_cost_per_attempt_j) &&
+               double_bits(left.backscatter_energy_cost_per_attempt_j) == double_bits(right.backscatter_energy_cost_per_attempt_j) &&
+               double_bits(left.rf_duty_remaining_s) == double_bits(right.rf_duty_remaining_s) &&
+               double_bits(left.rf_airtime_per_attempt_s) == double_bits(right.rf_airtime_per_attempt_s) &&
+               left.emitted_symbols == right.emitted_symbols &&
+               left.critical_emitted_symbols == right.critical_emitted_symbols &&
                left.decoder_rank == right.decoder_rank &&
                left.required_rank == right.required_rank;
     }

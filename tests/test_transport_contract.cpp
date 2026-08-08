@@ -7,6 +7,7 @@
 #include <string>
 
 using aurora::transport::TransportContract;
+using aurora::transport::ContractFieldSemantics;
 using aurora::transport::TransportImportance;
 
 namespace {
@@ -59,6 +60,33 @@ int main() {
     expect_invalid([] {
         TransportContract::parse("segment:0-10,critical;segment:10-20,important");
     });
+    expect_invalid([] {
+        TransportContract unsupported;
+        unsupported.version = 2;
+        unsupported.validate();
+    });
+
+    const auto audit_for = [](std::string_view field) {
+        return std::find_if(
+            aurora::transport::transport_contract_semantic_audit.begin(),
+            aurora::transport::transport_contract_semantic_audit.end(),
+            [&](const auto& item) { return item.field == field; });
+    };
+    const auto segment_deadline = audit_for("segments.deadline_ms");
+    const auto segment_reliability = audit_for("segments.target_reliability");
+    const auto global_deadline = audit_for("deadline_s");
+    const auto duty = audit_for("duty_frac");
+    assert(segment_deadline !=
+           aurora::transport::transport_contract_semantic_audit.end());
+    assert(segment_reliability !=
+           aurora::transport::transport_contract_semantic_audit.end());
+    assert(global_deadline !=
+           aurora::transport::transport_contract_semantic_audit.end());
+    assert(duty != aurora::transport::transport_contract_semantic_audit.end());
+    assert(segment_deadline->semantics == ContractFieldSemantics::METADATA_ONLY);
+    assert(segment_reliability->semantics == ContractFieldSemantics::METADATA_ONLY);
+    assert(global_deadline->semantics == ContractFieldSemantics::ENFORCED);
+    assert(duty->semantics == ContractFieldSemantics::ENFORCED);
 
     std::cout << "transport contract tests passed\n";
     return 0;

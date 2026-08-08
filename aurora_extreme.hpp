@@ -55,7 +55,7 @@ namespace podm {
 // ===== Channel telemetry & estimators (rolling) — PATCH ⬇︎
 namespace telem {
   struct EWMA { double a, v; EWMA(double alpha=0.2):a(alpha),v(NAN){} void push(double x){ v = std::isnan(v)? x : (a*x + (1-a)*v); } double val()const{return v;} };
-  struct Window { deque<double> q; int N; explicit Window(int n=30):N(n){} void push(double x){ q.push_back(x); if((int)q.size()>N) q.pop_back(); } double mean()const{ if(q.empty()) return NAN; double s=0; for(double x:q)s+=x; return s/q.size(); } double var()const{ if((int)q.size()<2) return NAN; double m=mean(), s=0; for(double x:q)s+=(x-m)*(x-m); return s/(q.size()-1); } };
+  struct Window { deque<double> q; int N; explicit Window(int n=30):N(n){} void push(double x){ q.push_back(x); if((int)q.size()>N) q.pop_front(); } double mean()const{ if(q.empty()) return NAN; double s=0; for(double x:q)s+=x; return s/q.size(); } double var()const{ if((int)q.size()<2) return NAN; double m=mean(), s=0; for(double x:q)s+=(x-m)*(x-m); return s/(q.size()-1); } };
   struct ChannelState {
     EWMA snr_rf{0.25}, snr_ir{0.25}, snr_bs{0.25};
     Window per_rf{50}, per_ir{50}, per_bs{50};
@@ -292,7 +292,8 @@ namespace cl {
                      const FlowHealth& nerve_health,
                      const FlowHealth& gland_health,
                      const FlowHealth& muscle_health) {
-        // Convert SafetyState to int (assumes it can be cast to int: 0=HEALTHY, 1=DEGRADED, 2=CRITICAL)
+        // SafetyState preserves 0=HEALTHY, 1=DEGRADED, 2=CRITICAL and uses
+        // -1 for NO_EVIDENCE. No evidence keeps the optimizer NORMAL.
         int safety_state_int = static_cast<int>(safety_state);
         double nerve_fail_rate = nerve_health.ewma_fail_rate;
         double gland_fail_rate = gland_health.ewma_fail_rate;

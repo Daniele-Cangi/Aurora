@@ -37,6 +37,11 @@ int main() {
     assert(first[1].baseline == BaselineKind::REPETITION_2X);
     assert(first[4].baseline == BaselineKind::ADAPTIVE_AURORA);
     assert(first[1].transmitted_bytes == first[0].transmitted_bytes * 2);
+    assert(!first[0].innovative_symbol_ratio.has_value());
+    assert(!first[1].innovative_symbol_ratio.has_value());
+    assert(!first[0].overhead_direction_changes.has_value());
+    assert(!first[2].overhead_direction_changes.has_value());
+    assert(first[4].overhead_direction_changes.has_value());
     for (const auto& result : first) {
         assert(result.trials == scenario.trials);
         assert(result.delivery_rate >= 0.0 && result.delivery_rate <= 1.0);
@@ -56,6 +61,7 @@ int main() {
     for (const auto& result : perfect_results) {
         assert(result.delivery_rate == 1.0);
         assert(result.critical_delivery_rate == 1.0);
+        assert(result.transmitted_bytes_per_delivered_byte.has_value());
     }
 
     auto burst = scenario;

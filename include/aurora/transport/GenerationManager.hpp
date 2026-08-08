@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -32,6 +33,19 @@ struct GenerationSpawnResult {
     // Compatibility alias for the historical simulator API.
     int K = 0;
     std::size_t payload_size = 0;
+};
+
+struct GenerationRepairResult {
+    std::string generation_id;
+    std::uint32_t requested_symbols = 0;
+    std::uint32_t emitted_symbols = 0;
+    bool critical_only = false;
+    std::vector<::fec::Pkt> packets;
+};
+
+struct GenerationRuntimeState {
+    std::uint64_t emitted_symbols = 0;
+    std::uint64_t critical_emitted_symbols = 0;
 };
 
 // Owns protocol/generation state only. Coding and adaptation are injected strategies.
@@ -90,7 +104,6 @@ public:
         descriptor.generation_id = make_generation_id(
             token_id, descriptor.payload_digest, contract.experiment_seed, generation_counter_++);
 
-        std::uint32_t packet_sequence = 1;
         for (std::size_t index = 0; index < requirements.size(); ++index) {
             const auto& requirement = requirements[index];
             GenerationSegmentDescriptor segment;
@@ -120,43 +133,35 @@ public:
             descriptor.segments.push_back(segment);
         }
 
+        normalize_initial_emission_budget(descriptor, contract);
+
         descriptor.descriptor_fingerprint = compute_descriptor_fingerprint(descriptor);
         if (const auto error = descriptor.validation_error()) {
             throw std::logic_error("generation spawn produced invalid descriptor: " + *error);
         }
-
-        for (const auto& segment : descriptor.segments) {
-            const auto begin = payload_bytes.begin() + static_cast<std::ptrdiff_t>(segment.offset);
-            const auto end = begin + static_cast<std::ptrdiff_t>(segment.length);
-            const std::vector<std::uint8_t> bytes(begin, end);
-            auto encoder = codec_->make_encoder(bytes, symbol_size, segment.coding.seed);
-            if (encoder->source_symbol_count() != static_cast<int>(segment.source_symbol_count)) {
-                throw std::logic_error("generation codec returned an inconsistent source symbol count");
-            }
-            for (std::uint32_t emitted = 0; emitted < segment.coding.emitted_symbols; ++emitted) {
-                ::fec::Pkt packet;
-                packet.fp = encoder->emit();
-                packet.seq = packet_sequence++;
-                packet.token_id = token_id;
-                packet.kind = segment.importance == TransportImportance::CRITICAL
-                    ? ::fec::SegmentKind::CRITICAL
-                    : ::fec::SegmentKind::BULK;
-                packet.generation_id = descriptor.generation_id;
-                packet.segment_id = segment.segment_id;
-                packet.descriptor_fingerprint = descriptor.descriptor_fingerprint;
-                result.packets.push_back(std::move(packet));
-            }
-        }
-        result.source_symbol_count = static_cast<int>(descriptor.total_source_symbols);
-        result.K = result.source_symbol_count;
 
         GenerationState generation;
         generation.descriptor = descriptor;
         generation.profile = protection.profile;
         generation.contract = contract;
         for (const auto& segment : descriptor.segments) {
-            generation.segments.emplace_back(segment, *codec_, descriptor.symbol_size);
+            const auto begin = payload_bytes.begin() + static_cast<std::ptrdiff_t>(segment.offset);
+            const auto end = begin + static_cast<std::ptrdiff_t>(segment.length);
+            const std::vector<std::uint8_t> bytes(begin, end);
+            generation.segments.emplace_back(
+                segment, *codec_, bytes, descriptor.symbol_size);
+            auto& runtime_segment = generation.segments.back();
+            if (runtime_segment.encoder->source_symbol_count() !=
+                static_cast<int>(segment.source_symbol_count)) {
+                throw std::logic_error("generation codec returned an inconsistent source symbol count");
+            }
+            for (std::uint32_t emitted = 0; emitted < segment.coding.emitted_symbols; ++emitted) {
+                result.packets.push_back(emit_next_packet(generation, runtime_segment));
+            }
         }
+        result.source_symbol_count = static_cast<int>(descriptor.total_source_symbols);
+        result.K = result.source_symbol_count;
+
         reserve_generation_slot(now_ms);
         generations_.insert_or_assign(descriptor.generation_id, std::move(generation));
         generation_order_.push_back(descriptor.generation_id);
@@ -295,6 +300,67 @@ public:
         return found->second.descriptor;
     }
 
+    GenerationRepairResult emit_repairs(const std::string& generation_id,
+                                        std::uint32_t requested_symbols,
+                                        bool critical_only) {
+        auto found = generations_.find(generation_id);
+        if (found == generations_.end()) {
+            throw std::invalid_argument("repair emission: unknown generation id");
+        }
+        auto& generation = found->second;
+        if (generation.terminal_report.has_value()) {
+            throw std::logic_error("repair emission: generation is terminal");
+        }
+
+        GenerationRepairResult result;
+        result.generation_id = generation_id;
+        result.requested_symbols = requested_symbols;
+        result.critical_only = critical_only;
+        while (result.emitted_symbols < requested_symbols) {
+            if (generation.emitted_symbols >= maximum_generation_emitted_symbols(
+                    generation.descriptor, generation.contract)) {
+                break;
+            }
+            bool emitted = false;
+            for (std::size_t checked = 0; checked < generation.segments.size(); ++checked) {
+                const auto index = (generation.repair_segment_cursor + checked) %
+                                   generation.segments.size();
+                auto& segment = generation.segments[index];
+                if (critical_only &&
+                    segment.descriptor.importance != TransportImportance::CRITICAL) {
+                    continue;
+                }
+                if (segment.descriptor.importance == TransportImportance::CRITICAL &&
+                    generation.critical_emitted_symbols >=
+                        maximum_critical_emitted_symbols(
+                            generation.descriptor, generation.contract)) {
+                    continue;
+                }
+                if (segment.emitted_symbols >= maximum_emitted_symbols(
+                        segment.descriptor, generation.contract)) {
+                    continue;
+                }
+                result.packets.push_back(emit_next_packet(generation, segment));
+                ++result.emitted_symbols;
+                generation.repair_segment_cursor =
+                    (index + 1) % generation.segments.size();
+                emitted = true;
+                break;
+            }
+            if (!emitted) break;
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<GenerationRuntimeState> runtime_state(
+        const std::string& generation_id) const {
+        const auto found = generations_.find(generation_id);
+        if (found == generations_.end()) return std::nullopt;
+        return GenerationRuntimeState{
+            found->second.emitted_symbols,
+            found->second.critical_emitted_symbols};
+    }
+
     [[nodiscard]] std::size_t generation_count() const { return generations_.size(); }
     [[nodiscard]] const aurora::fec::GenerationCodec& codec() const { return *codec_; }
     [[nodiscard]] control::TransportPolicy& policy() { return *policy_; }
@@ -303,13 +369,17 @@ public:
 private:
     struct SegmentDecoderState {
         GenerationSegmentDescriptor descriptor;
+        std::unique_ptr<aurora::fec::SymbolEncoder> encoder;
         std::unique_ptr<aurora::fec::SymbolDecoder> decoder;
         std::optional<std::vector<std::uint8_t>> recovered;
+        std::uint64_t emitted_symbols = 0;
 
         SegmentDecoderState(const GenerationSegmentDescriptor& value,
                             const aurora::fec::GenerationCodec& codec,
+                            const std::vector<std::uint8_t>& bytes,
                             std::size_t symbol_size)
             : descriptor(value),
+              encoder(codec.make_encoder(bytes, symbol_size, value.coding.seed)),
               decoder(codec.make_decoder(value.source_symbol_count, symbol_size)) {}
 
         SegmentDecoderState(SegmentDecoderState&&) noexcept = default;
@@ -328,7 +398,9 @@ private:
 
     struct PacketKeyHash {
         std::size_t operator()(const PacketKey& key) const {
-            return (static_cast<std::size_t>(key.segment_id) << 32U) ^ key.seed;
+            const auto combined = (static_cast<std::uint64_t>(key.segment_id) << 32U) |
+                                  static_cast<std::uint64_t>(key.seed);
+            return std::hash<std::uint64_t>{}(combined);
         }
     };
 
@@ -338,6 +410,11 @@ private:
         TransportContract contract;
         std::vector<SegmentDecoderState> segments;
         std::unordered_set<PacketKey, PacketKeyHash> seen_packets;
+        std::unordered_set<PacketKey, PacketKeyHash> emitted_packets;
+        std::uint64_t next_packet_sequence = 1;
+        std::uint64_t emitted_symbols = 0;
+        std::uint64_t critical_emitted_symbols = 0;
+        std::size_t repair_segment_cursor = 0;
         std::uint32_t symbols_observed = 0;
         std::uint32_t innovative_symbols = 0;
         std::uint32_t dependent_symbols = 0;
@@ -346,6 +423,131 @@ private:
         bool policy_feedback_applied = false;
         std::optional<DecodeReport> terminal_report;
     };
+
+    static std::uint64_t maximum_emitted_symbols(
+        const GenerationSegmentDescriptor& segment,
+        const TransportContract& contract) {
+        const auto bounded = std::min<long double>(
+            std::ceil(static_cast<long double>(segment.source_symbol_count) *
+                      static_cast<long double>(contract.maximum_repair_amplification)),
+            static_cast<long double>(std::numeric_limits<std::uint32_t>::max()));
+        return static_cast<std::uint64_t>(bounded);
+    }
+
+    static std::uint64_t maximum_generation_emitted_symbols(
+        const GenerationDescriptor& descriptor,
+        const TransportContract& contract) {
+        return static_cast<std::uint64_t>(std::min<long double>(
+            std::ceil(static_cast<long double>(descriptor.total_source_symbols) *
+                      static_cast<long double>(contract.maximum_repair_amplification)),
+            static_cast<long double>(std::numeric_limits<std::uint32_t>::max())));
+    }
+
+    static std::uint64_t critical_source_symbols(
+        const GenerationDescriptor& descriptor) {
+        std::uint64_t total = 0;
+        for (const auto& segment : descriptor.segments) {
+            if (segment.importance == TransportImportance::CRITICAL) {
+                total += segment.source_symbol_count;
+            }
+        }
+        return total;
+    }
+
+    static std::uint64_t maximum_critical_emitted_symbols(
+        const GenerationDescriptor& descriptor,
+        const TransportContract& contract) {
+        return static_cast<std::uint64_t>(std::min<long double>(
+            std::ceil(static_cast<long double>(critical_source_symbols(descriptor)) *
+                      static_cast<long double>(contract.maximum_repair_amplification)),
+            static_cast<long double>(std::numeric_limits<std::uint32_t>::max())));
+    }
+
+    static void normalize_initial_emission_budget(
+        GenerationDescriptor& descriptor,
+        const TransportContract& contract) {
+        const auto minimum_for = [&](const GenerationSegmentDescriptor& segment) {
+            if (segment.importance != TransportImportance::CRITICAL) {
+                return static_cast<std::uint64_t>(segment.source_symbol_count);
+            }
+            return static_cast<std::uint64_t>(std::min<long double>(
+                std::ceil(static_cast<long double>(segment.source_symbol_count) *
+                          static_cast<long double>(contract.minimum_critical_overhead)),
+                static_cast<long double>(std::numeric_limits<std::uint32_t>::max())));
+        };
+        const auto reduce_to = [&](std::uint64_t maximum,
+                                   bool critical_only) {
+            std::uint64_t current = 0;
+            for (const auto& segment : descriptor.segments) {
+                if (!critical_only ||
+                    segment.importance == TransportImportance::CRITICAL) {
+                    current += segment.coding.emitted_symbols;
+                }
+            }
+            if (current <= maximum) return;
+            auto excess = current - maximum;
+            for (const auto importance : {
+                     TransportImportance::ELASTIC,
+                     TransportImportance::IMPORTANT,
+                     TransportImportance::CRITICAL}) {
+                for (auto it = descriptor.segments.rbegin();
+                     it != descriptor.segments.rend() && excess > 0; ++it) {
+                    if (it->importance != importance ||
+                        (critical_only && importance != TransportImportance::CRITICAL)) {
+                        continue;
+                    }
+                    const auto minimum = minimum_for(*it);
+                    const auto reducible =
+                        static_cast<std::uint64_t>(it->coding.emitted_symbols) - minimum;
+                    const auto reduction = std::min(excess, reducible);
+                    it->coding.emitted_symbols -= static_cast<std::uint32_t>(reduction);
+                    excess -= reduction;
+                }
+            }
+            if (excess > 0) {
+                throw std::invalid_argument(
+                    "generation spawn: critical protection floors exceed repair amplification");
+            }
+        };
+
+        reduce_to(maximum_critical_emitted_symbols(descriptor, contract), true);
+        reduce_to(maximum_generation_emitted_symbols(descriptor, contract), false);
+        for (auto& segment : descriptor.segments) {
+            segment.coding.overhead_factor = segment.source_symbol_count == 0
+                ? 1.0
+                : static_cast<double>(segment.coding.emitted_symbols) /
+                  static_cast<double>(segment.source_symbol_count);
+        }
+    }
+
+    static ::fec::Pkt emit_next_packet(GenerationState& generation,
+                                       SegmentDecoderState& segment) {
+        if (generation.next_packet_sequence >
+            std::numeric_limits<std::uint32_t>::max()) {
+            throw std::overflow_error("repair emission: packet sequence exhausted");
+        }
+        ::fec::Pkt packet;
+        packet.fp = segment.encoder->emit();
+        packet.seq = static_cast<std::uint32_t>(generation.next_packet_sequence++);
+        packet.token_id = generation.descriptor.token_id;
+        packet.kind = segment.descriptor.importance == TransportImportance::CRITICAL
+            ? ::fec::SegmentKind::CRITICAL
+            : ::fec::SegmentKind::BULK;
+        packet.generation_id = generation.descriptor.generation_id;
+        packet.segment_id = segment.descriptor.segment_id;
+        packet.descriptor_fingerprint = generation.descriptor.descriptor_fingerprint;
+
+        const PacketKey key{packet.segment_id, packet.fp.seed};
+        if (!generation.emitted_packets.insert(key).second) {
+            throw std::logic_error("repair emission: codec produced a duplicate symbol identity");
+        }
+        ++segment.emitted_symbols;
+        ++generation.emitted_symbols;
+        if (segment.descriptor.importance == TransportImportance::CRITICAL) {
+            ++generation.critical_emitted_symbols;
+        }
+        return packet;
+    }
 
     static std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) {
         if (right > std::numeric_limits<std::uint64_t>::max() - left) {

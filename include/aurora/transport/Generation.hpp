@@ -32,6 +32,8 @@ inline std::uint64_t fnv1a64(const std::string& data) {
 struct CodingParameters {
     std::uint64_t seed = 0;
     double overhead_factor = 1.0;
+    // Immutable number emitted by spawn(). Additional runtime repair emission
+    // is generation state and deliberately does not rewrite the descriptor.
     std::uint32_t emitted_symbols = 0;
 };
 

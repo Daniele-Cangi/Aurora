@@ -29,6 +29,10 @@ int main() {
     observed.rf_duty_remaining = 0.0;
     observed.decoder_rank = 1;
     observed.required_rank = spawned.descriptor.total_source_symbols;
+    const auto runtime = controller.runtime_state(spawned.descriptor.generation_id);
+    assert(runtime.has_value());
+    observed.emitted_symbols = runtime->emitted_symbols;
+    observed.critical_emitted_symbols = runtime->critical_emitted_symbols;
 
     TransportDecision proposed;
     proposed.link = LinkMode::RF;
@@ -37,8 +41,19 @@ int main() {
     proposed.critical_only = true;
 
     telemetry::DecisionReplayLog log;
-    const auto constrained = envelope.constrain(
+    auto constrained = envelope.constrain(
         contract, spawned.descriptor, observed, proposed);
+    constrained.execution.recorded = true;
+    constrained.execution.link = constrained.decision.link;
+    constrained.execution.transmission_attempts =
+        constrained.decision.transmission_attempts;
+    constrained.execution.hal_accepted_attempts =
+        constrained.decision.transmission_attempts;
+    constrained.execution.delivered_attempts = 1;
+    constrained.execution.repair_symbols_emitted =
+        constrained.decision.repair_symbols;
+    constrained.execution.critical_only = constrained.decision.critical_only;
+    assert(!constrained.execution_error().has_value());
     log.record(contract, spawned.descriptor, constrained);
 
     observed.now_ms = 200;
@@ -56,11 +71,24 @@ int main() {
 
     auto contradictory = constrained;
     contradictory.decision.permitted = false;
+    contradictory.execution = {};
     telemetry::DecisionReplayLog contradictory_log;
     contradictory_log.record(contract, spawned.descriptor, contradictory);
     const auto mismatch = contradictory_log.verify();
     assert(!mismatch.ok);
     assert(mismatch.records_verified == 0);
+
+    auto execution_mismatch = constrained;
+    --execution_mismatch.execution.transmission_attempts;
+    bool execution_rejected = false;
+    try {
+        telemetry::DecisionReplayLog invalid_execution_log;
+        invalid_execution_log.record(
+            contract, spawned.descriptor, execution_mismatch);
+    } catch (const std::invalid_argument&) {
+        execution_rejected = true;
+    }
+    assert(execution_rejected);
 
     auto corrupted = first_encoding;
     const auto record_position = corrupted.find("R|");
