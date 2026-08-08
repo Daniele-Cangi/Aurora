@@ -22,6 +22,7 @@ find_package(Threads REQUIRED)
 add_library(aurora_headers INTERFACE)
 target_include_directories(aurora_headers INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
@@ -174,19 +175,27 @@ aurora_link_common(aurora_x)
 # -------------------------------------------------------------------
 # Tests
 if(BUILD_TESTING)
-  add_executable(test_podm test_podm.cpp)
-  aurora_link_common(test_podm)
-  add_test(NAME aurora.podm COMMAND test_podm)
-
   add_executable(test_aurora_organism tests/test_aurora_organism.cpp)
   aurora_link_common(test_aurora_organism)
-  add_test(NAME aurora.organism COMMAND test_aurora_organism)
+  add_test(NAME aurora.generation_lifecycle COMMAND test_aurora_organism)
+
+  add_executable(test_transport_contract tests/test_transport_contract.cpp)
+  aurora_link_common(test_transport_contract)
+  add_test(NAME aurora.transport_contract COMMAND test_transport_contract)
+
+  add_executable(test_safety_envelope tests/test_safety_envelope.cpp)
+  aurora_link_common(test_safety_envelope)
+  add_test(NAME aurora.safety_envelope COMMAND test_safety_envelope)
 
   # Keep standard assert() checks active even in optimized test configurations.
   if(MSVC)
     target_compile_options(test_aurora_organism PRIVATE /UNDEBUG)
+    target_compile_options(test_transport_contract PRIVATE /UNDEBUG)
+    target_compile_options(test_safety_envelope PRIVATE /UNDEBUG)
   else()
     target_compile_options(test_aurora_organism PRIVATE -UNDEBUG)
+    target_compile_options(test_transport_contract PRIVATE -UNDEBUG)
+    target_compile_options(test_safety_envelope PRIVATE -UNDEBUG)
   endif()
 
   if(USE_RAPTORQ)
@@ -229,7 +238,6 @@ if(BUILD_NET_TOOLS)
 
   foreach(tool
       aurora_unit_dedup_test
-      aurora_batch_test
       aurora_deadline_sweep
       aurora_selector_test)
     if(TARGET ${tool})
@@ -242,9 +250,10 @@ endif()
 # Warning levels
 set(_AURORA_ALL_TARGETS
   aurora_x
-  test_podm
   test_raptorq_adapter
   test_aurora_organism
+  test_transport_contract
+  test_safety_envelope
   aurora_batch_test
   aurora_deadline_sweep
   aurora_selector_test

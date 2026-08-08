@@ -25,7 +25,7 @@ TestResult<> run_sim(double deadline, double reliability, double duty, int ris_t
     if(channel_degrade > 0) eng.net.W.illum = channel_degrade;
     auto t0 = std::chrono::steady_clock::now();
     eng.init(intention);
-    bool delivered = aurora_run(intention, &eng);
+    bool delivered = eng.run();
     auto t1 = std::chrono::steady_clock::now();
     double delivery_time = std::chrono::duration<double>(t1-t0).count();
     // Raccogli metriche (personalizza in base a Engine/Node)

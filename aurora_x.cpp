@@ -27,6 +27,7 @@ using namespace std; using namespace chrono;
 #include "aurora_extreme.hpp"
 #include "aurora_organism.hpp"
 #include "src/core/AuroraSafetyMonitor.hpp"
+#include "include/aurora/safety/SafetyEnvelope.hpp"
 #ifdef AURORA_USE_LIBRAPTORQ
 #include "fec/AuroraRaptorQ.hpp"
 #endif
@@ -39,6 +40,24 @@ static std::string mode_to_string(phy::Mode m) {
     case phy::Mode::BACKSCATTER: return "backscatter";
     default: return "unknown";
   }
+}
+
+static aurora::safety::LinkMode safety_link(phy::Mode mode) {
+  switch (mode) {
+    case phy::Mode::RF: return aurora::safety::LinkMode::RF;
+    case phy::Mode::IR: return aurora::safety::LinkMode::OPTICAL;
+    case phy::Mode::BACKSCATTER: return aurora::safety::LinkMode::BACKSCATTER;
+  }
+  return aurora::safety::LinkMode::RF;
+}
+
+static phy::Mode phy_link(aurora::safety::LinkMode mode) {
+  switch (mode) {
+    case aurora::safety::LinkMode::RF: return phy::Mode::RF;
+    case aurora::safety::LinkMode::OPTICAL: return phy::Mode::IR;
+    case aurora::safety::LinkMode::BACKSCATTER: return phy::Mode::BACKSCATTER;
+  }
+  return phy::Mode::RF;
 }
 
 // T1: Helper functions per convertire enum a stringhe
@@ -153,10 +172,10 @@ private:
 struct Token {
   string id, payload; uint64_t created=0, expiry=0;
   array<uint8_t,32> pk{}; array<uint8_t,64> sk{}; array<uint8_t,64> sig{};
-  static Token make(const string& payload, uint64_t ttl){
+  static Token make(const string& payload, uint64_t ttl, uint64_t created_at_s=util::now_s()){
     Token t; CRYPTO::ed25519_keypair(t.pk.data(), t.sk.data());
     t.id = util::h64(payload + to_string(ttl) + to_string(util::rng.next()));
-    t.payload = payload; t.created = util::now_s(); t.expiry = t.created + ttl;
+    t.payload = payload; t.created = created_at_s; t.expiry = t.created + ttl;
     string msg = t.id + t.payload + to_string(t.expiry);
     CRYPTO::ed25519_sign(t.sig.data(), (const uint8_t*)msg.data(), msg.size(), t.sk.data());
     return t;
@@ -170,7 +189,7 @@ struct Bundle { string bid; Token tok; uint64_t expiry; bool custody=true;
   static Bundle make(const Token& t){ return { util::h64("B"+t.id), t, t.expiry, true }; }
 };
 static vector<uint8_t> tok2bytes(const Token& t){
-  vector<uint8_t> o; auto putS=[&](const string& s){ uint32_t L=s.size(); for(int i=0;i<4;++i) o.push_back((L>>(8*i))&0xFF); o.insert(o.end(), s.begin(), s.end()); };
+  vector<uint8_t> o; auto putS=[&](const string& s){ if(s.size()>UINT32_MAX) throw length_error("tok2bytes: string too large"); uint32_t L=static_cast<uint32_t>(s.size()); for(int i=0;i<4;++i) o.push_back((L>>(8*i))&0xFF); o.insert(o.end(), s.begin(), s.end()); };
   putS(t.id); putS(t.payload); for(int i=0;i<8;++i) o.push_back((t.created>>(8*i))&0xFF); for(int i=0;i<8;++i) o.push_back((t.expiry>>(8*i))&0xFF);
   o.insert(o.end(), t.pk.begin(), t.pk.end()); o.insert(o.end(), t.sig.begin(), t.sig.end()); return o;
 }
@@ -205,12 +224,15 @@ static Token bytes2tok(const vector<uint8_t>& v){
 struct Node {
   string id; geom::Vec2 pos;
   energy::Store bat{10.0, 6.0};
-  vector<fec::Pkt> buf, inbox; unordered_set<uint32_t> seen;
+  vector<fec::Pkt> buf, inbox; unordered_set<string> seen;
   double harvest_W = 0.2;
   size_t tx_idx = 0; // NEW: rotating cursor to avoid resending same packet
 
+  static string packet_key(const fec::Pkt& packet) {
+    return packet.generation_id + ":" + to_string(packet.segment_id) + ":" + to_string(packet.fp.seed);
+  }
   void tick(double dt){ bat.harvest(harvest_W, dt); }
-  void ingest(){ for(auto&p: inbox) if(!seen.count(p.seq)){ buf.push_back(p); seen.insert(p.seq);} inbox.clear(); }
+  void ingest(){ for(auto&p: inbox) { auto key=packet_key(p); if(!seen.count(key)){ buf.push_back(p); seen.insert(move(key));} } inbox.clear(); }
   bool send_one(world::World& W, Node& rx, phy::Mode m){
     if(buf.empty()) return false;
     if(tx_idx >= buf.size()) tx_idx = 0; // ring safety
@@ -223,7 +245,7 @@ struct Node {
     double SNR= phy::snr_db(g,m,W.illum);
     double coding_gain = (m==phy::Mode::RF? 8.0 : m==phy::Mode::IR? 3.0 : 4.0);
     bool ok = channel::pass_realistic(SNR, m, coding_gain, /*rician*/ false);
-    if(ok && !rx.seen.count(pkt.seq)) rx.inbox.push_back(pkt);
+    if(ok && !rx.seen.count(packet_key(pkt))) rx.inbox.push_back(pkt);
 
     // size shaping safe - padding solo nel frame PHY (non parte del FEC/Merkle)
     if(m==phy::Mode::RF){
@@ -246,27 +268,15 @@ struct Net { world::World W; vector<unique_ptr<Node>> nodes;
 };
 
 // ---------- Engine ----------
-// FASE 4: FlowEvent e FlowHealth per tracciare stato aggregato per FlowClass
-struct FlowEvent {
-  string token_id;
-  aurora::FlowProfile profile;
-  aurora::FlowClass flow_class;
-  bool delivered;
-  double coverage;
-  int symbols_used;
-  int total_symbols;
-  int panic_hint; // 0 per ora, eventualmente recuperabile dall'organismo in futuro
-};
-
-// FASE 4: Usa cl::FlowHealth da aurora_extreme.hpp invece di duplicare
 using FlowHealth = cl::FlowHealth;
 
 struct Engine {
-  Net net; Intention I; string token_id, bundle_id; int K; 
+  Net net; Intention I; string token_id, bundle_id, generation_id; int K;
   size_t T=128;  // mantenuto 128 per FEC piu rapido
   size_t payload_size;
   uint32_t seqc=1;
-  uint32_t RqRepair=0; // numero simboli di riparazione (RaptorQ)
+  aurora::transport::GenerationDescriptor generation_descriptor;
+  aurora::transport::DecodeReport last_decode_report;
   TelemetrySink telemetry;
   
   // FASE 4: Organismo adattivo e health tracking
@@ -279,6 +289,8 @@ struct Engine {
   
   // FASE 4: SafetyMonitor
   aurora::safety::SafetyMonitor safety_monitor;
+  aurora::safety::SafetyEnvelope safety_envelope;
+  vector<aurora::safety::TransportDecisionTrace> decision_traces;
   
   // T1: Flag per stream interattivo e stato corrente
   bool interactive_stream_ = false;
@@ -292,34 +304,31 @@ struct Engine {
 
   void init(const string& intention){
     I = Intention::parse(intention);
+    util::rng.reseed(I.experiment_seed);
     net.W.obs.push_back({{0.52,0.52}, 0.22});
     for(int i=0;i<I.ris_tiles; ++i){ double u=(i+1.0)/(I.ris_tiles+1.0); net.W.ris.push_back({{0.12+0.78*u, 0.12+0.78*u}, (uint8_t)(i%4)}); }
     HAL::RADIO_INIT();
     HAL::LORA_CFG(phy::EU868_CH[0], 125, 12, 5, 12);
     net.add("SRC",{0.06,0.08}); net.add("DST",{0.94,0.92});
 
-    Token t = Token::make("ACCESS:TEMP_KEY=abc123;ZONE=42;TTL=24h;CLASS=NORM;", 24*3600);
+    const uint64_t deterministic_epoch_s = 1'700'000'000ULL + (I.experiment_seed % 1'000'000ULL);
+    Token t = Token::make("ACCESS:TEMP_KEY=abc123;ZONE=42;TTL=24h;CLASS=NORM;", 24*3600,
+                          deterministic_epoch_s);
     Bundle b = Bundle::make(t); token_id=t.id; bundle_id=b.bid;
     auto bytes = tok2bytes(t);
     payload_size = bytes.size();
-#ifdef AURORA_USE_LIBRAPTORQ
-    {
-      aurora::fec::AuroraRaptorQ rq;
-      // calcola K dai parametri, repair ~20% per affidabilita 0.99
-      int K_est = (int)((bytes.size()+T-1)/T);
-      RqRepair = (uint32_t)std::max(8, (int)std::ceil(0.2 * K_est));
-      auto symbols = rq.encode_all(bytes.data(), bytes.size(), T, RqRepair);
-      K = (int)((bytes.size()+T-1)/T);
-      cout << "[DEBUG] FEC(RQ) Parameters: K=" << K << " T=" << T
-           << " R=" << RqRepair << " (ESI 0.." << (K+RqRepair-1) << ")" << endl;
-      for (const auto& s : symbols){ fec::Fp fp; fp.seed = s.esi; fp.deg = 1; fp.data = s.bytes; net.get("SRC")->buf.push_back({fp, seqc++, token_id}); }
+    auto spawned = organism->spawn(I, token_id, bytes, T, 0);
+    generation_descriptor = spawned.descriptor;
+    generation_id = generation_descriptor.generation_id;
+    K = spawned.K;
+    for (auto& packet : spawned.packets) {
+      packet.seq = seqc++;
+      net.get("SRC")->buf.push_back(std::move(packet));
     }
-#else
-    fec::Encoder enc(bytes, T); K = enc.N();
-    cout << "[DEBUG] FEC Parameters: K=" << K << " T=" << T 
-         << " (need " << K << " packets to decode)" << endl;
-    for(int i=0;i<K*3; ++i){ auto fp = enc.emit(); net.get("SRC")->buf.push_back({fp, seqc++, token_id}); }
-#endif
+    cout << "[GENERATION] id=" << generation_id
+         << " codec=" << generation_descriptor.codec_id
+         << " K=" << K << " T=" << T
+         << " emitted=" << net.get("SRC")->buf.size() << endl;
   }
 
   static double entropy_residual(int have, int need){ double e=max(0, need-have)/(double)need; return min(1.0,max(0.0,e)); }
@@ -433,55 +442,28 @@ struct Engine {
     */
   }
 
-  // FASE 4: Applica feedback da FlowEvent e aggiorna FlowHealth
-  void apply_flow_feedback(const FlowEvent& ev) {
+  // DecodeReport is the sole input to transport health.
+  void apply_flow_feedback(const aurora::transport::DecodeReport& report,
+                           aurora::FlowClass flow_class) {
     FlowHealth* fh = nullptr;
-    switch (ev.flow_class) {
+    switch (flow_class) {
       case aurora::FlowClass::NERVE:  fh = &nerve_health_; break;
       case aurora::FlowClass::GLAND:  fh = &gland_health_; break;
       case aurora::FlowClass::MUSCLE: fh = &muscle_health_; break;
     }
     if (!fh) return;
-    
-    // Aggiorna contatori
-    if (ev.delivered) {
-      fh->success_count++;
-      fh->recent_good_streak++;
-      fh->recent_bad_streak = 0;
-    } else {
-      fh->fail_count++;
-      fh->recent_bad_streak++;
-      fh->recent_good_streak = 0;
-    }
-    
-    // Aggiorna EWMA coverage
-    const double ALPHA_COV = 0.2;
-    if (fh->success_count + fh->fail_count == 1) {
-      fh->ewma_coverage = ev.coverage;
-    } else {
-      fh->ewma_coverage = (1.0 - ALPHA_COV) * fh->ewma_coverage + ALPHA_COV * ev.coverage;
-    }
-    
-    // Stima EWMA fail_rate
-    double instant_fail = ev.delivered ? 0.0 : 1.0;
-    const double ALPHA_FAIL = 0.1;
-    fh->ewma_fail_rate = (1.0 - ALPHA_FAIL) * fh->ewma_fail_rate + ALPHA_FAIL * instant_fail;
-    
-    // Stima EWMA panic_rate
-    double instant_panic = (ev.panic_hint > 0) ? 1.0 : 0.0;
-    const double ALPHA_PANIC = 0.1;
-    fh->ewma_panic_rate = (1.0 - ALPHA_PANIC) * fh->ewma_panic_rate + ALPHA_PANIC * instant_panic;
+    fh->observe(report);
     
     // Log sintetico
     string cls_name;
-    switch (ev.flow_class) {
+    switch (flow_class) {
       case aurora::FlowClass::NERVE:  cls_name = "NERVE"; break;
       case aurora::FlowClass::GLAND:  cls_name = "GLAND"; break;
       case aurora::FlowClass::MUSCLE: cls_name = "MUSCLE"; break;
     }
     cout << "[FLOW][HEALTH] class=" << cls_name
-         << " delivered=" << (ev.delivered ? "true" : "false")
-         << " cov=" << fixed << setprecision(2) << ev.coverage
+         << " delivered=" << (report.delivered() ? "true" : "false")
+         << " cov=" << fixed << setprecision(2) << report.coverage
          << " ewma_cov=" << fh->ewma_coverage
          << " ewma_fail=" << fh->ewma_fail_rate
          << " gs=" << fh->recent_good_streak
@@ -492,7 +474,7 @@ struct Engine {
   bool run(){
     using HAL::FHSS_next;
     Node& S=*net.get("SRC"); Node& D=*net.get("DST");
-    vector<vector<uint8_t>> used; auto t0=steady_clock::now();
+    vector<vector<uint8_t>> used;
     bool delivered=false; vector<uint8_t> out;
 
     cl::Optimizer opt;
@@ -513,7 +495,7 @@ struct Engine {
       // tick/ingest
       for(auto& n: net.nodes) n->tick(1.0), n->ingest();
 
-      int have=0; for(auto& p:D.buf) if(p.token_id==token_id) have++;
+      int have=static_cast<int>(last_decode_report.decoder_rank);
       double eres=entropy_residual(have,K);
 
       // progress
@@ -539,7 +521,8 @@ struct Engine {
         if(net.W.illum > 0.0) HAL::CW_ON(0.05); else HAL::CW_OFF();
       }
 
-      double elapsed=duration<double>(steady_clock::now()-t0).count();
+      const uint64_t simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+      const double elapsed = static_cast<double>(simulated_now_ms) / 1000.0;
 
       // Stato per optimizer (channel-aware + priority)
       cl::NetworkState Sx{};
@@ -559,18 +542,37 @@ struct Engine {
                 : Sx.deadline_left_s < I.deadline_s*0.4 ? cl::Priority::NORMAL
                 : cl::Priority::BULK);
       Sx.emergency_mode = (Sx.deadline_left_s < I.deadline_s*0.08 && (K-have) > (K*0.25));
-      Sx.covert_seq = (uint16_t)((util::now_s() ^ 0x5A) & 0xFF);
+      Sx.covert_seq = static_cast<uint16_t>((I.experiment_seed + static_cast<uint64_t>(step)) & 0xFF);
 
       auto dec = opt.joint(I, Sx, epoch);
+      aurora::safety::TransportDecision proposed;
+      proposed.link = safety_link(dec.mode);
+      proposed.transmission_attempts = static_cast<uint32_t>(dec.tries & 0xFF);
+      proposed.repair_symbols = static_cast<uint32_t>(dec.overhead & 0x7FFF);
+      proposed.critical_only = Sx.prio == cl::Priority::CRITICAL;
+      aurora::safety::TransportState observed;
+      observed.observed_at_ms = simulated_now_ms;
+      observed.now_ms = simulated_now_ms;
+      observed.source_energy_reserve = S.bat.soc();
+      observed.rf_duty_remaining = Sx.duty_left_rf;
+      observed.decoder_rank = last_decode_report.decoder_rank;
+      observed.required_rank = static_cast<uint32_t>(K);
+      auto decision_trace = safety_envelope.constrain(I, generation_descriptor, observed, proposed);
+      decision_traces.push_back(decision_trace);
+      dec.mode = phy_link(decision_trace.decision.link);
       double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
       HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
 
       // invio con jitter/spacing + feedback
-      int tries_real = (dec.tries & 0xFF);
-      if (Sx.prio == cl::Priority::CRITICAL) tries_real = std::max(tries_real, 2); // ensure at least 2 attempts when tight
+      int tries_real = decision_trace.decision.permitted
+        ? static_cast<int>(decision_trace.decision.transmission_attempts)
+        : 0;
+      if (decision_trace.decision.permitted && Sx.prio == cl::Priority::CRITICAL) {
+        tries_real = std::max(tries_real, 2);
+      }
       uint8_t covert_seq = (dec.tries >> 8) & 0xFF;
       bool emergency = (dec.overhead & 0x8000) != 0;
-      int overhead_real = (dec.overhead & 0x7FFF);
+      int overhead_real = static_cast<int>(decision_trace.decision.repair_symbols);
 
       auto do_sleep = [&](int base_ms, int jitter_ms){
         if(base_ms<=0 && jitter_ms<=0) return;
@@ -597,7 +599,7 @@ struct Engine {
       }
       if(step < 3) std::cout << "[ADAPTIVE] step=" << step << " mode_chosen=" << mode_chosen << std::endl;
 
-      if(S.bat.soc()<0.25 && I.allow_backscatter){
+      if(decision_trace.decision.permitted && S.bat.soc()<0.25 && I.allow_backscatter){
         int extra = std::min(8, std::max(2, overhead_real/3));
         for(int k=0;k<extra; ++k){
           bool ok = S.send_one(net.W, D, phy::Mode::BACKSCATTER);
@@ -607,10 +609,10 @@ struct Engine {
       }
 
       double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
-      opt.feedback(dec.mode, reward);
+      if (tries_real > 0) opt.feedback(dec.mode, reward);
       if(emergency){ cout<<"[COVERT] EMERGENCY flag; seq="<<(int)covert_seq<<"\n"; }
 
-      int have_after = 0; for (auto& p : D.buf) if (p.token_id == token_id) have_after++;
+      int have_after = 0; for (auto& p : D.buf) if (p.generation_id == generation_id) have_after++;
       
       // FASE 4: Integra organismo per ottenere risultati reali
       aurora::FlowProfile flow_profile = organism->build_profile(I);
@@ -618,34 +620,22 @@ struct Engine {
       // Raccogli pacchetti ricevuti per questo token_id
       vector<fec::Pkt> received_packets;
       for (auto& p : D.buf) {
-        if (p.token_id == token_id) {
+        if (p.generation_id == generation_id) {
           received_packets.push_back(p);
         }
       }
       
-      // Chiama integrate() per ottenere risultati reali dall'organismo
-      aurora::OrganismIntegrateResult res = organism->integrate(
-        flow_profile,
-        token_id,
-        K,
-        T,
-        received_packets
-      );
-      
-      // Crea FlowEvent dai risultati reali dell'organismo
-      FlowEvent ev{
-        token_id,
-        flow_profile,
-        flow_profile.flow_class,
-        res.delivered,
-        res.coverage,
-        res.symbols_used,
-        res.total_symbols_seen,
-        0            // panic_hint (per ora 0, eventualmente recuperabile dall'organismo)
-      };
-      
-      // FASE 4: Aggiorna FlowHealth
-      apply_flow_feedback(ev);
+      auto res = organism->integrate(generation_id, received_packets, simulated_now_ms);
+      last_decode_report = res;
+      apply_flow_feedback(res, flow_profile.flow_class);
+      if (res.delivered()) {
+        delivered = true;
+        out = res.payload;
+        used.clear();
+        for (const auto& packet : received_packets) used.push_back(packet.fp.data);
+        cout << "[SUCCESS] authoritative generation decode rank="
+             << res.decoder_rank << "/" << res.required_rank << endl;
+      }
       
       // T1: Emetti eventi JSON health per ogni classe
       emit_health_event(step, nerve_health_, aurora::FlowClass::NERVE);
@@ -723,53 +713,11 @@ struct Engine {
       
       telemetry.record(sample);
 
-      // === EARLY-EXIT FEC ===
-#ifdef AURORA_USE_LIBRAPTORQ
-      {
-        if (have_after >= std::min(K + (int)RqRepair, have_after)) {
-          aurora::fec::AuroraRaptorQ rq; auto dec = rq.make_decoder(payload_size, T);
-          int fed = 0;
-          for (auto& p : D.buf){ if (p.token_id==token_id){ aurora::fec::EncodedSymbol s{ (uint32_t)p.fp.seed, p.fp.data }; dec->add(s); if(++fed >= K + (int)RqRepair) break; } }
-          if (dec->ready()){
-            auto maybe = dec->decode();
-            if (maybe){ out = std::move(*maybe); delivered = true; cout << "[SUCCESS] RQ decode with " << fed << " symbols" << endl; }
-          }
-        }
-      }
-#else
-      {
-        if (have_after >= K) {
-          fec::Decoder fast_dec(K, T); int fed = 0;
-          for (auto& p : D.buf) { if (p.token_id == token_id) { fast_dec.push(p.fp); if (++fed >= K*2) break; } }
-          auto [ok2, raw2] = fast_dec.solve();
-          if (ok2) { out = std::move(raw2); delivered = true; cout << "[SUCCESS] Early decode with " << have_after << " / " << K << " packets\n"; }
-        }
-      }
-#endif
-
-      // Decode standard
-      if(!delivered){
-#ifdef AURORA_USE_LIBRAPTORQ
-        aurora::fec::AuroraRaptorQ rq; auto dec = rq.make_decoder(bytes.size(), T); int cnt=0;
-        for(auto& p: D.buf){ if(p.token_id==token_id){ aurora::fec::EncodedSymbol s{ (uint32_t)p.fp.seed, p.fp.data }; dec->add(s); used.push_back(p.fp.data); if(++cnt > K + (int)RqRepair) break; } }
-        auto maybe = dec->decode();
-        if(maybe){ out = std::move(*maybe); delivered = true; cout << "[SUCCESS] RQ decode successful at step " << step << " with " << cnt << " symbols" << endl; }
-#else
-        fec::Decoder decod(K, T); int cnt=0;
-        for(auto& p: D.buf){ if(p.token_id==token_id){ decod.push(p.fp); used.push_back(p.fp.data); if(++cnt>K*3) break; } }
-        auto [ok, raw] = decod.solve();
-        if(ok){ out=move(raw); delivered=true; cout << "[SUCCESS] FEC decode successful at step " << step << " with " << have << " packets (needed " << K << ")" << endl; }
-#endif
-      }
-
-      // Deadline check
-      if(!delivered){
-        if(elapsed > I.deadline_s) {
+      if(!delivered && res.status == aurora::transport::DecodeStatus::EXPIRED){
           cout << "[TIMEOUT] Deadline exceeded at step " << step 
                << " (elapsed=" << fixed << setprecision(2) << elapsed 
                << "s, deadline=" << I.deadline_s << "s)" << endl;
           break;
-        }
       }
 
       epoch += 1.0;
@@ -789,7 +737,7 @@ struct Engine {
         vector<string> leaves; leaves.reserve(used.size()); for(auto& s:used) leaves.push_back(podm::leaf(s));
         string root = podm::root(leaves);
         array<uint8_t,32> pk; array<uint8_t,64> sk; CRYPTO::ed25519_keypair(pk.data(), sk.data());
-        string msg = bundle_id + token_id + root + to_string(util::now_s());
+        string msg = bundle_id + token_id + root + to_string(generation_descriptor.expires_at_ms);
         array<uint8_t,64> sig; CRYPTO::ed25519_sign(sig.data(), (const uint8_t*)msg.data(), msg.size(), sk.data());
         cout<<"PoD-M root="<<root.substr(0,16)<<"... sig="<<CRYPTO::b64(sig.data(),sig.size()).substr(0,16)<<"...\n";
       } catch (const std::exception& e) {
@@ -837,7 +785,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
   using HAL::FHSS_next;
   Node& S=*engine.net.get("SRC"); Node& D=*engine.net.get("DST");
   
-  vector<vector<uint8_t>> used; auto t0=steady_clock::now();
+  vector<vector<uint8_t>> used;
   bool delivered=false; vector<uint8_t> out;
 
   cl::Optimizer opt;
@@ -857,7 +805,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     // Usa la stessa logica di run() ma in versione continua
     for(auto& n: engine.net.nodes) n->tick(1.0), n->ingest();
 
-    int have=0; for(auto& p:D.buf) if(p.token_id==engine.token_id) have++;
+    int have=static_cast<int>(engine.last_decode_report.decoder_rank);
     double e=max(0, engine.K-have)/(double)engine.K; double eres=min(1.0,max(0.0,e));
 
     // progress (meno verboso in lab mode)
@@ -883,7 +831,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
       if(engine.net.W.illum > 0.0) HAL::CW_ON(0.05); else HAL::CW_OFF();
     }
 
-    double elapsed=duration<double>(steady_clock::now()-t0).count();
+    const uint64_t simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+    const double elapsed = static_cast<double>(simulated_now_ms) / 1000.0;
 
     // Stato per optimizer
     cl::NetworkState Sx{};
@@ -902,17 +851,37 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
               : Sx.deadline_left_s < engine.I.deadline_s*0.4 ? cl::Priority::NORMAL
               : cl::Priority::BULK);
     Sx.emergency_mode = (Sx.deadline_left_s < engine.I.deadline_s*0.08 && (engine.K-have) > (engine.K*0.25));
-    Sx.covert_seq = (uint16_t)((util::now_s() ^ 0x5A) & 0xFF);
+    Sx.covert_seq = static_cast<uint16_t>((engine.I.experiment_seed + static_cast<uint64_t>(step)) & 0xFF);
 
     auto dec = opt.joint(engine.I, Sx, epoch);
+    aurora::safety::TransportDecision proposed;
+    proposed.link = safety_link(dec.mode);
+    proposed.transmission_attempts = static_cast<uint32_t>(dec.tries & 0xFF);
+    proposed.repair_symbols = static_cast<uint32_t>(dec.overhead & 0x7FFF);
+    proposed.critical_only = Sx.prio == cl::Priority::CRITICAL;
+    aurora::safety::TransportState observed;
+    observed.observed_at_ms = simulated_now_ms;
+    observed.now_ms = simulated_now_ms;
+    observed.source_energy_reserve = S.bat.soc();
+    observed.rf_duty_remaining = Sx.duty_left_rf;
+    observed.decoder_rank = engine.last_decode_report.decoder_rank;
+    observed.required_rank = static_cast<uint32_t>(engine.K);
+    auto decision_trace = engine.safety_envelope.constrain(
+      engine.I, engine.generation_descriptor, observed, proposed);
+    engine.decision_traces.push_back(decision_trace);
+    dec.mode = phy_link(decision_trace.decision.link);
     double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
     HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
 
-    int tries_real = (dec.tries & 0xFF);
-    if (Sx.prio == cl::Priority::CRITICAL) tries_real = std::max(tries_real, 2);
+    int tries_real = decision_trace.decision.permitted
+      ? static_cast<int>(decision_trace.decision.transmission_attempts)
+      : 0;
+    if (decision_trace.decision.permitted && Sx.prio == cl::Priority::CRITICAL) {
+      tries_real = std::max(tries_real, 2);
+    }
     uint8_t covert_seq = (dec.tries >> 8) & 0xFF;
     bool emergency = (dec.overhead & 0x8000) != 0;
-    int overhead_real = (dec.overhead & 0x7FFF);
+    int overhead_real = static_cast<int>(decision_trace.decision.repair_symbols);
 
     auto do_sleep = [&](int base_ms, int jitter_ms){
       if(base_ms<=0 && jitter_ms<=0) return;
@@ -928,7 +897,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
       do_sleep(dec.min_spacing_ms, dec.jitter_ms);
     }
 
-    if(S.bat.soc()<0.25 && engine.I.allow_backscatter){
+    if(decision_trace.decision.permitted && S.bat.soc()<0.25 && engine.I.allow_backscatter){
       int extra = std::min(8, std::max(2, overhead_real/3));
       for(int k=0;k<extra; ++k){
         bool ok = S.send_one(engine.net.W, D, phy::Mode::BACKSCATTER);
@@ -938,41 +907,31 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     }
 
     double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
-    opt.feedback(dec.mode, reward);
+    if (tries_real > 0) opt.feedback(dec.mode, reward);
     if(emergency){ cout<<"[COVERT] EMERGENCY flag; seq="<<(int)covert_seq<<"\n"; }
 
-    int have_after = 0; for (auto& p : D.buf) if (p.token_id == engine.token_id) have_after++;
+    int have_after = 0; for (auto& p : D.buf) if (p.generation_id == engine.generation_id) have_after++;
     
     // Integra organismo
     aurora::FlowProfile flow_profile = engine.organism->build_profile(engine.I);
     
     vector<fec::Pkt> received_packets;
     for (auto& p : D.buf) {
-      if (p.token_id == engine.token_id) {
+      if (p.generation_id == engine.generation_id) {
         received_packets.push_back(p);
       }
     }
-    
-    aurora::OrganismIntegrateResult res = engine.organism->integrate(
-      flow_profile,
-      engine.token_id,
-      engine.K,
-      engine.T,
-      received_packets
-    );
-    
-    FlowEvent ev{
-      engine.token_id,
-      flow_profile,
-      flow_profile.flow_class,
-      res.delivered,
-      res.coverage,
-      res.symbols_used,
-      res.total_symbols_seen,
-      0
-    };
-    
-    engine.apply_flow_feedback(ev);
+
+    auto res = engine.organism->integrate(
+      engine.generation_id, received_packets, simulated_now_ms);
+    engine.last_decode_report = res;
+    engine.apply_flow_feedback(res, flow_profile.flow_class);
+    if (res.delivered()) {
+      delivered = true;
+      out = res.payload;
+      used.clear();
+      for (const auto& packet : received_packets) used.push_back(packet.fp.data);
+    }
     
     // T1: Emetti eventi JSON health (DOPO apply_flow_feedback per avere dati aggiornati)
     engine.emit_health_event(step, engine.nerve_health_, aurora::FlowClass::NERVE);
@@ -1042,12 +1001,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     
     engine.telemetry.record(sample);
 
-    // Early exit FEC (simplified)
-    if (have_after >= engine.K) {
-      fec::Decoder fast_dec(engine.K, engine.T); int fed = 0;
-      for (auto& p : D.buf) { if (p.token_id == engine.token_id) { fast_dec.push(p.fp); if (++fed >= engine.K*2) break; } }
-      auto [ok2, raw2] = fast_dec.solve();
-      if (ok2) { out = std::move(raw2); delivered = true; }
+    if (!delivered && res.status == aurora::transport::DecodeStatus::EXPIRED) {
+      break;
     }
 
     epoch += 1.0;

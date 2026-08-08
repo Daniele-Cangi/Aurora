@@ -8,7 +8,7 @@ Aurora-X is an ambitious systems research project exploring a long-term goal:
 
 The current repository contains a substantial C++20 research implementation covering fountain-style forward error correction, adaptive redundancy, traffic classes, simulated RF/optical/backscatter links, energy and RIS models, supervisory state, cross-layer optimization, signed payloads, telemetry, UDP experiments, and an interactive dashboard.
 
-Aurora-X is **not yet a field-deployed extreme-network stack**, a validated replacement for established FEC standards, or a production security system. Several parts are implemented as simulation models or experimental control logic, and the present end-to-end path still contains integration inconsistencies that must be resolved before quantitative claims can be made.
+Aurora-X is **not yet a field-deployed extreme-network stack**, a validated replacement for established FEC standards, or a production security system. The internal LT-like simulator now has one coherent generation/decode path, but its channel, energy, safety-state, HAL, dashboard, and security layers still include simulation or prototype behaviour that must not be used for quantitative field claims.
 
 The project is not being reduced in scope. Its engineering path and maximum target architecture are defined in [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md).
 
@@ -16,7 +16,7 @@ The project is not being reduced in scope. Its engineering path and maximum targ
 
 ## Mission
 
-Aurora-X aims to become an intent-aware, self-observing transport layer for environments where conventional assumptions fail:
+Aurora-X aims to become a contract-aware, self-observing transport layer for environments where conventional assumptions fail:
 
 - intermittent and asymmetric connectivity;
 - severe packet loss and rapidly changing channels;
@@ -42,15 +42,16 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** establish one coherent encoder → channel → decoder → health → controller loop
+**Primary current task:** turn the coherent internal generation lifecycle into a controlled comparison and replay platform
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
-| LT-like fountain FEC | Implemented prototype | XOR-based symbol generation and GF(2) matrix decoding | Not yet benchmarked against robust LT, RaptorQ, Reed–Solomon, repetition, or no-FEC baselines |
-| Adaptive FEC organism | Substantial prototype | Critical/bulk segmentation, flow classes, overhead memory, failure response, panic boost, gradual relaxation | State describing critical/bulk generations is currently stored globally per organism instance rather than per token |
+| LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | Not yet benchmarked against robust LT, RaptorQ, Reed–Solomon, repetition, or no-FEC baselines |
+| Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed decoder state, expiry, exact length, integrity result and authoritative `DecodeReport` | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
+| Adaptive FEC organism | Substantial prototype | NERVE/GLAND/MUSCLE policy profiles, class-aware overhead, failure response, panic boost and gradual relaxation | Biological policy remains coupled to the first generation manager implementation and needs an interchangeable controller interface |
 | Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; controller benefits are not yet isolated by controlled benchmarks |
-| FlowHealth | Implemented prototype | Coverage and failure EWMAs, success/failure counters, good/bad streaks | The main execution path can currently feed it decode results produced by a model incompatible with the actual transmitted generation |
-| Safety supervision | Basic prototype | HEALTHY, DEGRADED, and CRITICAL states from recent failure and duty data | Current implementation is simpler than the intended hysteretic, class-aware recovery supervisor |
+| Transport health | Implemented first slice | Consumes only `DecodeReport`; progress polls update coverage without being counted as delivery failures | Aggregation/confidence and multi-flow recovery semantics still need development |
+| Safety supervision | Partial | Hard envelope enforces expiry, observation freshness, reserve floor, allowed links, RF duty availability and repair-amplification caps; legacy HEALTHY/DEGRADED/CRITICAL monitor remains | The legacy state monitor still needs replacement by a hysteretic, evidence-aware supervisor |
 | Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | Some transitions are unreachable in the default single-flow scenario because inactive classes retain empty health state |
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, duty limiter, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade | `FIELD_BUILD` currently still uses stubbed device operations |
@@ -58,8 +59,8 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
 | Telemetry | Implemented prototype | JSONL engine telemetry and JSON health events | Schema and provenance need consolidation; some advertised CSV fields are placeholders |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Partial | Organism scenarios, crypto demonstration, PoD-M and optional RaptorQ-related targets | Tests are not yet a complete reproducible benchmark suite and historically were not registered with CTest |
-| Reproducible build | Being stabilized | CMake project and optional dependency switches | Previous defaults required optional dependencies and documentation contained conflicting instructions |
+| Automated tests | Registered with CTest | Contract parsing, deterministic codec behaviour, concurrent/interleaved generations, expiry, malformed input, integrity, exact length, bounded state, health and safety invariants | Property fuzzing, CI, cross-platform runs and benchmark statistics are still missing |
+| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seed for coding and simulator RNG, optional insecure/secure dependency profiles | Linux CI and full event-trace replay are not implemented |
 
 ---
 
@@ -77,9 +78,11 @@ Aurora-X includes an internal FEC implementation that:
 
 This is a real encoder/decoder experiment. It is intentionally described as **LT-like** rather than as a standards-compliant RaptorQ replacement.
 
-### 2. Intent-derived traffic protection
+### 2. Parsed transport contracts and explicit generations
 
-An `Intention` is converted into a flow profile containing deadline, reliability target, duty constraint, priority, and biological traffic class. The adaptive organism maintains different redundancy behaviour for NERVE, GLAND, and MUSCLE traffic.
+`TransportContract::parse()` now rejects unknown or invalid requirements and represents deadline, reliability, duty, allowed links, reserve floor, observation freshness, repair caps, integrity policy, experiment seed, and caller-declared byte ranges. It does not infer the meaning of payload bytes.
+
+Each spawn produces an immutable `GenerationDescriptor` containing codec identity/version, generation and token IDs, exact payload length, symbol size/count, segment requirements, coding seeds/overhead, creation/expiry, and research integrity fingerprints. Decoder state is stored per generation ID in a bounded store, so multiple generations can be active and integrated out of order.
 
 ### 3. Adaptive protection with memory
 
@@ -117,7 +120,7 @@ Aurora-X includes experimental layers for:
 - SNR-based or UCB-based physical-link selection;
 - telemetry-driven feedback.
 
-These layers exist in code, but the next engineering phase must make the health signal and transmitted FEC generation fully consistent.
+The main simulator now applies the optimizer through a hard `SafetyEnvelope`, transmits the organism's spawned packets, and feeds the same authoritative `DecodeReport` to delivery and transport health. The older three-state safety monitor remains as a supervisory prototype and is not presented as a complete safety system.
 
 ### 6. Security and provenance experiments
 
@@ -136,20 +139,14 @@ The UDP tools demonstrate that Aurora-related payloads and sequence data can be 
 
 ---
 
-## Current end-to-end inconsistency
+## Current internal generation path
 
-The most important technical issue is explicit.
-
-The main engine currently creates transmitted symbols through the monolithic `fec::Encoder` path, or the optional RaptorQ path. The same received packets are also passed into `AlienFountainOrganism::integrate()` to create health feedback, even though they were not generated through the organism's matching critical/bulk `spawn()` path.
-
-That means the delivery decoder and the health decoder can interpret the same packets under different generation assumptions.
-
-The immediate architectural repair is:
+The dependency-light simulator now follows one path:
 
 ```text
-Intention
+TransportContract
    ↓
-GenerationContext for token_id
+GenerationDescriptor
    ↓
 AlienFountainOrganism::spawn()
    ↓
@@ -164,7 +161,9 @@ FlowHealth → SafetySupervisor → Optimizer
 policy for the next generation
 ```
 
-One generation must have one source of truth for:
+The same report determines delivery, coverage/rank, critical completion, integrity outcome, and health feedback. The former monolithic delivery decoder and parallel organism health decoder were removed from the active simulator path.
+
+The current boundary is intentionally narrow:
 
 - symbol count;
 - original payload length;
@@ -172,7 +171,10 @@ One generation must have one source of truth for:
 - symbol size;
 - encoder identity and version;
 - generation identifier;
-- adaptation parameters used at spawn time.
+- adaptation parameters used at spawn time;
+- bounded in-memory state for concurrent generations.
+
+The optional external RaptorQ adapter is not part of this lifecycle and remains a disabled legacy experiment until it can implement the same descriptor/report contract.
 
 ---
 
@@ -222,13 +224,19 @@ See [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md) for the complete path.
 ```text
 aurora_x.cpp                 Main simulation/orchestration harness
 aurora_extreme.hpp           Channel, energy, optimizer and shared models
-aurora_organism.hpp          Adaptive critical/bulk FEC organism
-aurora_intention.hpp         Intention parser and constraints
+aurora_organism.hpp          Generation manager and biological adaptive policy
+aurora_intention.hpp         Transitional include for TransportContract
 aurora_hal.hpp               Hardware abstraction and current mock backends
+include/aurora/
+  fec/LtLikeCodec.hpp        Deterministic experimental LT-like codec
+  transport/                 Contract, descriptor, report and health types
+  safety/SafetyEnvelope.hpp  Hard transport-decision constraints and trace
 src/core/
-  AuroraSafetyMonitor.hpp    Current safety-state prototype
+  AuroraSafetyMonitor.hpp    Legacy safety-state prototype
 tests/
-  test_aurora_organism.cpp   Good/bad/adaptation scenarios
+  test_aurora_organism.cpp   Generation/FEC lifecycle invariants
+  test_transport_contract.cpp
+  test_safety_envelope.cpp
 aurora_batch_test.cpp        Experimental parameter sweep harness
 aurora_udp_*.cpp             UDP transport experiments
 aurora_dash_lab.py           Live monitoring dashboard

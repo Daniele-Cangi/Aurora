@@ -4,7 +4,7 @@
 
 Aurora-X is not being reduced to a small codec demonstration.
 
-The long-term objective remains the construction of an autonomous transport substrate for heterogeneous, energy-constrained, disruption-prone networks: a system able to interpret mission intent, protect different information classes, adapt coding and link behaviour, preserve safety constraints, retain custody across interruptions, and recover from shocks without requiring continuous central control.
+The long-term objective remains the construction of an adaptive transport substrate for heterogeneous, energy-constrained, disruption-prone networks: a system that accepts application-declared transport requirements, protects declared byte classes, adapts coding and link behaviour, preserves safety constraints, retains custody across interruptions, and recovers from shocks without requiring continuous central control. Aurora does not infer payload semantics.
 
 This document defines how to reach that objective without confusing architectural ambition with already validated capability.
 
@@ -12,7 +12,7 @@ This document defines how to reach that objective without confusing architectura
 
 # 1. North Star
 
-Aurora-X should eventually accept a mission-level transport contract such as:
+Aurora-X should eventually accept an application transport contract such as:
 
 ```text
 Deliver this state update before 800 ms.
@@ -28,9 +28,9 @@ All generation metadata and delivery evidence must be authenticated.
 The system should transform that contract into a sequence of bounded, observable decisions:
 
 ```text
-Mission intent
+Application transport requirements
     ↓
-Traffic class and protection contract
+TransportContract
     ↓
 Generation structure and coding policy
     ↓
@@ -117,14 +117,14 @@ A result from one level is not presented as proof of another.
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│                    Mission / Application                    │
+│                         Application                         │
 └─────────────────────────────┬───────────────────────────────┘
-                              │ Intention
+                              │ TransportContract
 ┌─────────────────────────────▼───────────────────────────────┐
-│ Intent Compiler                                              │
+│ Contract Parser / Validator                                  │
 │ deadline, reliability, critical ranges, energy, policy      │
 └─────────────────────────────┬───────────────────────────────┘
-                              │ ProtectionContract
+                              │ validated requirements
 ┌─────────────────────────────▼───────────────────────────────┐
 │ Generation Manager                                          │
 │ segmentation, codec, source/repair schedule, provenance     │
@@ -174,11 +174,11 @@ This phase does not reduce the vision. It removes contradictions that prevent th
 - [x] Rewrite the README around achieved foundations and maximum vision.
 - [x] Add this master plan.
 - [ ] Remove unresolved merge markers and obsolete instructions.
-- [ ] Establish one supported C++ standard: C++20.
-- [ ] Make the dependency-light internal-FEC build the default developer profile.
-- [ ] Make real crypto and external RaptorQ explicit opt-in profiles.
-- [ ] Register executable tests with CTest.
-- [ ] Preserve assertions or replace them with test-framework checks in optimized test builds.
+- [x] Establish one supported C++ standard: C++20.
+- [x] Make the dependency-light internal-FEC build the default developer profile.
+- [x] Make real crypto and external RaptorQ explicit opt-in profiles.
+- [x] Register executable tests with CTest.
+- [x] Preserve assertions or replace them with test-framework checks in optimized test builds.
 - [ ] Add CI for Windows and Linux using the dependency-light profile.
 - [ ] Move `Orginal/` into `docs/history/` or a tagged historical branch.
 - [ ] Add a machine-readable version and build-feature report.
@@ -242,15 +242,15 @@ struct GenerationDescriptor {
 
 ### Required tests
 
-- [ ] two tokens spawned before either is integrated;
-- [ ] interleaved symbols from multiple generations;
-- [ ] delayed integration of an older token;
-- [ ] duplicate symbols;
-- [ ] reordered symbols;
-- [ ] generation expiry;
-- [ ] non-aligned payload lengths;
-- [ ] empty bulk or empty critical segment;
-- [ ] descriptor mismatch and corruption.
+- [x] two tokens spawned before either is integrated;
+- [x] interleaved symbols from multiple generations;
+- [x] delayed integration of an older token;
+- [x] duplicate symbols;
+- [x] reordered symbols;
+- [x] generation expiry;
+- [x] non-aligned payload lengths;
+- [x] empty bulk or empty critical segment;
+- [x] descriptor mismatch and corruption.
 
 ## Phase 1B — One encoder and one decoder path
 
@@ -297,18 +297,20 @@ struct DecodeReport {
 
 There is no path where the transport decoder declares success while FlowHealth observes a decode failure for the same generation.
 
+**Status:** achieved for the dependency-light internal LT-like simulator. The disabled legacy RaptorQ experiment has not yet been adapted to the descriptor/report interface.
+
 ## Phase 1C — Correct the LT-like implementation
 
-- [ ] sample source indices without replacement inside each encoded symbol;
-- [ ] record effective degree explicitly;
-- [ ] add deterministic seeding scoped to generation and symbol ID;
-- [ ] implement a documented degree distribution;
+- [x] sample source indices without replacement inside each encoded symbol;
+- [x] record effective degree explicitly;
+- [x] add deterministic seeding scoped to generation and symbol ID;
+- [x] implement a documented degree distribution;
 - [ ] add robust soliton as an experimental policy;
-- [ ] track innovative versus dependent packets;
-- [ ] preserve exact original payload length;
-- [ ] define maximum generation size;
+- [x] track innovative versus dependent packets;
+- [x] preserve exact original payload length;
+- [x] define maximum generation size;
 - [ ] add sparse/peeling decode path before dense elimination;
-- [ ] bound memory and CPU cost;
+- [x] bound retained decoder equations and active generation state;
 - [ ] fuzz malformed seeds, degree values and symbol lengths.
 
 ### Exit gate
@@ -735,9 +737,9 @@ Potential properties:
 - no unbounded redundancy escalation;
 - no duty/energy violation caused by panic mode.
 
-## 13.4 Semantic and unequal error protection
+## 13.4 Application-declared unequal error protection
 
-Critical/bulk segmentation can evolve from fixed byte prefixes to application-declared semantic ranges, layered state or progressive representations.
+Critical/important/elastic segmentation can evolve through application-declared byte ranges and progressive byte layers. Aurora consumes those declarations as transport requirements and does not infer what the ranges mean.
 
 ## 13.5 Network coding and recoding
 
@@ -747,9 +749,9 @@ Investigate safe relay recoding, rank-aware forwarding and generation mixing und
 
 For satellite or highly scheduled networks, integrate predicted contact windows, link budgets and custody planning while keeping the core independent of any single domain.
 
-## 13.7 Multi-agent policy federation
+## 13.7 Distributed transport-controller coordination — deferred
 
-Explore how local Aurora controllers exchange bounded policy hints without creating instability, central dependency or security exposure.
+Only after the single-node generation and custody lifecycle is trustworthy, investigate how transport controllers exchange bounded link/custody observations without creating instability, central dependency or security exposure. This is not a generic agent architecture.
 
 ## 13.8 Verified autonomous recovery
 

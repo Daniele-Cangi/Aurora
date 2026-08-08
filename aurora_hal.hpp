@@ -18,11 +18,12 @@
 #include <deque>
 #include <random>
 #include <chrono>
+#include <thread>
 using namespace std;
 using namespace chrono;
 
 namespace util {
-  struct RNG{ uint64_t s; explicit RNG(uint64_t x=0xC0FFEEBEEFULL):s(x){} inline uint64_t next(){ s^=s<<7; s^=s>>9; s^=s<<8; return s; } inline double uni(){ return (next()>>11) * (1.0/((1ull<<53)-1)); } };
+  struct RNG{ uint64_t s; explicit RNG(uint64_t x=0xC0FFEEBEEFULL):s(x){} inline void reseed(uint64_t x){ s=x?x:0xC0FFEEBEEFULL; } inline uint64_t next(){ s^=s<<7; s^=s>>9; s^=s<<8; return s; } inline double uni(){ return (next()>>11) * (1.0/((1ull<<53)-1)); } };
   static inline RNG rng;
   static inline uint64_t now_s(){ return (uint64_t)time(nullptr); }
   static inline string h64(const string& s){ uint64_t z=0x9E3779B97F4A7C15ULL; for(unsigned char c:s){ z^=(uint64_t)c+0x9e3779b97f4a7c15ULL+(z<<6)+(z>>2);} z^=z<<13; z^=z>>7; z^=z<<17; stringstream ss; ss<<hex<<setw(16)<<setfill('0')<<z; return ss.str(); }
@@ -40,7 +41,6 @@ struct DutyLimiter {
     return false;
   }
   double left_frac() const {
-    auto dt=duration<double>(steady_clock::now()-t0).count();
     double cap=max_frac*window_s; return cap>0? max(0.0, (cap-used_s)/cap):0.0;
   }
 };

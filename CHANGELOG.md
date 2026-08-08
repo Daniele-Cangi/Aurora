@@ -5,6 +5,20 @@ All notable changes to Aurora-X will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Parsed and validated transport-only `TransportContract`, including caller-declared byte ranges.
+- Immutable `GenerationDescriptor`, authoritative `DecodeReport`, generation-indexed decoder state, and bounded active-generation storage.
+- Hard `SafetyEnvelope` and `TransportDecisionTrace` for expiry, stale observations, energy reserve, allowed links, RF duty availability, and repair caps.
+- CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, delayed completion, exact lengths, empty/tiny payloads, expiry, malformed metadata, integrity failure, bounded state, health consistency, and safety constraints.
+
+### Changed
+- Routed the dependency-light simulator through `AlienFountainOrganism::spawn()` and `integrate()` exclusively; delivery and health now consume the same report.
+- Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
+- Made simulation and coding randomness reproducible from the contract seed.
+
+### Removed
+- Removed the active simulator's incompatible parallel delivery decoder and the nonexistent `test_podm.cpp` CMake target.
+
+### Added
 - **FASE 3b**: Adaptive weight loss mechanism based on success streaks
   - Added `good_streak` and `bad_streak` tracking to `FlowState`
   - Implemented homeostatic weight loss: after 4+ consecutive successes with no panic and avg_coverage > 0.85, overhead gradually decreases
