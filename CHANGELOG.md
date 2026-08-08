@@ -9,7 +9,9 @@ All notable changes to Aurora-X will be documented in this file.
 - Immutable `GenerationDescriptor`, authoritative `DecodeReport`, generation-indexed decoder state, and bounded active-generation storage.
 - Hard `SafetyEnvelope` and `TransportDecisionTrace` for expiry, stale observations, energy reserve, allowed links, RF duty availability, and repair caps.
 - Canonical, checksum-chained `DecisionReplayLog` plus the `aurora_replay` verifier; replay recomputes safety decisions from recorded safety-relevant contract/descriptor fields, observation and proposal inputs.
-- Deterministic shared-seed `aurora_benchmark` comparisons for no FEC, 2x repetition, fixed LT-like overhead, class-aware fixed overhead and the adaptive biological policy under IID loss.
+- Deterministic shared-trace `aurora_benchmark` comparisons for no FEC, 2x repetition, fixed LT-like overhead, class-aware fixed overhead and the adaptive biological policy.
+- Canonical, checksum-chained channel-trace corpora for IID, Gilbert–Elliott burst, scheduled-outage, slow-drift and shock/recovery scenarios, including exact trace replay and truncation/corruption rejection.
+- Per-trial benchmark retention, trace/configuration fingerprints, Wilson 95% delivery intervals, transmitted-byte cost, innovative-symbol ratio and overhead-direction-change metrics.
 - Injectable `GenerationCodec`, `TransportPolicy` and `GenerationManager` boundaries with fixed and biological policy implementations.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, delayed completion, exact lengths, empty/tiny payloads, expiry, malformed metadata, integrity failure, bounded state, health consistency, and safety constraints.
 
@@ -19,6 +21,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
 - Made simulation and coding randomness reproducible from the contract seed.
 - Added `--decision-trace <path>` to the main simulator.
+- Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - MinGW executables now link the GCC runtime statically to avoid accidental loading of an ABI-incompatible `libstdc++-6.dll` from unrelated Windows applications on `PATH`.
 
 ### Removed

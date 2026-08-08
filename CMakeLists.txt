@@ -216,6 +216,10 @@ if(BUILD_TESTING)
   aurora_link_common(test_baseline_benchmark)
   add_test(NAME aurora.baseline_benchmark COMMAND test_baseline_benchmark)
 
+  add_executable(test_channel_trace tests/test_channel_trace.cpp)
+  aurora_link_common(test_channel_trace)
+  add_test(NAME aurora.channel_trace COMMAND test_channel_trace)
+
   # Keep standard assert() checks active even in optimized test configurations.
   if(MSVC)
     target_compile_options(test_aurora_organism PRIVATE /UNDEBUG)
@@ -224,6 +228,7 @@ if(BUILD_TESTING)
     target_compile_options(test_decision_replay PRIVATE /UNDEBUG)
     target_compile_options(test_modular_transport PRIVATE /UNDEBUG)
     target_compile_options(test_baseline_benchmark PRIVATE /UNDEBUG)
+    target_compile_options(test_channel_trace PRIVATE /UNDEBUG)
   else()
     target_compile_options(test_aurora_organism PRIVATE -UNDEBUG)
     target_compile_options(test_transport_contract PRIVATE -UNDEBUG)
@@ -231,6 +236,7 @@ if(BUILD_TESTING)
     target_compile_options(test_decision_replay PRIVATE -UNDEBUG)
     target_compile_options(test_modular_transport PRIVATE -UNDEBUG)
     target_compile_options(test_baseline_benchmark PRIVATE -UNDEBUG)
+    target_compile_options(test_channel_trace PRIVATE -UNDEBUG)
   endif()
 
   if(USE_RAPTORQ)
@@ -294,6 +300,7 @@ set(_AURORA_ALL_TARGETS
   test_decision_replay
   test_modular_transport
   test_baseline_benchmark
+  test_channel_trace
   aurora_batch_test
   aurora_deadline_sweep
   aurora_selector_test

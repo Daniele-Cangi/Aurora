@@ -419,7 +419,7 @@ At minimum compare:
 6. Reed–Solomon or another block-code baseline where appropriate;
 7. RaptorQ baseline when a verified implementation is available.
 
-**Current status:** items 1–5 have a deterministic IID-loss harness with shared packet-identity outcomes. Items 6–7 and statistically qualified conclusions remain pending.
+**Current status:** items 1–5 use explicit replayable traces with shared transmission-slot outcomes. Items 6–7 and externally valid comparative conclusions remain pending.
 
 ## Phase 3B — Channel scenarios
 
@@ -436,6 +436,8 @@ At minimum compare:
 - multi-link disagreement;
 - stale channel estimates.
 
+**Current status:** IID, Gilbert–Elliott burst loss, scheduled outages, slow drift and abrupt shock/recovery are implemented as canonical deterministic trace generators. Asymmetric links, reordering/duplication, contact windows, explicit deadline scheduling, energy/harvesting, multi-link disagreement and stale estimates remain pending.
+
 ## Phase 3C — Experimental discipline
 
 For every scenario:
@@ -448,7 +450,7 @@ For every scenario:
 - configuration and commit hash in every output;
 - deterministic replay of individual runs.
 
-**Current status:** shared seeds and deterministic safety-decision replay are implemented. Confidence intervals, build/commit provenance in every result, retained run-level records and broader channel scenarios remain pending.
+**Current status:** shared trace slots, exact trace import/export, checksum-chain integrity, per-trial failed/successful records, configuration/trace fingerprints and Wilson 95% delivery intervals are implemented. Declared compiler/hardware metadata, commit provenance, larger prescribed repetition counts and distributional latency/energy statistics remain pending.
 
 ## Primary metrics
 
@@ -520,7 +522,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
 
-The current `DecisionReplayLog` is a narrower precursor: it verifies safety decisions from canonical recorded inputs and detects accidental corruption/reordering. It does not yet replay channel contacts, generation arrivals or simulated time.
+The current `DecisionReplayLog` verifies safety decisions from canonical recorded inputs. The benchmark can also replay exact delivered/lost channel slots across controller versions. Neither mechanism yet replays contact topology, generation arrivals, energy evolution or the complete simulator time line.
 
 ### Exit gate
 

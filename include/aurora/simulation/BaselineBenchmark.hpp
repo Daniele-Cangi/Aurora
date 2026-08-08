@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ChannelTrace.hpp"
 #include "../control/TransportPolicy.hpp"
 #include "../fec/GenerationCodec.hpp"
 #include "../transport/GenerationManager.hpp"
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -40,10 +42,30 @@ struct BenchmarkScenario {
     std::size_t payload_size = 4096;
     std::size_t symbol_size = 128;
     std::size_t critical_bytes = 512;
-    double packet_loss_rate = 0.25;
     std::size_t trials = 200;
     std::uint64_t seed = 0xA607AULL;
     std::uint64_t deadline_ms = 1'000;
+    ChannelScenario channel;
+
+    bool operator==(const BenchmarkScenario&) const = default;
+};
+
+struct BenchmarkTrialResult {
+    BaselineKind baseline = BaselineKind::NO_FEC;
+    std::size_t trial_index = 0;
+    bool payload_delivered = false;
+    bool critical_delivered = false;
+    std::uint64_t transmitted_bytes = 0;
+    std::uint64_t received_bytes = 0;
+    std::uint32_t transmitted_symbols = 0;
+    std::uint32_t received_symbols = 0;
+    std::uint32_t source_symbols_recovered = 0;
+    std::uint32_t innovative_symbols = 0;
+    std::uint32_t required_source_symbols = 0;
+    double effective_overhead = 0.0;
+    transport::DecodeStatus final_status = transport::DecodeStatus::NO_PROGRESS;
+
+    bool operator==(const BenchmarkTrialResult&) const = default;
 };
 
 struct BenchmarkResult {
@@ -55,21 +77,77 @@ struct BenchmarkResult {
     std::uint64_t received_bytes = 0;
     std::uint64_t useful_payload_bytes = 0;
     std::uint64_t useful_critical_bytes = 0;
+    std::uint64_t transmitted_symbols = 0;
+    std::uint64_t received_symbols = 0;
+    std::uint64_t innovative_symbols = 0;
     double delivery_rate = 0.0;
+    double delivery_ci95_low = 0.0;
+    double delivery_ci95_high = 0.0;
     double critical_delivery_rate = 0.0;
+    double critical_delivery_ci95_low = 0.0;
+    double critical_delivery_ci95_high = 0.0;
     double goodput = 0.0;
+    double transmitted_bytes_per_delivered_byte = 0.0;
+    double innovative_symbol_ratio = 0.0;
+    double mean_effective_overhead = 0.0;
+    std::size_t overhead_direction_changes = 0;
 
     bool operator==(const BenchmarkResult&) const = default;
 };
 
-// Deterministic shared-seed harness. Packet survival is keyed by the packet's
-// segment/seed identity, so symbols common to multiple policies see the same
-// channel outcome. This is a controlled simulation baseline, not field evidence.
+struct BenchmarkReport {
+    BenchmarkScenario scenario;
+    std::string channel_trace_fingerprint;
+    ChannelTraceCorpus channel_traces;
+    std::vector<BenchmarkResult> summaries;
+    std::vector<BenchmarkTrialResult> trial_results;
+
+    bool operator==(const BenchmarkReport&) const = default;
+};
+
+// Deterministic benchmark driven by an explicit channel trace. Every policy sees
+// the same delivered/lost outcome at a given transmission slot. This is synthetic
+// simulation evidence and deliberately excludes wall-clock scheduling.
 class BaselineBenchmark {
 public:
     [[nodiscard]] std::vector<BenchmarkResult> run(
         const BenchmarkScenario& scenario) const {
+        return run_report(scenario).summaries;
+    }
+
+    [[nodiscard]] BenchmarkReport run_report(
+        const BenchmarkScenario& scenario) const {
         validate(scenario);
+        ChannelTraceCorpus corpus;
+        corpus.experiment_seed = scenario.seed;
+        corpus.scenario_id = channel_scenario_id(scenario.channel);
+        const auto slots = required_trace_slots(scenario);
+        ChannelTraceGenerator generator;
+        corpus.traces.reserve(scenario.trials);
+        for (std::size_t trial = 0; trial < scenario.trials; ++trial) {
+            corpus.traces.push_back(generator.generate(
+                scenario.channel, scenario.seed, trial, slots));
+        }
+        return replay(scenario, corpus);
+    }
+
+    [[nodiscard]] BenchmarkReport replay(
+        const BenchmarkScenario& scenario,
+        const ChannelTraceCorpus& corpus) const {
+        validate(scenario);
+        validate_corpus(scenario, corpus);
+
+        BenchmarkReport report;
+        report.scenario = scenario;
+        report.channel_traces = corpus;
+        report.channel_trace_fingerprint = corpus.fingerprint();
+        report.summaries = {
+            result_for(BaselineKind::NO_FEC, scenario.trials),
+            result_for(BaselineKind::REPETITION_2X, scenario.trials),
+            result_for(BaselineKind::FIXED_LT_LIKE, scenario.trials),
+            result_for(BaselineKind::CLASS_AWARE_FIXED, scenario.trials),
+            result_for(BaselineKind::ADAPTIVE_AURORA, scenario.trials)};
+        report.trial_results.reserve(scenario.trials * report.summaries.size());
 
         auto raw_policy = std::make_shared<control::FixedTransportPolicy>(
             "raw-systematic", 1.0, 1.0, 1.0);
@@ -85,13 +163,6 @@ public:
         transport::GenerationManager class_manager(codec, class_policy, 4);
         transport::GenerationManager adaptive_manager(codec, adaptive_policy, 4);
 
-        std::vector<BenchmarkResult> results{
-            result_for(BaselineKind::NO_FEC, scenario.trials),
-            result_for(BaselineKind::REPETITION_2X, scenario.trials),
-            result_for(BaselineKind::FIXED_LT_LIKE, scenario.trials),
-            result_for(BaselineKind::CLASS_AWARE_FIXED, scenario.trials),
-            result_for(BaselineKind::ADAPTIVE_AURORA, scenario.trials)};
-
         const auto contract = make_contract(scenario);
         auto raw_contract = contract;
         raw_contract.minimum_critical_overhead = 1.0;
@@ -99,30 +170,38 @@ public:
         for (std::size_t trial = 0; trial < scenario.trials; ++trial) {
             const auto bytes = make_payload(scenario.payload_size, scenario.seed, trial);
             const auto token = "benchmark-" + std::to_string(trial);
+            const auto& trace = corpus.traces[trial];
 
             const auto raw = raw_manager.spawn(
                 raw_contract, token, bytes, scenario.symbol_size, 0);
-            observe_systematic_baseline(results[0], raw, scenario, trial, 1);
-            observe_systematic_baseline(results[1], raw, scenario, trial, 2);
-            // Keep the shared raw generation store bounded without using its
-            // synthetic baseline loss outcome as adaptive feedback.
-            (void)raw_manager.integrate(
-                raw.descriptor.generation_id, raw.packets, 0);
+            append_trial(report, observe_systematic_baseline(
+                BaselineKind::NO_FEC, raw, trace, trial, 1));
+            append_trial(report, observe_systematic_baseline(
+                BaselineKind::REPETITION_2X, raw, trace, trial, 2));
+            // Complete the internal raw manager independently of the simulated
+            // baseline result so its bounded generation store remains reusable.
+            (void)raw_manager.integrate(raw.descriptor.generation_id, raw.packets, 0);
 
-            observe_coded_baseline(
-                results[2], fixed_manager, contract, token, bytes, scenario, trial);
-            observe_coded_baseline(
-                results[3], class_manager, contract, token, bytes, scenario, trial);
-            observe_coded_baseline(
-                results[4], adaptive_manager, contract, token, bytes, scenario, trial);
+            append_trial(report, observe_coded_baseline(
+                BaselineKind::FIXED_LT_LIKE, fixed_manager, contract,
+                token, bytes, scenario, trace, trial));
+            append_trial(report, observe_coded_baseline(
+                BaselineKind::CLASS_AWARE_FIXED, class_manager, contract,
+                token, bytes, scenario, trace, trial));
+            append_trial(report, observe_coded_baseline(
+                BaselineKind::ADAPTIVE_AURORA, adaptive_manager, contract,
+                token, bytes, scenario, trace, trial));
         }
 
-        for (auto& result : results) finalize(result);
-        return results;
+        for (auto& summary : report.summaries) {
+            finalize(summary, report.trial_results);
+        }
+        return report;
     }
 
 private:
     static void validate(const BenchmarkScenario& scenario) {
+        scenario.channel.validate();
         if (scenario.payload_size == 0 || scenario.symbol_size == 0 || scenario.trials == 0) {
             throw std::invalid_argument(
                 "baseline benchmark: payload, symbol size, and trial count must be positive");
@@ -131,9 +210,8 @@ private:
             throw std::invalid_argument(
                 "baseline benchmark: critical byte count exceeds payload size");
         }
-        const auto source_symbols =
-            (scenario.payload_size + scenario.symbol_size - 1) / scenario.symbol_size;
-        if (source_symbols >= std::numeric_limits<std::uint32_t>::max()) {
+        const auto source_symbols = segmented_source_symbols(scenario);
+        if (source_symbols == 0 || source_symbols >= std::numeric_limits<std::uint32_t>::max() / 4U) {
             throw std::invalid_argument(
                 "baseline benchmark: source symbol count is out of range");
         }
@@ -142,10 +220,47 @@ private:
             throw std::invalid_argument(
                 "baseline benchmark: deadline must permit a terminal expiry observation");
         }
-        if (!std::isfinite(scenario.packet_loss_rate) ||
-            scenario.packet_loss_rate < 0.0 || scenario.packet_loss_rate > 1.0) {
+    }
+
+    static std::size_t segmented_source_symbols(const BenchmarkScenario& scenario) {
+        const auto symbols_for = [&](std::size_t bytes) {
+            return (bytes + scenario.symbol_size - 1) / scenario.symbol_size;
+        };
+        if (scenario.critical_bytes == 0 ||
+            scenario.critical_bytes == scenario.payload_size) {
+            return symbols_for(scenario.payload_size);
+        }
+        return symbols_for(scenario.critical_bytes) +
+               symbols_for(scenario.payload_size - scenario.critical_bytes);
+    }
+
+    static std::size_t required_trace_slots(const BenchmarkScenario& scenario) {
+        return segmented_source_symbols(scenario) * 4U;
+    }
+
+    static void validate_corpus(const BenchmarkScenario& scenario,
+                                const ChannelTraceCorpus& corpus) {
+        if (corpus.traces.size() != scenario.trials) {
             throw std::invalid_argument(
-                "baseline benchmark: packet loss rate must be in [0, 1]");
+                "baseline benchmark: channel trace count does not match trials");
+        }
+        const auto required_slots = required_trace_slots(scenario);
+        const auto expected_scenario_id = channel_scenario_id(scenario.channel);
+        if (corpus.experiment_seed != scenario.seed ||
+            corpus.scenario_id != expected_scenario_id) {
+            throw std::invalid_argument(
+                "baseline benchmark: channel trace metadata does not match configuration");
+        }
+        for (std::size_t i = 0; i < corpus.traces.size(); ++i) {
+            const auto& trace = corpus.traces[i];
+            if (trace.trial_index != i || trace.outcomes.size() < required_slots) {
+                throw std::invalid_argument(
+                    "baseline benchmark: channel trace is too short or out of order");
+            }
+            if (trace.scenario_id != expected_scenario_id) {
+                throw std::invalid_argument(
+                    "baseline benchmark: channel trace scenario does not match configuration");
+            }
         }
     }
 
@@ -165,7 +280,7 @@ private:
         contract.maximum_repair_amplification = 4.0;
         contract.maximum_generation_bytes = scenario.payload_size;
         contract.maximum_source_symbols = static_cast<std::uint32_t>(
-            (scenario.payload_size + scenario.symbol_size - 1) / scenario.symbol_size + 1);
+            segmented_source_symbols(scenario));
         contract.experiment_seed = scenario.seed;
         if (scenario.critical_bytes > 0) {
             contract.segments.push_back({
@@ -192,123 +307,237 @@ private:
         return bytes;
     }
 
-    static bool survives(const BenchmarkScenario& scenario,
-                         std::size_t trial,
-                         const ::fec::Pkt& packet,
-                         std::uint32_t copy) {
-        std::uint64_t value = scenario.seed;
-        value = ::fec::detail::splitmix64(value ^ static_cast<std::uint64_t>(trial));
-        value = ::fec::detail::splitmix64(
-            value ^ (static_cast<std::uint64_t>(packet.segment_id) << 32U) ^ packet.fp.seed);
-        value = ::fec::detail::splitmix64(
-            value ^ (static_cast<std::uint64_t>(copy) * 0xD1B54A32D192ED03ULL));
-        const double sample = static_cast<double>(value >> 11U) * 0x1.0p-53;
-        return sample >= scenario.packet_loss_rate;
-    }
-
-    static std::size_t critical_payload_bytes(
-        const transport::GenerationDescriptor& descriptor) {
-        std::size_t bytes = 0;
-        for (const auto& segment : descriptor.segments) {
-            if (segment.importance == transport::TransportImportance::CRITICAL) {
-                bytes += segment.length;
-            }
-        }
-        return bytes;
-    }
-
-    static void observe_systematic_baseline(
-        BenchmarkResult& result,
+    static BenchmarkTrialResult observe_systematic_baseline(
+        BaselineKind kind,
         const transport::GenerationSpawnResult& generation,
-        const BenchmarkScenario& scenario,
+        const ChannelTrace& trace,
         std::size_t trial,
         std::uint32_t repetitions) {
+        BenchmarkTrialResult result;
+        result.baseline = kind;
+        result.trial_index = trial;
+        result.required_source_symbols = generation.descriptor.total_source_symbols;
+        result.transmitted_symbols = static_cast<std::uint32_t>(
+            generation.packets.size() * repetitions);
+        result.transmitted_bytes = static_cast<std::uint64_t>(result.transmitted_symbols) *
+                                   generation.descriptor.symbol_size;
+        result.effective_overhead = result.required_source_symbols == 0
+            ? 0.0
+            : static_cast<double>(result.transmitted_symbols) /
+              static_cast<double>(result.required_source_symbols);
+
+        std::vector<bool> source_recovered(generation.packets.size(), false);
         std::vector<bool> segment_complete(generation.descriptor.segments.size(), true);
-        for (const auto& packet : generation.packets) {
-            bool recovered = false;
-            for (std::uint32_t copy = 0; copy < repetitions; ++copy) {
-                result.transmitted_bytes += packet.fp.data.size();
-                if (survives(scenario, trial, packet, copy)) {
-                    result.received_bytes += packet.fp.data.size();
-                    recovered = true;
+        std::size_t slot = 0;
+        // Copy-major ordering makes the complete first pass identical to no-FEC.
+        for (std::uint32_t copy = 0; copy < repetitions; ++copy) {
+            for (std::size_t packet_index = 0;
+                 packet_index < generation.packets.size(); ++packet_index, ++slot) {
+                if (trace.delivered(slot)) {
+                    ++result.received_symbols;
+                    result.received_bytes += generation.packets[packet_index].fp.data.size();
+                    source_recovered[packet_index] = true;
                 }
             }
-            if (!recovered) segment_complete.at(packet.segment_id) = false;
+        }
+        for (std::size_t i = 0; i < generation.packets.size(); ++i) {
+            if (source_recovered[i]) {
+                ++result.source_symbols_recovered;
+            } else {
+                segment_complete.at(generation.packets[i].segment_id) = false;
+            }
         }
 
-        const bool payload_complete = std::all_of(
+        result.payload_delivered = std::all_of(
             segment_complete.begin(), segment_complete.end(), [](bool value) { return value; });
         bool has_critical = false;
-        bool critical_complete = true;
+        result.critical_delivered = true;
         for (std::size_t i = 0; i < generation.descriptor.segments.size(); ++i) {
             if (generation.descriptor.segments[i].importance ==
                 transport::TransportImportance::CRITICAL) {
                 has_critical = true;
-                critical_complete = critical_complete && segment_complete[i];
+                result.critical_delivered = result.critical_delivered && segment_complete[i];
             }
         }
-        if (!has_critical) critical_complete = payload_complete;
-        observe_delivery(result, generation.descriptor, payload_complete, critical_complete);
+        if (!has_critical) result.critical_delivered = result.payload_delivered;
+        result.final_status = result.payload_delivered
+            ? transport::DecodeStatus::COMPLETE
+            : transport::DecodeStatus::INSUFFICIENT_RANK;
+        return result;
     }
 
-    static void observe_coded_baseline(
-        BenchmarkResult& result,
+    static BenchmarkTrialResult observe_coded_baseline(
+        BaselineKind kind,
         transport::GenerationManager& manager,
         const transport::TransportContract& contract,
         const std::string& token,
         const std::vector<std::uint8_t>& bytes,
         const BenchmarkScenario& scenario,
+        const ChannelTrace& trace,
         std::size_t trial) {
         const auto generation = manager.spawn(
             contract, token, bytes, scenario.symbol_size, 0);
+        BenchmarkTrialResult result;
+        result.baseline = kind;
+        result.trial_index = trial;
+        result.required_source_symbols = generation.descriptor.total_source_symbols;
+        result.transmitted_symbols = static_cast<std::uint32_t>(generation.packets.size());
+        result.transmitted_bytes = static_cast<std::uint64_t>(result.transmitted_symbols) *
+                                   generation.descriptor.symbol_size;
+        result.effective_overhead = result.required_source_symbols == 0
+            ? 0.0
+            : static_cast<double>(result.transmitted_symbols) /
+              static_cast<double>(result.required_source_symbols);
+
         std::vector<::fec::Pkt> received;
         received.reserve(generation.packets.size());
-        for (const auto& packet : generation.packets) {
-            result.transmitted_bytes += packet.fp.data.size();
-            if (survives(scenario, trial, packet, 0)) {
-                result.received_bytes += packet.fp.data.size();
-                received.push_back(packet);
+        for (std::size_t slot = 0; slot < generation.packets.size(); ++slot) {
+            if (trace.delivered(slot)) {
+                ++result.received_symbols;
+                result.received_bytes += generation.packets[slot].fp.data.size();
+                received.push_back(generation.packets[slot]);
             }
         }
-        auto report = manager.integrate(
-            generation.descriptor.generation_id,
-            received,
-            scenario.deadline_ms);
-        if (!report.delivered()) {
-            report = manager.integrate(
-                generation.descriptor.generation_id,
-                {},
-                scenario.deadline_ms + 1);
+        auto decode = manager.integrate(
+            generation.descriptor.generation_id, received, scenario.deadline_ms);
+        if (!decode.delivered()) {
+            decode = manager.integrate(
+                generation.descriptor.generation_id, {}, scenario.deadline_ms + 1);
         }
-        observe_delivery(
-            result, generation.descriptor, report.delivered(), report.critical_complete);
+        result.payload_delivered = decode.delivered();
+        result.critical_delivered = scenario.critical_bytes == 0
+            ? result.payload_delivered
+            : decode.critical_complete;
+        result.source_symbols_recovered = decode.decoder_rank;
+        result.innovative_symbols = decode.innovative_symbols;
+        result.final_status = decode.status;
+        return result;
     }
 
-    static void observe_delivery(BenchmarkResult& result,
-                                 const transport::GenerationDescriptor& descriptor,
-                                 bool payload_complete,
-                                 bool critical_complete) {
-        if (payload_complete) {
-            ++result.payloads_delivered;
-            result.useful_payload_bytes += descriptor.original_payload_length;
+    static void append_trial(BenchmarkReport& report, BenchmarkTrialResult trial) {
+        auto found = std::find_if(report.summaries.begin(), report.summaries.end(),
+            [&](const auto& summary) { return summary.baseline == trial.baseline; });
+        if (found == report.summaries.end()) {
+            throw std::logic_error("baseline benchmark: missing aggregate result");
         }
-        if (critical_complete) {
-            ++result.critical_segments_delivered;
-            result.useful_critical_bytes += critical_payload_bytes(descriptor);
+        const auto& descriptor_bytes = report.scenario.payload_size;
+        const auto critical_bytes = report.scenario.critical_bytes == 0
+            ? report.scenario.payload_size
+            : report.scenario.critical_bytes;
+        if (trial.payload_delivered) {
+            ++found->payloads_delivered;
+            found->useful_payload_bytes += descriptor_bytes;
         }
+        if (trial.critical_delivered) {
+            ++found->critical_segments_delivered;
+            found->useful_critical_bytes += critical_bytes;
+        }
+        found->transmitted_bytes += trial.transmitted_bytes;
+        found->received_bytes += trial.received_bytes;
+        found->transmitted_symbols += trial.transmitted_symbols;
+        found->received_symbols += trial.received_symbols;
+        found->innovative_symbols += trial.innovative_symbols;
+        report.trial_results.push_back(std::move(trial));
     }
 
-    static void finalize(BenchmarkResult& result) {
+    static std::pair<double, double> wilson_interval(std::size_t successes,
+                                                     std::size_t trials) {
+        if (trials == 0) return {0.0, 0.0};
+        constexpr double z = 1.959963984540054;
+        const auto n = static_cast<double>(trials);
+        const auto p = static_cast<double>(successes) / n;
+        const auto z2 = z * z;
+        const auto denominator = 1.0 + z2 / n;
+        const auto center = (p + z2 / (2.0 * n)) / denominator;
+        const auto radius = z * std::sqrt((p * (1.0 - p) / n) +
+                                          (z2 / (4.0 * n * n))) / denominator;
+        return {std::max(0.0, center - radius), std::min(1.0, center + radius)};
+    }
+
+    static void finalize(BenchmarkResult& result,
+                         const std::vector<BenchmarkTrialResult>& trials) {
         result.delivery_rate = static_cast<double>(result.payloads_delivered) /
                                static_cast<double>(result.trials);
+        const auto delivery_interval = wilson_interval(
+            result.payloads_delivered, result.trials);
+        result.delivery_ci95_low = delivery_interval.first;
+        result.delivery_ci95_high = delivery_interval.second;
         result.critical_delivery_rate =
             static_cast<double>(result.critical_segments_delivered) /
             static_cast<double>(result.trials);
+        const auto critical_interval = wilson_interval(
+            result.critical_segments_delivered, result.trials);
+        result.critical_delivery_ci95_low = critical_interval.first;
+        result.critical_delivery_ci95_high = critical_interval.second;
         result.goodput = result.transmitted_bytes == 0
             ? 0.0
             : static_cast<double>(result.useful_payload_bytes) /
               static_cast<double>(result.transmitted_bytes);
+        result.transmitted_bytes_per_delivered_byte = result.useful_payload_bytes == 0
+            ? 0.0
+            : static_cast<double>(result.transmitted_bytes) /
+              static_cast<double>(result.useful_payload_bytes);
+        result.innovative_symbol_ratio = result.received_symbols == 0
+            ? 0.0
+            : static_cast<double>(result.innovative_symbols) /
+              static_cast<double>(result.received_symbols);
+
+        double overhead_sum = 0.0;
+        double previous_overhead = 0.0;
+        int previous_direction = 0;
+        bool have_previous = false;
+        for (const auto& trial : trials) {
+            if (trial.baseline != result.baseline) continue;
+            overhead_sum += trial.effective_overhead;
+            if (have_previous) {
+                const auto delta = trial.effective_overhead - previous_overhead;
+                const auto direction = delta > 0.0 ? 1 : delta < 0.0 ? -1 : 0;
+                if (direction != 0 && previous_direction != 0 && direction != previous_direction) {
+                    ++result.overhead_direction_changes;
+                }
+                if (direction != 0) previous_direction = direction;
+            }
+            previous_overhead = trial.effective_overhead;
+            have_previous = true;
+        }
+        result.mean_effective_overhead = overhead_sum /
+                                         static_cast<double>(result.trials);
     }
 };
+
+inline void save_benchmark_trial_csv(const BenchmarkReport& report,
+                                     const std::string& path) {
+    std::ofstream output(path, std::ios::trunc);
+    if (!output) {
+        throw std::runtime_error("baseline benchmark: cannot open trial output: " + path);
+    }
+    output << "trace_fingerprint,scenario,scenario_id,experiment_seed,baseline,trial,"
+              "payload_delivered,critical_delivered,transmitted_bytes,received_bytes,"
+              "transmitted_symbols,received_symbols,source_symbols_recovered,"
+              "innovative_symbols,required_source_symbols,effective_overhead,final_status\n";
+    output.precision(17);
+    for (const auto& trial : report.trial_results) {
+        output << report.channel_trace_fingerprint << ','
+               << channel_scenario_name(report.scenario.channel.kind) << ','
+               << report.channel_traces.scenario_id << ','
+               << report.scenario.seed << ','
+               << baseline_name(trial.baseline) << ','
+               << trial.trial_index << ','
+               << trial.payload_delivered << ','
+               << trial.critical_delivered << ','
+               << trial.transmitted_bytes << ','
+               << trial.received_bytes << ','
+               << trial.transmitted_symbols << ','
+               << trial.received_symbols << ','
+               << trial.source_symbols_recovered << ','
+               << trial.innovative_symbols << ','
+               << trial.required_source_symbols << ','
+               << trial.effective_overhead << ','
+               << static_cast<unsigned>(trial.final_status) << '\n';
+    }
+    if (!output) {
+        throw std::runtime_error("baseline benchmark: failed while writing trial output: " + path);
+    }
+}
 
 } // namespace aurora::simulation
