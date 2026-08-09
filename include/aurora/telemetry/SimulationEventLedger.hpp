@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -67,6 +68,7 @@ struct SimulationEventSession {
         simulation::ContactSchedule::always_available();
     simulation::GenerationArrivalSchedule generation_arrival_schedule =
         simulation::GenerationArrivalSchedule::single_immediate();
+    simulation::GenerationSchedulingPolicy generation_scheduling_policy;
     std::vector<SimulationGenerationIdentity> generations;
 };
 
@@ -449,7 +451,7 @@ inline DerivedSimulationEnvironment derive_simulation_environment(
 class SimulationEventLedger {
 public:
     static constexpr std::string_view format_header =
-        "AURORA_SIMULATION_EVENT_LEDGER_V4";
+        "AURORA_SIMULATION_EVENT_LEDGER_V5";
 
     void begin(SimulationEventSession session) {
         if (!records_.empty() || session_.initial_random_state != 0) {
@@ -532,6 +534,8 @@ public:
             validate_session(session_);
             std::vector<std::uint32_t> ranks(session_.generations.size(), 0);
             std::vector<bool> terminal(session_.generations.size(), false);
+            std::vector<std::optional<std::uint64_t>> last_served_at_ms(
+                session_.generations.size());
             for (std::size_t index = 0; index < records_.size(); ++index) {
                 const auto& event = records_[index];
                 validate_event(event);
@@ -549,10 +553,12 @@ public:
                         identity.expires_at_ms,
                         identity.scheduling_importance,
                         identity.arrives_at_ms <= event.simulated_now_ms,
-                        terminal[generation]});
+                        terminal[generation],
+                        last_served_at_ms[generation]});
                 }
                 auto selected = simulation::select_scheduled_generation(
-                    candidates, event.simulated_now_ms);
+                    candidates, event.simulated_now_ms,
+                    session_.generation_scheduling_policy);
                 std::size_t expected_active = session_.generations.size();
                 if (selected) {
                     expected_active = *selected;
@@ -568,7 +574,10 @@ public:
                 }
                 if (event.active_generation_index != expected_active) {
                     throw std::invalid_argument(
-                        "active generation does not match priority/deadline schedule");
+                        "active generation does not match aging/fairness schedule");
+                }
+                if (selected) {
+                    last_served_at_ms[*selected] = event.simulated_now_ms;
                 }
                 if (event.decoder_rank_before !=
                     ranks[event.active_generation_index]) {
@@ -767,8 +776,10 @@ private:
     static void validate_session(const SimulationEventSession& session) {
         session.contact_schedule.validate();
         session.generation_arrival_schedule.validate();
+        session.generation_scheduling_policy.validate();
         if (session.initial_random_state == 0 ||
             session.initial_source_buffer != 0 ||
+            session.generation_scheduling_policy.service_quantum_ms != 1'000 ||
             session.generations.size() !=
                 session.generation_arrival_schedule.arrivals().size() ||
             session.ris_positions.size() > 4096 ||
@@ -1240,6 +1251,9 @@ private:
                << encode_bytes(session.contact_schedule.serialize()) << '|'
                << encode_bytes(
                     session.generation_arrival_schedule.serialize()) << '|'
+               << session.generation_scheduling_policy.service_quantum_ms << '|'
+               << session.generation_scheduling_policy.aging_interval_ms << '|'
+               << session.generation_scheduling_policy.starvation_limit_ms << '|'
                << encode_bytes(encode_generation_identities(
                     session.generations));
         return output.str();
@@ -1248,7 +1262,7 @@ private:
     static SimulationEventSession decode_session(const std::string& encoded) {
         using namespace simulation_event_detail;
         const auto fields = split(encoded, '|');
-        if (fields.size() != 19 || fields[0] != "SESSION") {
+        if (fields.size() != 22 || fields[0] != "SESSION") {
             throw std::invalid_argument(
                 "simulation event ledger: invalid session metadata");
         }
@@ -1276,6 +1290,12 @@ private:
         session.generation_arrival_schedule =
             simulation::GenerationArrivalSchedule::deserialize(
                 decode_bytes(fields[cursor++]));
+        session.generation_scheduling_policy.service_quantum_ms = parse_u64(
+            fields[cursor++], 10, "scheduler service quantum");
+        session.generation_scheduling_policy.aging_interval_ms = parse_u64(
+            fields[cursor++], 10, "scheduler aging interval");
+        session.generation_scheduling_policy.starvation_limit_ms = parse_u64(
+            fields[cursor++], 10, "scheduler starvation limit");
         session.generations = decode_generation_identities(
             decode_bytes(fields[cursor++]));
         return session;
