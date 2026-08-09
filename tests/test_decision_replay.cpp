@@ -181,7 +181,7 @@ int main() {
         second_proposal, stale_controller);
 
     const auto first_encoding = log.serialize();
-    assert(first_encoding.starts_with("AURORA_DECISION_TRACE_V5\n"));
+    assert(first_encoding.starts_with("AURORA_DECISION_TRACE_V6\n"));
     assert(first_encoding == log.serialize());
     const auto restored = telemetry::DecisionReplayLog::deserialize(first_encoding);
     assert(restored.serialize() == first_encoding);
@@ -248,6 +248,21 @@ int main() {
         channel_transition_rejected = true;
     }
     assert(channel_transition_rejected);
+
+    auto contact_mismatch = constrained;
+    contact_mismatch.observed.rf_contact_available = false;
+    contact_mismatch.observed.optical_contact_available = false;
+    contact_mismatch.observed.backscatter_contact_available = false;
+    bool contact_transition_rejected = false;
+    try {
+        telemetry::DecisionReplayLog invalid_contact_log;
+        invalid_contact_log.record(
+            contract, spawned.descriptor, contact_mismatch,
+            first_proposal, first_controller);
+    } catch (const std::invalid_argument&) {
+        contact_transition_rejected = true;
+    }
+    assert(contact_transition_rejected);
 
     auto invalid_controller = first_controller;
     invalid_controller.mode_after = control::OperatingMode::AGGRESSIVE;
@@ -324,18 +339,18 @@ int main() {
     }
     assert(controller_discontinuity_rejected);
 
-    auto legacy_v4 = first_encoding;
-    legacy_v4.replace(
+    auto legacy_v5 = first_encoding;
+    legacy_v5.replace(
         0,
-        std::string("AURORA_DECISION_TRACE_V5").size(),
-        "AURORA_DECISION_TRACE_V4");
-    bool legacy_v4_rejected = false;
+        std::string("AURORA_DECISION_TRACE_V6").size(),
+        "AURORA_DECISION_TRACE_V5");
+    bool legacy_v5_rejected = false;
     try {
-        (void)telemetry::DecisionReplayLog::deserialize(legacy_v4);
+        (void)telemetry::DecisionReplayLog::deserialize(legacy_v5);
     } catch (const std::invalid_argument&) {
-        legacy_v4_rejected = true;
+        legacy_v5_rejected = true;
     }
-    assert(legacy_v4_rejected);
+    assert(legacy_v5_rejected);
 
     auto corrupted = first_encoding;
     const auto record_position = corrupted.find("R|");

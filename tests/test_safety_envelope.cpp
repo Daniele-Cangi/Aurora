@@ -112,6 +112,26 @@ int main() {
     assert(cost_limited.decision.permitted);
     assert(cost_limited.decision.transmission_attempts == 2);
 
+    state.source_energy_reserve = 0.8;
+    state.rf_contact_available = false;
+    state.optical_contact_available = false;
+    state.backscatter_contact_available = true;
+    const auto contact_fallback = envelope.constrain(
+        contract, spawned.descriptor, state, proposed);
+    assert(contact_fallback.decision.permitted);
+    assert(contact_fallback.decision.link == LinkMode::BACKSCATTER);
+    assert(contact_fallback.constraints_applied.front() ==
+           "proposed link replaced by an allowed in-contact link");
+
+    state.backscatter_contact_available = false;
+    const auto contact_outage = envelope.constrain(
+        contract, spawned.descriptor, state, proposed);
+    assert(!contact_outage.decision.permitted);
+    assert(contact_outage.decision.transmission_attempts == 0);
+    state.rf_contact_available = true;
+    state.optical_contact_available = true;
+    state.backscatter_contact_available = true;
+
     state.source_energy_reserve = 0.2005;
     const auto crosses_reserve = envelope.constrain(
         cost_contract, spawned.descriptor, state, costly);

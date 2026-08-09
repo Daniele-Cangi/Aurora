@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DecisionReplayLog.hpp"
+#include "../simulation/ContactSchedule.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -47,6 +48,8 @@ struct SimulationEventSession {
     SimulationPoint destination_position;
     std::vector<SimulationPoint> ris_positions;
     std::vector<SimulationObstacle> obstacles;
+    simulation::ContactSchedule contact_schedule =
+        simulation::ContactSchedule::always_available();
 };
 
 struct SimulationStepEvent {
@@ -82,6 +85,7 @@ struct SimulationStepEvent {
     double snr_optical_db = 0.0;
     double snr_backscatter_db = 0.0;
     std::vector<std::uint8_t> ris_phases;
+    simulation::ContactAvailability contact_available;
 };
 
 struct SimulationReplayVerification {
@@ -328,9 +332,41 @@ inline std::vector<std::uint8_t> decode_phases(const std::string& encoded) {
     return phases;
 }
 
+inline std::string encode_bytes(const std::string& bytes) {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string encoded;
+    encoded.reserve(bytes.size() * 2);
+    for (const unsigned char value : bytes) {
+        encoded.push_back(digits[value >> 4U]);
+        encoded.push_back(digits[value & 0x0fU]);
+    }
+    return encoded;
+}
+
+inline std::string decode_bytes(const std::string& encoded) {
+    if (encoded.size() % 2 != 0) {
+        throw std::invalid_argument(
+            "simulation event ledger: malformed byte string");
+    }
+    const auto nibble = [](char value) -> unsigned {
+        if (value >= '0' && value <= '9') return value - '0';
+        if (value >= 'a' && value <= 'f') return value - 'a' + 10U;
+        if (value >= 'A' && value <= 'F') return value - 'A' + 10U;
+        throw std::invalid_argument(
+            "simulation event ledger: malformed byte string");
+    };
+    std::string bytes;
+    bytes.reserve(encoded.size() / 2);
+    for (std::size_t index = 0; index < encoded.size(); index += 2) {
+        bytes.push_back(static_cast<char>(
+            (nibble(encoded[index]) << 4U) | nibble(encoded[index + 1])));
+    }
+    return bytes;
+}
+
 } // namespace simulation_event_detail
 
-// Identity over the descriptor fields intentionally carried by the V5
+// Identity over the descriptor fields intentionally carried by the V6
 // decision trace. This remains stable after DecisionReplayLog serialization,
 // unlike the richer in-memory generation fingerprint.
 inline std::uint64_t simulation_descriptor_identity(
@@ -389,7 +425,7 @@ inline DerivedSimulationEnvironment derive_simulation_environment(
 class SimulationEventLedger {
 public:
     static constexpr std::string_view format_header =
-        "AURORA_SIMULATION_EVENT_LEDGER_V1";
+        "AURORA_SIMULATION_EVENT_LEDGER_V2";
 
     void begin(SimulationEventSession session) {
         if (!records_.empty() || session_.initial_random_state != 0) {
@@ -462,6 +498,7 @@ public:
                 verify_continuity(index);
                 verify_environment(records_[index]);
                 verify_harvest(records_[index]);
+                verify_contact(records_[index]);
                 ++result.records_verified;
             }
         } catch (const std::exception& error) {
@@ -641,6 +678,7 @@ public:
 
 private:
     static void validate_session(const SimulationEventSession& session) {
+        session.contact_schedule.validate();
         if (session.initial_random_state == 0 ||
             session.generation_id.empty() ||
             session.generation_id.find('|') != std::string::npos ||
@@ -795,6 +833,12 @@ private:
                 session_.descriptor_fingerprint ||
             record.trace.observed.now_ms != event.simulated_now_ms ||
             record.trace.observed.decoder_rank != event.decoder_rank_before ||
+            record.trace.observed.rf_contact_available !=
+                event.contact_available.rf ||
+            record.trace.observed.optical_contact_available !=
+                event.contact_available.optical ||
+            record.trace.observed.backscatter_contact_available !=
+                event.contact_available.backscatter ||
             !near(record.trace.observed.source_energy_reserve,
                   event.source_energy_after_tick_j /
                       session_.source_energy_capacity_j) ||
@@ -860,6 +904,15 @@ private:
                 event.destination_energy_after_tick_j, destination_after)) {
             throw std::invalid_argument(
                 "harvesting transition does not match the recorded model");
+        }
+    }
+
+    void verify_contact(const SimulationStepEvent& event) const {
+        if (!(event.contact_available ==
+              session_.contact_schedule.availability_at(
+                  event.simulated_now_ms))) {
+            throw std::invalid_argument(
+                "contact availability does not match the declared schedule");
         }
     }
 
@@ -962,14 +1015,15 @@ private:
                << double_hex(session.destination_position.x) << '|'
                << double_hex(session.destination_position.y) << '|'
                << encode_points(session.ris_positions) << '|'
-               << encode_obstacles(session.obstacles);
+               << encode_obstacles(session.obstacles) << '|'
+               << encode_bytes(session.contact_schedule.serialize());
         return output.str();
     }
 
     static SimulationEventSession decode_session(const std::string& encoded) {
         using namespace simulation_event_detail;
         const auto fields = split(encoded, '|');
-        if (fields.size() != 19 || fields[0] != "SESSION") {
+        if (fields.size() != 20 || fields[0] != "SESSION") {
             throw std::invalid_argument(
                 "simulation event ledger: invalid session metadata");
         }
@@ -997,6 +1051,8 @@ private:
         session.destination_position.y = parse_double(fields[cursor++], "destination y");
         session.ris_positions = decode_points(fields[cursor++]);
         session.obstacles = decode_obstacles(fields[cursor++]);
+        session.contact_schedule = simulation::ContactSchedule::deserialize(
+            decode_bytes(fields[cursor++]));
         return session;
     }
 
@@ -1033,7 +1089,8 @@ private:
                << double_hex(event.snr_rf_db) << '|'
                << double_hex(event.snr_optical_db) << '|'
                << double_hex(event.snr_backscatter_db) << '|'
-               << encode_phases(event.ris_phases);
+               << encode_phases(event.ris_phases) << '|'
+               << static_cast<unsigned>(event.contact_available.mask());
         return output.str();
     }
 
@@ -1041,7 +1098,7 @@ private:
                                             std::uint64_t previous_checksum) {
         using namespace simulation_event_detail;
         const auto fields = split(encoded, '|');
-        if (fields.size() != 31 || fields[0] != "STEP") {
+        if (fields.size() != 32 || fields[0] != "STEP") {
             throw std::invalid_argument(
                 "simulation event ledger: invalid step record");
         }
@@ -1081,6 +1138,14 @@ private:
         event.snr_optical_db = parse_double(fields[cursor++], "optical SNR");
         event.snr_backscatter_db = parse_double(fields[cursor++], "backscatter SNR");
         event.ris_phases = decode_phases(fields[cursor++]);
+        const auto contact_mask = parse_u64(
+            fields[cursor++], 10, "contact availability");
+        if (contact_mask > 0x7U) {
+            throw std::invalid_argument(
+                "simulation event ledger: invalid contact availability");
+        }
+        event.contact_available = simulation::ContactAvailability::from_mask(
+            static_cast<std::uint8_t>(contact_mask));
         return event;
     }
 
