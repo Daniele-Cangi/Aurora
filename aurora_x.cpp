@@ -29,6 +29,7 @@ using namespace std; using namespace chrono;
 #include "include/aurora/safety/SafetyMonitor.hpp"
 #include "include/aurora/safety/SafetyEnvelope.hpp"
 #include "include/aurora/telemetry/DecisionReplayLog.hpp"
+#include "include/aurora/telemetry/SimulationEventLedger.hpp"
 #ifdef AURORA_USE_LIBRAPTORQ
 #include "fec/AuroraRaptorQ.hpp"
 #endif
@@ -392,6 +393,7 @@ struct Engine {
   aurora::safety::SafetyMonitor safety_monitor;
   aurora::safety::SafetyEnvelope safety_envelope;
   aurora::telemetry::DecisionReplayLog decision_trace_log;
+  aurora::telemetry::SimulationEventLedger simulation_event_log;
   
   // T1: Flag per stream interattivo e stato corrente
   bool interactive_stream_ = false;
@@ -427,10 +429,119 @@ struct Engine {
     for (auto& packet : spawned.packets) {
       net.get("SRC")->buf.push_back(std::move(packet));
     }
+    begin_simulation_event_session(source, *net.get("DST"));
     cout << "[GENERATION] id=" << generation_id
          << " codec=" << generation_descriptor.codec_id
          << " K=" << K << " T=" << T
          << " emitted=" << net.get("SRC")->buf.size() << endl;
+  }
+
+  void begin_simulation_event_session(const Node& source,
+                                      const Node& destination) {
+    aurora::telemetry::SimulationEventSession session;
+    session.experiment_seed = I.experiment_seed;
+    session.initial_random_state = util::rng.s;
+    session.generation_id = generation_id;
+    session.descriptor_fingerprint =
+      aurora::telemetry::simulation_descriptor_identity(generation_descriptor);
+    session.required_rank = static_cast<uint32_t>(K);
+    session.initial_source_buffer = source.buf.size();
+    session.source_energy_capacity_j = source.bat.cap_J;
+    session.source_initial_energy_j = source.bat.E;
+    session.source_harvest_w = source.harvest_W;
+    session.destination_energy_capacity_j = destination.bat.cap_J;
+    session.destination_initial_energy_j = destination.bat.E;
+    session.destination_harvest_w = destination.harvest_W;
+    session.source_position = {source.pos.x, source.pos.y};
+    session.destination_position = {destination.pos.x, destination.pos.y};
+    session.ris_positions.reserve(net.W.ris.size());
+    for (const auto& tile : net.W.ris) {
+      session.ris_positions.push_back({tile.p.x, tile.p.y});
+    }
+    session.obstacles.reserve(net.W.obs.size());
+    for (const auto& obstacle : net.W.obs) {
+      session.obstacles.push_back({
+        {obstacle.first.x, obstacle.first.y}, obstacle.second});
+    }
+    simulation_event_log.begin(std::move(session));
+  }
+
+  aurora::telemetry::SimulationStepEvent begin_simulation_step(
+      int step, Node& source, Node& destination) {
+    aurora::telemetry::SimulationStepEvent event;
+    event.step = static_cast<uint64_t>(step);
+    event.simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+    event.random_before = util::rng.s;
+    event.source_energy_before_tick_j = source.bat.E;
+    event.destination_energy_before_tick_j = destination.bat.E;
+    event.source_buffer_before = source.buf.size();
+    event.destination_buffer_before = destination.buf.size();
+    event.destination_inbox_before = destination.inbox.size();
+    event.decoder_rank_before = last_decode_report.decoder_rank;
+
+    for (auto& node : net.nodes) {
+      node->tick(1.0);
+      node->ingest();
+    }
+    event.source_energy_after_tick_j = source.bat.E;
+    event.destination_energy_after_tick_j = destination.bat.E;
+    event.destination_buffer_after_ingest = destination.buf.size();
+    event.destination_inbox_after_ingest = destination.inbox.size();
+
+    event.entropy_residual = entropy_residual(
+      static_cast<int>(event.decoder_rank_before), K);
+    event.ris_phases.reserve(net.W.ris.size());
+    for (auto& tile : net.W.ris) {
+      const double angle =
+        atan2(tile.p.y-source.pos.y, tile.p.x-source.pos.x) +
+        atan2(destination.pos.y-tile.p.y, destination.pos.x-tile.p.x);
+      const double jitter =
+        event.entropy_residual * (util::rng.uni()-0.5) * 0.9;
+      const double phase = fmod(angle + jitter, 2*M_PI);
+      const int index = static_cast<int>(llround(phase/(M_PI/2.0))) & 3;
+      tile.phase2b = static_cast<uint8_t>(index);
+      event.ris_phases.push_back(tile.phase2b);
+    }
+    event.random_after_ris = util::rng.s;
+    HAL::RIS_SET_PHASES(event.ris_phases);
+
+    event.illumination = clamp(
+      (event.entropy_residual - 0.10) / 0.25, 0.0, 1.0);
+    net.W.illum = event.illumination;
+#ifdef FIELD_BUILD
+    if (net.W.illum > 0.0) {
+      if (!HAL::CW_ON(0.05)) net.W.illum = 0.0;
+    } else {
+      HAL::CW_OFF();
+    }
+    event.illumination = net.W.illum;
+#endif
+
+    event.world_gain = net.W.multibounce_best(
+      source.pos, destination.pos, 2);
+    event.snr_rf_db = phy::snr_db(
+      event.world_gain, phy::Mode::RF, event.illumination);
+    event.snr_optical_db = phy::snr_db(
+      event.world_gain, phy::Mode::IR, event.illumination);
+    event.snr_backscatter_db = phy::snr_db(
+      event.world_gain, phy::Mode::BACKSCATTER, event.illumination);
+    return event;
+  }
+
+  void finish_simulation_step(
+      aurora::telemetry::SimulationStepEvent event,
+      const Node& source,
+      const Node& destination,
+      const aurora::transport::DecodeReport& report) {
+    event.random_after_action = util::rng.s;
+    event.source_energy_after_action_j = source.bat.E;
+    event.destination_energy_after_action_j = destination.bat.E;
+    event.source_buffer_after_action = source.buf.size();
+    event.destination_buffer_after_action = destination.buf.size();
+    event.destination_inbox_after_action = destination.inbox.size();
+    event.decoder_rank_after = report.decoder_rank;
+    event.decode_status = static_cast<uint8_t>(report.status);
+    simulation_event_log.record(event);
   }
 
   static double entropy_residual(int have, int need){ double e=max(0, need-have)/(double)need; return min(1.0,max(0.0,e)); }
@@ -783,11 +894,8 @@ struct Engine {
       if (interactive_stream_ && (step % 20 == 0)) {
         reload_interactive_config("aurora_interactive_config.json");
       }
-      // tick/ingest
-      for(auto& n: net.nodes) n->tick(1.0), n->ingest();
-
+      auto simulation_event = begin_simulation_step(step, S, D);
       int have=static_cast<int>(last_decode_report.decoder_rank);
-      double eres=entropy_residual(have,K);
 
       // progress
       if(step % 20 == 0 || have >= K) {
@@ -796,33 +904,7 @@ struct Engine {
              << " SRC_SoC=" << setprecision(0) << (S.bat.soc()*100) << "%" << endl;
       }
 
-      // RIS phase-field alignment
-      for(auto& t: net.W.ris){
-        double ang = atan2(t.p.y-S.pos.y, t.p.x-S.pos.x) + atan2(D.pos.y-t.p.y, D.pos.x-t.p.x);
-        double jitter = (eres)*(util::rng.uni()-0.5)*0.9;
-        double ph = fmod(ang + jitter, 2*M_PI); int idx = (int)llround(ph/(M_PI/2.0)) & 3; t.phase2b = (uint8_t)idx;
-      }
-      { vector<uint8_t> ph; ph.reserve(net.W.ris.size()); for(auto&t:net.W.ris) ph.push_back(t.phase2b); HAL::RIS_SET_PHASES(ph); }
-
-      // **PATCH**: RIS illumination ramp (attiva presto, rampa 0.10->0.35)
-      {
-        double on = (eres - 0.10) / 0.25;  // 0.10 -> 0.35
-        if (on < 0.0) on = 0.0;
-        if (on > 1.0) on = 1.0;
-        net.W.illum = on;
-#ifdef FIELD_BUILD
-        // FIELD_BUILD keeps the real-time HAL result authoritative. In the
-        // simulator, world illumination is a synthetic environment input and
-        // must not consume the radio's wall-clock duty limiter.
-        if(net.W.illum > 0.0) {
-          if(!HAL::CW_ON(0.05)) net.W.illum = 0.0;
-        } else {
-          HAL::CW_OFF();
-        }
-#endif
-      }
-
-      const uint64_t simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+      const uint64_t simulated_now_ms = simulation_event.simulated_now_ms;
       const double elapsed = static_cast<double>(simulated_now_ms) / 1000.0;
 
       // Stato per optimizer (channel-aware + priority)
@@ -831,11 +913,11 @@ struct Engine {
       Sx.deadline_left_s=max(0.0, I.deadline_s-elapsed);
       Sx.duty_left_rf=S.duty_remaining_fraction(simulated_now_ms);
 
-      double g_probe = net.W.multibounce_best(S.pos, D.pos, 2);
       Sx.chan = chan;
-      Sx.chan.push_snr(phy::Mode::RF,          phy::snr_db(g_probe, phy::Mode::RF,          net.W.illum));
-      Sx.chan.push_snr(phy::Mode::BACKSCATTER, phy::snr_db(g_probe, phy::Mode::BACKSCATTER, net.W.illum));
-      Sx.chan.push_snr(phy::Mode::IR,          phy::snr_db(g_probe, phy::Mode::IR,          net.W.illum));
+      Sx.chan.push_snr(phy::Mode::RF, simulation_event.snr_rf_db);
+      Sx.chan.push_snr(
+        phy::Mode::BACKSCATTER, simulation_event.snr_backscatter_db);
+      Sx.chan.push_snr(phy::Mode::IR, simulation_event.snr_optical_db);
       Sx.decode_rate_symps = (have>0? have / max(1.0, elapsed) : 0.0);
 
       // priority
@@ -947,6 +1029,7 @@ struct Engine {
       update_controller_and_record(
         opt, decision_trace, proposal_transition, sample, simulated_now_ms,
         controller_before, controller_mode_before);
+      finish_simulation_step(simulation_event, S, D, res);
 
       emit_health_event(step, nerve_health_, aurora::FlowClass::NERVE);
       emit_health_event(step, gland_health_, aurora::FlowClass::GLAND);
@@ -1049,11 +1132,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
       engine.reload_interactive_config("aurora_interactive_config.json");
     }
     
-    // Usa la stessa logica di run() ma in versione continua
-    for(auto& n: engine.net.nodes) n->tick(1.0), n->ingest();
-
+    auto simulation_event = engine.begin_simulation_step(step, S, D);
     int have=static_cast<int>(engine.last_decode_report.decoder_rank);
-    double e=max(0, engine.K-have)/(double)engine.K; double eres=min(1.0,max(0.0,e));
 
     // progress (meno verboso in lab mode)
     if(step % 100 == 0 || have >= engine.K) {
@@ -1062,30 +1142,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
            << " SRC_SoC=" << setprecision(0) << (S.bat.soc()*100) << "%" << endl;
     }
 
-    // RIS phase-field alignment
-    for(auto& t: engine.net.W.ris){
-      double ang = atan2(t.p.y-S.pos.y, t.p.x-S.pos.x) + atan2(D.pos.y-t.p.y, D.pos.x-t.p.x);
-      double jitter = (eres)*(util::rng.uni()-0.5)*0.9;
-      double ph = fmod(ang + jitter, 2*M_PI); int idx = (int)llround(ph/(M_PI/2.0)) & 3; t.phase2b = (uint8_t)idx;
-    }
-    { vector<uint8_t> ph; ph.reserve(engine.net.W.ris.size()); for(auto&t:engine.net.W.ris) ph.push_back(t.phase2b); HAL::RIS_SET_PHASES(ph); }
-
-    // RIS illumination ramp
-    {
-      double on = (eres - 0.10) / 0.25;
-      if (on < 0.0) on = 0.0;
-      if (on > 1.0) on = 1.0;
-      engine.net.W.illum = on;
-#ifdef FIELD_BUILD
-      if(engine.net.W.illum > 0.0) {
-        if(!HAL::CW_ON(0.05)) engine.net.W.illum = 0.0;
-      } else {
-        HAL::CW_OFF();
-      }
-#endif
-    }
-
-    const uint64_t simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+    const uint64_t simulated_now_ms = simulation_event.simulated_now_ms;
     const double elapsed = static_cast<double>(simulated_now_ms) / 1000.0;
 
     // Stato per optimizer
@@ -1094,11 +1151,11 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     Sx.deadline_left_s=max(0.0, engine.I.deadline_s-elapsed);
     Sx.duty_left_rf=S.duty_remaining_fraction(simulated_now_ms);
 
-    double g_probe = engine.net.W.multibounce_best(S.pos, D.pos, 2);
     Sx.chan = chan;
-    Sx.chan.push_snr(phy::Mode::RF,          phy::snr_db(g_probe, phy::Mode::RF,          engine.net.W.illum));
-    Sx.chan.push_snr(phy::Mode::BACKSCATTER, phy::snr_db(g_probe, phy::Mode::BACKSCATTER, engine.net.W.illum));
-    Sx.chan.push_snr(phy::Mode::IR,          phy::snr_db(g_probe, phy::Mode::IR,          engine.net.W.illum));
+    Sx.chan.push_snr(phy::Mode::RF, simulation_event.snr_rf_db);
+    Sx.chan.push_snr(
+      phy::Mode::BACKSCATTER, simulation_event.snr_backscatter_db);
+    Sx.chan.push_snr(phy::Mode::IR, simulation_event.snr_optical_db);
     Sx.decode_rate_symps = (have>0? have / max(1.0, elapsed) : 0.0);
 
     Sx.prio = (Sx.deadline_left_s < engine.I.deadline_s*0.15 ? cl::Priority::CRITICAL
@@ -1206,6 +1263,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     engine.update_controller_and_record(
       opt, decision_trace, proposal_transition, sample, simulated_now_ms,
       controller_before, controller_mode_before);
+    engine.finish_simulation_step(simulation_event, S, D, res);
 
     engine.emit_health_event(step, engine.nerve_health_, aurora::FlowClass::NERVE);
     engine.emit_health_event(step, engine.gland_health_, aurora::FlowClass::GLAND);
@@ -1236,6 +1294,7 @@ int main(int argc, char* argv[]){
   // T2: Parsing argomenti per modalità interattiva
   bool interactive_lab = false;
   std::string decision_trace_path;
+  std::string event_ledger_path;
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--interactive-lab") {
       interactive_lab = true;
@@ -1245,10 +1304,22 @@ int main(int argc, char* argv[]){
         return 2;
       }
       decision_trace_path = argv[++i];
+    } else if (std::string(argv[i]) == "--event-ledger") {
+      if (i + 1 >= argc) {
+        std::cerr << "--event-ledger requires a file path\n";
+        return 2;
+      }
+      event_ledger_path = argv[++i];
     }
   }
 
   auto engine = std::make_unique<Engine>();
+#ifdef FIELD_BUILD
+  if (!event_ledger_path.empty()) {
+    std::cerr << "--event-ledger is simulation-only and is unavailable in FIELD_BUILD\n";
+    return 2;
+  }
+#endif
   bool ok = false;
   if (interactive_lab) {
     ok = aurora_run_interactive_lab(*engine, 5000);
@@ -1264,6 +1335,19 @@ int main(int argc, char* argv[]){
                 << " records=" << engine->decision_trace_log.records().size() << '\n';
     } catch (const std::exception& error) {
       std::cerr << "[REPLAY] failed to save decision trace: " << error.what() << '\n';
+      return 2;
+    }
+  }
+  if (!event_ledger_path.empty()) {
+    try {
+      engine->simulation_event_log.save(event_ledger_path);
+      std::cerr << "[REPLAY] simulation event ledger saved: "
+                << event_ledger_path
+                << " records=" << engine->simulation_event_log.records().size()
+                << '\n';
+    } catch (const std::exception& error) {
+      std::cerr << "[REPLAY] failed to save simulation event ledger: "
+                << error.what() << '\n';
       return 2;
     }
   }
