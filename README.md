@@ -51,16 +51,16 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Adaptive transport policy | Modular prototype | Injected codec and policy interfaces, fixed policies, NERVE/GLAND/MUSCLE adaptive policy, bounded per-generation manager, failure response and gradual relaxation | Threshold, PID and risk-sensitive alternatives are not implemented; current evidence remains synthetic despite covering multiple channel traces |
 | Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; the new benchmark isolates coding policy, not the complete cross-layer optimizer |
 | Transport health | Implemented first slice | Consumes only `DecodeReport`; progress polls update coverage without being counted as delivery failures | Aggregation/confidence and multi-flow recovery semantics still need development |
-| Safety supervision | Partial | Hard envelope constrains generation/segment expiry, freshness, post-action reserve, allowed links, simulated RF airtime, active-segment repair capacity and critical protection; the legacy monitor distinguishes `NO_EVIDENCE` | The legacy monitor still lacks hysteresis and calibrated severity thresholds |
+| Safety supervision | Partial | Hard envelope constrains generation/segment expiry, freshness, post-action reserve, allowed links, simulated RF airtime, active-segment repair capacity and critical protection; the supervisory monitor distinguishes `NO_EVIDENCE`, uses separate enter/exit thresholds, and requires stable escalation/recovery evidence | Thresholds remain configurable research values rather than calibrated field limits; complete controller-state replay is still pending |
 | Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | The default single-flow scenario provides limited transition evidence |
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
-| Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade | `FIELD_BUILD` currently still uses stubbed device operations |
+| Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
 | Telemetry and replay | Implemented prototype | JSONL engine telemetry, V3 decision traces with per-attempt LBT samples, channel evidence and exact energy/duty transitions, plus checksum-chained benchmark channel traces | Action replay is deterministic from recorded simulation evidence; inter-step harvesting/RIS evolution and physical hardware remain outside the trace |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty refusal, critical scheduling, safety replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
-| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, replayable channel/action traces, Wilson confidence intervals, per-trial records and safety-decision replay | Build/commit provenance and complete inter-step simulator event replay are not implemented |
+| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, replayable channel/action traces, Wilson confidence intervals, per-trial records, safety-decision replay, and configure-time commit/compiler/build/profile fingerprints in benchmark output | Provenance records the producing build but does not authenticate it; complete inter-step simulator event replay is not implemented |
 
 ---
 
@@ -130,7 +130,7 @@ Aurora-X includes experimental layers for:
 - SNR-based or UCB-based physical-link selection;
 - telemetry-driven feedback.
 
-The main simulator now applies the optimizer through a hard `SafetyEnvelope`, transmits the organism's spawned packets, and feeds the same authoritative `DecodeReport` to delivery and transport health. The older safety monitor remains a supervisory prototype. It now reports `NO_EVIDENCE` until active-flow observations exist and does not average inactive classes as healthy samples, but it is not presented as a complete hysteretic safety system.
+The main simulator now applies the optimizer through a hard `SafetyEnvelope`, transmits the organism's spawned packets, and feeds the same authoritative `DecodeReport` to delivery and transport health. The supervisory monitor reports `NO_EVIDENCE` until active-flow observations exist, excludes inactive classes, applies Schmitt-style enter/exit thresholds, and requires consecutive evidence before changing an established state. `NO_EVIDENCE` forces conservative operation, and recovery from `CRITICAL` must pass through `DEGRADED`. This bounds mode oscillation, but the configured thresholds are not calibrated physical limits and the monitor's internal transition state is not yet part of the decision replay.
 
 ### 6. Security and provenance experiments
 
@@ -391,9 +391,9 @@ The current baseline harness compares, under identical seeds and constraints:
 - class-aware fixed overhead;
 - adaptive Aurora policy;
 
-The harness now supports IID loss, Gilbert–Elliott bursts, scheduled outages, slow drift and shock/recovery traces, per-trial retention, Wilson confidence intervals, goodput, transmitted-byte cost, innovative-symbol ratio and overhead-direction changes. Innovative-symbol ratio is reported only for coded policies; overhead-direction changes only for the adaptive policy; and cost per delivered byte is `N/A` when no payload is delivered.
+The harness now supports IID loss, Gilbert–Elliott bursts, scheduled outages, slow drift and shock/recovery traces, per-trial retention, Wilson confidence intervals, goodput, transmitted-byte cost, innovative-symbol ratio and overhead-direction changes. Every summary and retained trial also declares its configure-time commit, clean/dirty source state, compiler, target, build type/generator, execution profile, crypto/FEC profile, and a canonical build fingerprint. Benchmark evidence is always labelled `simulation`; even a `BUILD_FIELD=ON` executable remains `field-experimental` with `hardware_validated=false`. Innovative-symbol ratio is reported only for coded policies; overhead-direction changes only for the adaptive policy; and cost per delivered byte is `N/A` when no payload is delivered.
 
-An established block or fountain codec, asymmetric/contact/deadline scenarios, build provenance and calibrated resource/energy costs remain required before comparative claims can be made.
+An established block or fountain codec, asymmetric/contact/deadline scenarios, authenticated provenance and calibrated resource/energy costs remain required before comparative claims can be made.
 
 Primary metrics:
 
@@ -425,4 +425,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop and first synthetic channel campaigns are coherent, modular and replayable. The next obligation is to add established-code and deadline/contact comparisons with build provenance before extending into more links, custody or hardware claims.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop and first synthetic channel campaigns are coherent, modular and replayable. The next obligation is to add established-code and deadline/contact comparisons, then calibrate resource evidence, before extending into more links, custody or hardware claims.

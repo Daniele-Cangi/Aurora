@@ -153,6 +153,8 @@ void simulation_attempts_replay_hal_channel_energy_and_duty() {
 void safety_monitor_ignores_inactive_flow_classes() {
     aurora::safety::SafetyConfig config;
     config.window_size = 5;
+    config.escalation_samples = 1;
+    config.recovery_samples = 1;
 
     aurora::safety::SafetyMonitor empty(config);
     aurora::safety::TelemetrySample no_evidence;
@@ -173,6 +175,87 @@ void safety_monitor_ignores_inactive_flow_classes() {
     assert(active_failure.state() == aurora::safety::SafetyState::HEALTHY);
 }
 
+void safety_monitor_requires_stable_transitions() {
+    aurora::safety::SafetyConfig config;
+    config.window_size = 1;
+    config.minimum_window_samples = 1;
+    config.escalation_samples = 2;
+    config.recovery_samples = 3;
+    aurora::safety::SafetyMonitor monitor(config);
+
+    aurora::safety::TelemetrySample healthy;
+    healthy.duty_left = 1.0;
+    healthy.nerve_has_evidence = true;
+    healthy.nerve_fail_rate = 0.1;
+    monitor.observe(healthy);
+    assert(monitor.state() == aurora::safety::SafetyState::HEALTHY);
+
+    auto failed = healthy;
+    failed.nerve_fail_rate = 0.9;
+    monitor.observe(failed);
+    assert(monitor.state() == aurora::safety::SafetyState::HEALTHY);
+    assert(monitor.pending_state() == aurora::safety::SafetyState::CRITICAL);
+    assert(monitor.pending_observations() == 1);
+
+    monitor.observe(healthy);
+    assert(monitor.state() == aurora::safety::SafetyState::HEALTHY);
+    assert(monitor.pending_observations() == 0);
+
+    monitor.observe(failed);
+    monitor.observe(failed);
+    assert(monitor.state() == aurora::safety::SafetyState::CRITICAL);
+
+    healthy.nerve_fail_rate = 0.0;
+    for (int i = 0; i < 2; ++i) monitor.observe(healthy);
+    assert(monitor.state() == aurora::safety::SafetyState::CRITICAL);
+    monitor.observe(healthy);
+    assert(monitor.state() == aurora::safety::SafetyState::DEGRADED);
+
+    auto boundary = healthy;
+    boundary.nerve_fail_rate = 0.18;
+    monitor.observe(boundary);
+    assert(monitor.state() == aurora::safety::SafetyState::DEGRADED);
+    for (int i = 0; i < 3; ++i) monitor.observe(healthy);
+    assert(monitor.state() == aurora::safety::SafetyState::HEALTHY);
+}
+
+void safety_monitor_rejects_invalid_inputs() {
+    auto invalid_config = aurora::safety::SafetyConfig::default_config();
+    invalid_config.recovery_samples = 0;
+    bool config_rejected = false;
+    try {
+        (void)aurora::safety::SafetyMonitor(invalid_config);
+    } catch (const std::invalid_argument&) {
+        config_rejected = true;
+    }
+    assert(config_rejected);
+
+    aurora::safety::SafetyMonitor monitor;
+    aurora::safety::TelemetrySample invalid_sample;
+    invalid_sample.duty_left = 1.1;
+    bool sample_rejected = false;
+    try {
+        monitor.observe(invalid_sample);
+    } catch (const std::invalid_argument&) {
+        sample_rejected = true;
+    }
+    assert(sample_rejected);
+}
+
+void optimizer_treats_missing_evidence_as_conservative() {
+    cl::Optimizer optimizer;
+    FlowHealth apparently_healthy;
+    apparently_healthy.ewma_fail_rate = 0.0;
+    apparently_healthy.ewma_coverage = 1.0;
+
+    optimizer.update_mode(
+        aurora::safety::SafetyState::NO_EVIDENCE,
+        apparently_healthy,
+        apparently_healthy,
+        apparently_healthy);
+    assert(optimizer.mode() == cl::Mode::CONSERVATIVE);
+}
+
 } // namespace
 
 int main() {
@@ -182,6 +265,9 @@ int main() {
     critical_only_selects_only_critical_packets();
     simulation_attempts_replay_hal_channel_energy_and_duty();
     safety_monitor_ignores_inactive_flow_classes();
+    safety_monitor_requires_stable_transitions();
+    safety_monitor_rejects_invalid_inputs();
+    optimizer_treats_missing_evidence_as_conservative();
     std::cout << "runtime correctness tests passed\n";
     return 0;
 }

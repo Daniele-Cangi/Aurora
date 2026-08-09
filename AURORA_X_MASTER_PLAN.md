@@ -381,6 +381,8 @@ The supervisor must use separate enter and exit thresholds, minimum dwell times,
 - Energy reserve and duty constraints cannot be violated by panic response.
 - CRITICAL mode cannot transition directly to aggressive exploration.
 
+**Current status:** the supervisory monitor now preserves `NO_EVIDENCE`, excludes inactive flow classes, validates telemetry fractions, uses separate enter/exit thresholds and consecutive transition evidence, requires `CRITICAL -> DEGRADED -> HEALTHY` recovery, and forces conservative operation when evidence is missing. The hard `SafetyEnvelope` remains authoritative for per-action constraints. Confidence calibration, timestamp-based stale-health detection and full controller-state replay remain pending.
+
 ## Phase 2D — Policy comparison
 
 Implement interchangeable policies:
@@ -450,7 +452,7 @@ For every scenario:
 - configuration and commit hash in every output;
 - deterministic replay of individual runs.
 
-**Current status:** shared trace slots, exact trace import/export, checksum-chain integrity, per-trial failed/successful records, configuration/trace fingerprints and Wilson 95% delivery intervals are implemented. Declared compiler/hardware metadata, commit provenance, larger prescribed repetition counts and distributional latency/energy statistics remain pending.
+**Current status:** shared trace slots, exact trace import/export, checksum-chain integrity, per-trial failed/successful records, configuration/trace fingerprints, Wilson 95% delivery intervals, and configure-time commit/compiler/target/build provenance are implemented. Outputs explicitly distinguish the simulation evidence level from the `field-experimental` build profile and never mark current hardware as validated. Authenticated provenance, larger prescribed repetition counts and distributional latency/energy statistics remain pending.
 
 ## Primary metrics
 

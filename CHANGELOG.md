@@ -17,6 +17,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Dependency-light GitHub Actions build and CTest jobs for Linux and Windows.
 - Independent segment expiry, late-symbol accounting, per-segment decode reports, and reliability-prioritized runtime repair selection.
 - V3 decision traces with per-attempt LBT, channel, energy and simulation-duty transition evidence.
+- Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
 
 ### Changed
@@ -30,6 +31,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.
+- Rebuilt the supervisory safety monitor as a hysteretic state machine with separate enter/exit thresholds, consecutive transition evidence and staged critical recovery.
+- Made `NO_EVIDENCE` force conservative optimizer mode instead of allowing stale healthy metrics to authorize exploration.
 - MinGW executables now link the GCC runtime statically to avoid accidental loading of an ABI-incompatible `libstdc++-6.dll` from unrelated Windows applications on `PATH`.
 
 ### Removed
@@ -43,6 +46,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Made the safety envelope cap known action energy, RF airtime and remaining repair budget before authorization.
 - Stopped inactive flow classes from diluting active failures in the legacy safety monitor; insufficient active evidence is now explicit.
 - Normalized per-segment rounding so initial and runtime emission cannot exceed the global repair-amplification limit.
+- Rejected invalid safety telemetry fractions and invalid hysteresis configurations instead of allowing undefined policy transitions.
 
 ### Added
 - **FASE 3b**: Adaptive weight loss mechanism based on success streaks
