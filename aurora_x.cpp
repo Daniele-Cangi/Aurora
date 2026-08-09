@@ -30,6 +30,7 @@ using namespace std; using namespace chrono;
 #include "include/aurora/safety/SafetyEnvelope.hpp"
 #include "include/aurora/telemetry/DecisionReplayLog.hpp"
 #include "include/aurora/telemetry/SimulationEventLedger.hpp"
+#include "include/aurora/simulation/GenerationArrivalSchedule.hpp"
 #ifdef AURORA_USE_LIBRAPTORQ
 #include "fec/AuroraRaptorQ.hpp"
 #endif
@@ -396,6 +397,24 @@ struct Engine {
   aurora::telemetry::SimulationEventLedger simulation_event_log;
   aurora::simulation::ContactSchedule contact_schedule =
     aurora::simulation::ContactSchedule::always_available();
+  aurora::simulation::GenerationArrivalSchedule generation_arrival_schedule =
+    aurora::simulation::GenerationArrivalSchedule::single_immediate();
+
+  struct ScheduledGeneration {
+    aurora::simulation::GenerationArrival arrival;
+    Token token;
+    Bundle bundle;
+    vector<uint8_t> payload;
+    aurora::transport::GenerationDescriptor descriptor;
+    aurora::transport::DecodeReport report;
+    vector<fec::Pkt> pending_packets;
+    int required_rank = 0;
+    bool arrived = false;
+    bool terminal = false;
+    bool delivered = false;
+  };
+  vector<ScheduledGeneration> scheduled_generations;
+  size_t active_generation_index = 0;
   
   // T1: Flag per stream interattivo e stato corrente
   bool interactive_stream_ = false;
@@ -419,23 +438,96 @@ struct Engine {
     net.add("DST",{0.94,0.92});
 
     const uint64_t deterministic_epoch_s = 1'700'000'000ULL + (I.experiment_seed % 1'000'000ULL);
-    Token t = Token::make("ACCESS:TEMP_KEY=abc123;ZONE=42;TTL=24h;CLASS=NORM;", 24*3600,
-                          deterministic_epoch_s);
-    Bundle b = Bundle::make(t); token_id=t.id; bundle_id=b.bid;
-    auto bytes = tok2bytes(t);
-    payload_size = bytes.size();
-    auto spawned = organism->spawn(I, token_id, bytes, T, 0);
-    generation_descriptor = spawned.descriptor;
-    generation_id = generation_descriptor.generation_id;
-    K = spawned.K;
-    for (auto& packet : spawned.packets) {
-      net.get("SRC")->buf.push_back(std::move(packet));
+    scheduled_generations.clear();
+    scheduled_generations.reserve(generation_arrival_schedule.arrivals().size());
+    for (const auto& arrival : generation_arrival_schedule.arrivals()) {
+      const string token_payload =
+        "ACCESS:TEMP_KEY=abc123;ZONE=42;TTL=24h;CLASS=NORM;ARRIVAL=" +
+        arrival.tag + ";";
+      Token token = Token::make(
+        token_payload, 24*3600,
+        deterministic_epoch_s + arrival.arrives_at_ms / 1000ULL);
+      Bundle bundle = Bundle::make(token);
+      auto bytes = tok2bytes(token);
+      auto spawned = organism->spawn(
+        I, token.id, bytes, T, arrival.arrives_at_ms);
+      ScheduledGeneration generation;
+      generation.arrival = arrival;
+      generation.token = std::move(token);
+      generation.bundle = std::move(bundle);
+      generation.payload = std::move(bytes);
+      generation.descriptor = std::move(spawned.descriptor);
+      generation.pending_packets = std::move(spawned.packets);
+      generation.required_rank = spawned.K;
+      scheduled_generations.push_back(std::move(generation));
     }
+    activate_generation(0);
     begin_simulation_event_session(source, *net.get("DST"));
-    cout << "[GENERATION] id=" << generation_id
-         << " codec=" << generation_descriptor.codec_id
-         << " K=" << K << " T=" << T
-         << " emitted=" << net.get("SRC")->buf.size() << endl;
+    cout << "[GENERATION_SCHEDULE] arrivals=" << scheduled_generations.size()
+         << " fingerprint=" << generation_arrival_schedule.fingerprint() << endl;
+  }
+
+  void activate_generation(size_t index) {
+    if (index >= scheduled_generations.size()) {
+      throw logic_error("active generation index is out of range");
+    }
+    active_generation_index = index;
+    const auto& generation = scheduled_generations[index];
+    token_id = generation.token.id;
+    bundle_id = generation.bundle.bid;
+    generation_id = generation.descriptor.generation_id;
+    generation_descriptor = generation.descriptor;
+    last_decode_report = generation.report;
+    K = generation.required_rank;
+    payload_size = generation.payload.size();
+  }
+
+  pair<uint32_t, uint64_t> release_scheduled_arrival(
+      uint64_t simulated_now_ms, Node& source) {
+    for (size_t index = 0; index < scheduled_generations.size(); ++index) {
+      auto& generation = scheduled_generations[index];
+      if (!generation.arrived &&
+          generation.arrival.arrives_at_ms == simulated_now_ms) {
+        const auto count = generation.pending_packets.size();
+        for (auto& packet : generation.pending_packets) {
+          source.buf.push_back(std::move(packet));
+        }
+        generation.pending_packets.clear();
+        generation.arrived = true;
+        cout << "[GENERATION_ARRIVAL] index=" << index
+             << " tag=" << generation.arrival.tag
+             << " at_ms=" << simulated_now_ms
+             << " id=" << generation.descriptor.generation_id
+             << " packets=" << count << endl;
+        return {static_cast<uint32_t>(index), count};
+      }
+    }
+    return {aurora::telemetry::SimulationStepEvent::no_generation_arrival, 0};
+  }
+
+  void select_active_generation(uint64_t simulated_now_ms) {
+    for (size_t index = 0; index < scheduled_generations.size(); ++index) {
+      const auto& generation = scheduled_generations[index];
+      if (generation.arrived && !generation.terminal) {
+        activate_generation(index);
+        return;
+      }
+    }
+    for (size_t index = scheduled_generations.size(); index-- > 0;) {
+      if (scheduled_generations[index].arrived &&
+          scheduled_generations[index].arrival.arrives_at_ms <= simulated_now_ms) {
+        activate_generation(index);
+        return;
+      }
+    }
+    throw logic_error("no scheduled generation is active");
+  }
+
+  bool all_generations_terminal() const {
+    return all_of(scheduled_generations.begin(), scheduled_generations.end(),
+      [](const auto& generation) {
+        return generation.arrived && generation.terminal;
+      });
   }
 
   void begin_simulation_event_session(const Node& source,
@@ -443,10 +535,6 @@ struct Engine {
     aurora::telemetry::SimulationEventSession session;
     session.experiment_seed = I.experiment_seed;
     session.initial_random_state = util::rng.s;
-    session.generation_id = generation_id;
-    session.descriptor_fingerprint =
-      aurora::telemetry::simulation_descriptor_identity(generation_descriptor);
-    session.required_rank = static_cast<uint32_t>(K);
     session.initial_source_buffer = source.buf.size();
     session.source_energy_capacity_j = source.bat.cap_J;
     session.source_initial_energy_j = source.bat.E;
@@ -466,14 +554,32 @@ struct Engine {
         {obstacle.first.x, obstacle.first.y}, obstacle.second});
     }
     session.contact_schedule = contact_schedule;
+    session.generation_arrival_schedule = generation_arrival_schedule;
+    session.generations.reserve(scheduled_generations.size());
+    for (const auto& generation : scheduled_generations) {
+      session.generations.push_back({
+        generation.arrival.arrives_at_ms,
+        generation.arrival.tag,
+        generation.descriptor.generation_id,
+        aurora::telemetry::simulation_descriptor_identity(
+          generation.descriptor),
+        static_cast<uint32_t>(generation.required_rank),
+        generation.pending_packets.size()});
+    }
     simulation_event_log.begin(std::move(session));
   }
 
   aurora::telemetry::SimulationStepEvent begin_simulation_step(
-      int step, Node& source, Node& destination) {
+      int step, Node& source, Node& destination,
+      uint32_t arrived_generation_index,
+      uint64_t arrived_source_packets) {
     aurora::telemetry::SimulationStepEvent event;
     event.step = static_cast<uint64_t>(step);
     event.simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+    event.active_generation_index =
+      static_cast<uint32_t>(active_generation_index);
+    event.arrived_generation_index = arrived_generation_index;
+    event.arrived_source_packets = arrived_source_packets;
     event.contact_available = contact_schedule.availability_at(
       event.simulated_now_ms);
     event.random_before = util::rng.s;
@@ -639,6 +745,7 @@ struct Engine {
 
     for(uint32_t i=0; i<trace.decision.transmission_attempts; ++i){
       const auto eligible = [&](const fec::Pkt& packet) {
+        if(packet.generation_id != generation_id) return false;
         if(packet.segment_id >= generation_descriptor.segments.size()) return false;
         const auto& segment = generation_descriptor.segments[packet.segment_id];
         if(simulated_now_ms > segment.expires_at_ms) return false;
@@ -899,12 +1006,16 @@ struct Engine {
     }
 
     // Iterazioni massime (sufficienti anche per deadline lunghe)
-    for(int step=0; step<500 && !delivered; ++step){
+    for(int step=0; step<500 && !all_generations_terminal(); ++step){
       // T3: Ricarica config periodicamente (ogni 20 step)
       if (interactive_stream_ && (step % 20 == 0)) {
         reload_interactive_config("aurora_interactive_config.json");
       }
-      auto simulation_event = begin_simulation_step(step, S, D);
+      const uint64_t step_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+      const auto arrival = release_scheduled_arrival(step_now_ms, S);
+      select_active_generation(step_now_ms);
+      auto simulation_event = begin_simulation_step(
+        step, S, D, arrival.first, arrival.second);
       int have=static_cast<int>(last_decode_report.decoder_rank);
 
       // progress
@@ -920,7 +1031,10 @@ struct Engine {
       // Stato per optimizer (channel-aware + priority)
       cl::NetworkState Sx{};
       Sx.soc_src=S.bat.soc(); Sx.symbols_have=have; Sx.symbols_need=K;
-      Sx.deadline_left_s=max(0.0, I.deadline_s-elapsed);
+      Sx.deadline_left_s = generation_descriptor.expires_at_ms > simulated_now_ms
+        ? static_cast<double>(generation_descriptor.expires_at_ms -
+            simulated_now_ms) / 1000.0
+        : 0.0;
       Sx.duty_left_rf=S.duty_remaining_fraction(simulated_now_ms);
 
       Sx.chan = chan;
@@ -993,16 +1107,29 @@ struct Engine {
         }
       }
       
-      auto res = organism->integrate(generation_id, received_packets, simulated_now_ms);
+      auto& active_generation = scheduled_generations[active_generation_index];
+      auto res = active_generation.terminal
+        ? active_generation.report
+        : organism->integrate(
+            generation_id, received_packets, simulated_now_ms);
       last_decode_report = res;
-      apply_flow_feedback(res, flow_profile.flow_class);
-      if (res.delivered()) {
-        delivered = true;
+      active_generation.report = res;
+      if (!active_generation.terminal) {
+        apply_flow_feedback(res, flow_profile.flow_class);
+      }
+      if (!active_generation.terminal && res.delivered()) {
+        active_generation.terminal = true;
+        active_generation.delivered = true;
         out = res.payload;
         used.clear();
         for (const auto& packet : received_packets) used.push_back(packet.fp.data);
         cout << "[SUCCESS] authoritative generation decode rank="
              << res.decoder_rank << "/" << res.required_rank << endl;
+      }
+      const bool became_expired = !active_generation.terminal &&
+        res.status == aurora::transport::DecodeStatus::EXPIRED;
+      if (became_expired) {
+        active_generation.terminal = true;
       }
       
       TelemetrySample sample;
@@ -1048,11 +1175,10 @@ struct Engine {
       
       telemetry.record(sample);
 
-      if(!delivered && res.status == aurora::transport::DecodeStatus::EXPIRED){
+      if(became_expired){
           cout << "[TIMEOUT] Deadline exceeded at step " << step 
                << " (elapsed=" << fixed << setprecision(2) << elapsed 
                << "s, deadline=" << I.deadline_s << "s)" << endl;
-          break;
       }
 
       epoch += 1.0;
@@ -1065,6 +1191,9 @@ struct Engine {
       }
     }
 
+    delivered = all_generations_terminal() &&
+      all_of(scheduled_generations.begin(), scheduled_generations.end(),
+        [](const auto& generation) { return generation.delivered; });
     if(delivered){
       try {
         Token rx = bytes2tok(out);
@@ -1143,7 +1272,11 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
       engine.reload_interactive_config("aurora_interactive_config.json");
     }
     
-    auto simulation_event = engine.begin_simulation_step(step, S, D);
+    const uint64_t step_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+    const auto arrival = engine.release_scheduled_arrival(step_now_ms, S);
+    engine.select_active_generation(step_now_ms);
+    auto simulation_event = engine.begin_simulation_step(
+      step, S, D, arrival.first, arrival.second);
     int have=static_cast<int>(engine.last_decode_report.decoder_rank);
 
     // progress (meno verboso in lab mode)
@@ -1309,6 +1442,8 @@ int main(int argc, char* argv[]){
   std::string event_ledger_path;
   std::string contact_schedule_path;
   std::string contact_schedule_out_path;
+  std::string generation_arrival_schedule_path;
+  std::string generation_arrival_schedule_out_path;
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--interactive-lab") {
       interactive_lab = true;
@@ -1336,14 +1471,28 @@ int main(int argc, char* argv[]){
         return 2;
       }
       contact_schedule_out_path = argv[++i];
+    } else if (std::string(argv[i]) == "--generation-arrivals") {
+      if (i + 1 >= argc) {
+        std::cerr << "--generation-arrivals requires a file path\n";
+        return 2;
+      }
+      generation_arrival_schedule_path = argv[++i];
+    } else if (std::string(argv[i]) == "--generation-arrivals-out") {
+      if (i + 1 >= argc) {
+        std::cerr << "--generation-arrivals-out requires a file path\n";
+        return 2;
+      }
+      generation_arrival_schedule_out_path = argv[++i];
     }
   }
 
   auto engine = std::make_unique<Engine>();
 #ifdef FIELD_BUILD
   if (!event_ledger_path.empty() || !contact_schedule_path.empty() ||
-      !contact_schedule_out_path.empty()) {
-    std::cerr << "event/contact replay options are simulation-only and unavailable in FIELD_BUILD\n";
+      !contact_schedule_out_path.empty() ||
+      !generation_arrival_schedule_path.empty() ||
+      !generation_arrival_schedule_out_path.empty()) {
+    std::cerr << "event/contact/arrival replay options are simulation-only and unavailable in FIELD_BUILD\n";
     return 2;
   }
 #endif
@@ -1356,6 +1505,21 @@ int main(int argc, char* argv[]){
                 << error.what() << '\n';
       return 2;
     }
+  }
+  if (!generation_arrival_schedule_path.empty()) {
+    try {
+      engine->generation_arrival_schedule =
+        aurora::simulation::GenerationArrivalSchedule::load(
+          generation_arrival_schedule_path);
+    } catch (const std::exception& error) {
+      std::cerr << "[ARRIVAL] failed to load schedule: "
+                << error.what() << '\n';
+      return 2;
+    }
+  }
+  if (interactive_lab && !generation_arrival_schedule_path.empty()) {
+    std::cerr << "generation arrival replay is unavailable in interactive-lab mode\n";
+    return 2;
   }
   bool ok = false;
   if (interactive_lab) {
@@ -1397,6 +1561,21 @@ int main(int argc, char* argv[]){
                 << '\n';
     } catch (const std::exception& error) {
       std::cerr << "[CONTACT] failed to save schedule: "
+                << error.what() << '\n';
+      return 2;
+    }
+  }
+  if (!generation_arrival_schedule_out_path.empty()) {
+    try {
+      engine->generation_arrival_schedule.save(
+        generation_arrival_schedule_out_path);
+      std::cerr << "[ARRIVAL] schedule saved: "
+                << generation_arrival_schedule_out_path
+                << " arrivals="
+                << engine->generation_arrival_schedule.arrivals().size()
+                << '\n';
+    } catch (const std::exception& error) {
+      std::cerr << "[ARRIVAL] failed to save schedule: "
                 << error.what() << '\n';
       return 2;
     }

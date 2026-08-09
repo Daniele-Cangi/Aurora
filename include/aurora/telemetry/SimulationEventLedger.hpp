@@ -2,6 +2,7 @@
 
 #include "DecisionReplayLog.hpp"
 #include "../simulation/ContactSchedule.hpp"
+#include "../simulation/GenerationArrivalSchedule.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -31,12 +33,21 @@ struct SimulationObstacle {
     double radius = 0.0;
 };
 
-struct SimulationEventSession {
-    std::uint64_t experiment_seed = 0;
-    std::uint64_t initial_random_state = 0;
+struct SimulationGenerationIdentity {
+    std::uint64_t arrives_at_ms = 0;
+    std::string tag;
     std::string generation_id;
     std::uint64_t descriptor_fingerprint = 0;
     std::uint32_t required_rank = 0;
+    std::uint64_t initial_source_packets = 0;
+
+    friend bool operator==(const SimulationGenerationIdentity&,
+                           const SimulationGenerationIdentity&) = default;
+};
+
+struct SimulationEventSession {
+    std::uint64_t experiment_seed = 0;
+    std::uint64_t initial_random_state = 0;
     std::uint64_t initial_source_buffer = 0;
     double source_energy_capacity_j = 0.0;
     double source_initial_energy_j = 0.0;
@@ -50,11 +61,20 @@ struct SimulationEventSession {
     std::vector<SimulationObstacle> obstacles;
     simulation::ContactSchedule contact_schedule =
         simulation::ContactSchedule::always_available();
+    simulation::GenerationArrivalSchedule generation_arrival_schedule =
+        simulation::GenerationArrivalSchedule::single_immediate();
+    std::vector<SimulationGenerationIdentity> generations;
 };
 
 struct SimulationStepEvent {
+    static constexpr std::uint32_t no_generation_arrival =
+        std::numeric_limits<std::uint32_t>::max();
+
     std::uint64_t step = 0;
     std::uint64_t simulated_now_ms = 0;
+    std::uint32_t active_generation_index = 0;
+    std::uint32_t arrived_generation_index = no_generation_arrival;
+    std::uint64_t arrived_source_packets = 0;
     std::uint64_t random_before = 0;
     std::uint64_t random_after_ris = 0;
     std::uint64_t random_after_action = 0;
@@ -425,7 +445,7 @@ inline DerivedSimulationEnvironment derive_simulation_environment(
 class SimulationEventLedger {
 public:
     static constexpr std::string_view format_header =
-        "AURORA_SIMULATION_EVENT_LEDGER_V2";
+        "AURORA_SIMULATION_EVENT_LEDGER_V3";
 
     void begin(SimulationEventSession session) {
         if (!records_.empty() || session_.initial_random_state != 0) {
@@ -438,6 +458,7 @@ public:
     void record(const SimulationStepEvent& event) {
         ensure_started();
         validate_event(event);
+        verify_generation_arrival(event);
         if (event.step != records_.size() ||
             event.simulated_now_ms != event.step * 1000ULL) {
             throw std::invalid_argument(
@@ -451,7 +472,8 @@ public:
                 !simulation_event_detail::near(
                     event.destination_energy_before_tick_j,
                     session_.destination_initial_energy_j) ||
-                event.source_buffer_before != session_.initial_source_buffer ||
+                event.source_buffer_before != session_.initial_source_buffer +
+                    event.arrived_source_packets ||
                 event.destination_buffer_before != 0 ||
                 event.destination_inbox_before != 0 ||
                 event.decoder_rank_before != 0) {
@@ -467,15 +489,26 @@ public:
                 !simulation_event_detail::near(
                     event.destination_energy_before_tick_j,
                     previous.destination_energy_after_action_j) ||
-                event.source_buffer_before != previous.source_buffer_after_action ||
+                event.source_buffer_before != previous.source_buffer_after_action +
+                    event.arrived_source_packets ||
                 event.destination_buffer_before !=
                     previous.destination_buffer_after_action ||
                 event.destination_inbox_before !=
-                    previous.destination_inbox_after_action ||
-                event.decoder_rank_before != previous.decoder_rank_after) {
+                    previous.destination_inbox_after_action) {
                 throw std::invalid_argument(
                     "simulation event ledger: inter-step state is not contiguous");
             }
+        }
+        std::uint32_t expected_rank = 0;
+        for (auto previous = records_.rbegin(); previous != records_.rend(); ++previous) {
+            if (previous->active_generation_index == event.active_generation_index) {
+                expected_rank = previous->decoder_rank_after;
+                break;
+            }
+        }
+        if (event.decoder_rank_before != expected_rank) {
+            throw std::invalid_argument(
+                "simulation event ledger: generation rank is not contiguous");
         }
         records_.push_back(event);
     }
@@ -493,12 +526,51 @@ public:
         try {
             ensure_started();
             validate_session(session_);
+            std::vector<std::uint32_t> ranks(session_.generations.size(), 0);
+            std::vector<bool> terminal(session_.generations.size(), false);
             for (std::size_t index = 0; index < records_.size(); ++index) {
-                validate_event(records_[index]);
+                const auto& event = records_[index];
+                validate_event(event);
                 verify_continuity(index);
-                verify_environment(records_[index]);
-                verify_harvest(records_[index]);
-                verify_contact(records_[index]);
+                verify_generation_arrival(event);
+                std::size_t expected_active = session_.generations.size();
+                for (std::size_t generation = 0;
+                     generation < session_.generations.size(); ++generation) {
+                    if (session_.generations[generation].arrives_at_ms <=
+                            event.simulated_now_ms && !terminal[generation]) {
+                        expected_active = generation;
+                        break;
+                    }
+                }
+                if (expected_active == session_.generations.size()) {
+                    for (std::size_t generation = session_.generations.size();
+                         generation-- > 0;) {
+                        if (session_.generations[generation].arrives_at_ms <=
+                            event.simulated_now_ms) {
+                            expected_active = generation;
+                            break;
+                        }
+                    }
+                }
+                if (event.active_generation_index != expected_active) {
+                    throw std::invalid_argument(
+                        "active generation does not match FIFO schedule");
+                }
+                if (event.decoder_rank_before !=
+                    ranks[event.active_generation_index]) {
+                    throw std::invalid_argument(
+                        "generation rank is not contiguous");
+                }
+                ranks[event.active_generation_index] = event.decoder_rank_after;
+                const auto status = static_cast<transport::DecodeStatus>(
+                    event.decode_status);
+                if (status == transport::DecodeStatus::COMPLETE ||
+                    status == transport::DecodeStatus::EXPIRED) {
+                    terminal[event.active_generation_index] = true;
+                }
+                verify_environment(event);
+                verify_harvest(event);
+                verify_contact(event);
                 ++result.records_verified;
             }
         } catch (const std::exception& error) {
@@ -533,15 +605,16 @@ public:
                     "record count does not match decision trace");
             }
             if (records_.empty()) return result;
-            verify_session_binding(decisions.records().front());
-
             std::array<std::vector<bool>, 3> link_outcomes;
-            std::set<std::pair<std::uint32_t, std::uint32_t>> destination_seen;
-            std::vector<std::pair<std::uint32_t, std::uint32_t>> pending_inbox;
+            using PacketIdentity =
+                std::tuple<std::string, std::uint32_t, std::uint32_t>;
+            std::set<PacketIdentity> destination_seen;
+            std::vector<PacketIdentity> pending_inbox;
 
             for (std::size_t index = 0; index < records_.size(); ++index) {
                 const auto& event = records_[index];
                 const auto& decision = decisions.records()[index];
+                verify_session_binding(event, decision);
                 verify_decision_binding(event, decision, link_outcomes);
                 verify_arrivals(event, decision, destination_seen, pending_inbox);
                 verify_action_rng(event, decision);
@@ -679,15 +752,29 @@ public:
 private:
     static void validate_session(const SimulationEventSession& session) {
         session.contact_schedule.validate();
+        session.generation_arrival_schedule.validate();
         if (session.initial_random_state == 0 ||
-            session.generation_id.empty() ||
-            session.generation_id.find('|') != std::string::npos ||
-            session.descriptor_fingerprint == 0 ||
-            session.required_rank == 0 || session.initial_source_buffer == 0 ||
+            session.initial_source_buffer != 0 ||
+            session.generations.size() !=
+                session.generation_arrival_schedule.arrivals().size() ||
             session.ris_positions.size() > 4096 ||
             session.obstacles.size() > 4096) {
             throw std::invalid_argument(
                 "simulation event ledger: invalid session identity or bounds");
+        }
+        for (std::size_t index = 0; index < session.generations.size(); ++index) {
+            const auto& identity = session.generations[index];
+            const auto& arrival =
+                session.generation_arrival_schedule.arrivals()[index];
+            if (identity.arrives_at_ms != arrival.arrives_at_ms ||
+                identity.tag != arrival.tag || identity.generation_id.empty() ||
+                identity.generation_id.find('|') != std::string::npos ||
+                identity.descriptor_fingerprint == 0 ||
+                identity.required_rank == 0 ||
+                identity.initial_source_packets == 0) {
+                throw std::invalid_argument(
+                    "simulation event ledger: invalid generation identity");
+            }
         }
         const auto valid_energy = [](double capacity, double energy, double harvest) {
             return std::isfinite(capacity) && capacity > 0.0 &&
@@ -731,7 +818,8 @@ private:
         const auto valid_energy = [](double value) {
             return std::isfinite(value) && value >= 0.0;
         };
-        if (event.random_before == 0 || event.random_after_ris == 0 ||
+        if (event.active_generation_index >= session_.generations.size() ||
+            event.random_before == 0 || event.random_after_ris == 0 ||
             event.random_after_action == 0 ||
             !valid_energy(event.source_energy_before_tick_j) ||
             !valid_energy(event.source_energy_after_tick_j) ||
@@ -749,8 +837,10 @@ private:
             event.ris_phases.size() != session_.ris_positions.size() ||
             std::any_of(event.ris_phases.begin(), event.ris_phases.end(),
                 [](std::uint8_t phase) { return phase > 3U; }) ||
-            event.decoder_rank_before > session_.required_rank ||
-            event.decoder_rank_after > session_.required_rank ||
+            event.decoder_rank_before >
+                session_.generations[event.active_generation_index].required_rank ||
+            event.decoder_rank_after >
+                session_.generations[event.active_generation_index].required_rank ||
             event.decode_status > static_cast<std::uint8_t>(
                 transport::DecodeStatus::INSUFFICIENT_RANK)) {
             throw std::invalid_argument(
@@ -767,7 +857,10 @@ private:
             std::uint64_t seeded = session_.experiment_seed != 0
                 ? session_.experiment_seed
                 : 0xC0FFEEBEEFULL;
-            simulation_event_detail::next_random(seeded);
+            for (std::size_t generation = 0;
+                 generation < session_.generations.size(); ++generation) {
+                simulation_event_detail::next_random(seeded);
+            }
             if (event.random_before != session_.initial_random_state ||
                 seeded != session_.initial_random_state) {
                 throw std::invalid_argument(
@@ -782,44 +875,71 @@ private:
             !simulation_event_detail::near(
                 event.destination_energy_before_tick_j,
                 previous.destination_energy_after_action_j) ||
-            event.source_buffer_before != previous.source_buffer_after_action ||
+            event.source_buffer_before != previous.source_buffer_after_action +
+                event.arrived_source_packets ||
             event.destination_buffer_before !=
                 previous.destination_buffer_after_action ||
             event.destination_inbox_before !=
-                previous.destination_inbox_after_action ||
-            event.decoder_rank_before != previous.decoder_rank_after) {
+                previous.destination_inbox_after_action) {
             throw std::invalid_argument("inter-step state is not contiguous");
         }
     }
 
-    void verify_session_binding(const DecisionReplayRecord& first) const {
-        if (session_.experiment_seed != first.contract.experiment_seed ||
-            session_.generation_id != first.descriptor.generation_id ||
-            session_.descriptor_fingerprint !=
-                simulation_descriptor_identity(first.descriptor) ||
-            session_.required_rank != first.descriptor.total_source_symbols) {
+    void verify_generation_arrival(const SimulationStepEvent& event) const {
+        std::uint32_t expected_index = SimulationStepEvent::no_generation_arrival;
+        std::uint64_t expected_packets = 0;
+        for (std::size_t index = 0; index < session_.generations.size(); ++index) {
+            const auto& generation = session_.generations[index];
+            if (generation.arrives_at_ms == event.simulated_now_ms) {
+                expected_index = static_cast<std::uint32_t>(index);
+                expected_packets = generation.initial_source_packets;
+                break;
+            }
+        }
+        if (event.arrived_generation_index != expected_index ||
+            event.arrived_source_packets != expected_packets) {
+            throw std::invalid_argument(
+                "generation arrival does not match embedded schedule");
+        }
+        if (session_.generations[event.active_generation_index].arrives_at_ms >
+            event.simulated_now_ms) {
+            throw std::invalid_argument(
+                "active generation has not arrived yet");
+        }
+    }
+
+    void verify_session_binding(const SimulationStepEvent& event,
+                                const DecisionReplayRecord& record) const {
+        const auto& identity =
+            session_.generations[event.active_generation_index];
+        if (session_.experiment_seed != record.contract.experiment_seed ||
+            identity.generation_id != record.descriptor.generation_id ||
+            identity.descriptor_fingerprint !=
+                simulation_descriptor_identity(record.descriptor) ||
+            identity.required_rank != record.descriptor.total_source_symbols ||
+            identity.arrives_at_ms != record.descriptor.created_at_ms) {
             std::ostringstream reason;
             reason << "session does not match decision trace generation"
                    << " seed=" << session_.experiment_seed << '/'
-                   << first.contract.experiment_seed
-                   << " generation=" << session_.generation_id << '/'
-                   << first.descriptor.generation_id
+                   << record.contract.experiment_seed
+                   << " generation=" << identity.generation_id << '/'
+                   << record.descriptor.generation_id
                    << " fingerprint="
                    << simulation_event_detail::hex_u64(
-                        session_.descriptor_fingerprint) << '/'
+                        identity.descriptor_fingerprint) << '/'
                    << simulation_event_detail::hex_u64(
-                        simulation_descriptor_identity(first.descriptor))
-                   << " rank=" << session_.required_rank << '/'
-                   << first.descriptor.total_source_symbols;
+                        simulation_descriptor_identity(record.descriptor))
+                   << " rank=" << identity.required_rank << '/'
+                   << record.descriptor.total_source_symbols;
             throw std::invalid_argument(reason.str());
         }
         std::uint64_t emitted = 0;
-        for (const auto& segment : first.descriptor.segments) {
+        for (const auto& segment : record.descriptor.segments) {
             emitted += segment.coding.emitted_symbols;
         }
-        if (session_.initial_source_buffer != emitted) {
+        if (identity.initial_source_packets != emitted) {
             throw std::invalid_argument(
-                "initial generation arrival does not match descriptor emission");
+                "scheduled generation arrival does not match descriptor emission");
         }
     }
 
@@ -828,9 +948,11 @@ private:
         const DecisionReplayRecord& record,
         const std::array<std::vector<bool>, 3>& link_outcomes) const {
         using simulation_event_detail::near;
+        const auto& identity =
+            session_.generations[event.active_generation_index];
         if (record.contract.experiment_seed != session_.experiment_seed ||
             simulation_descriptor_identity(record.descriptor) !=
-                session_.descriptor_fingerprint ||
+                identity.descriptor_fingerprint ||
             record.trace.observed.now_ms != event.simulated_now_ms ||
             record.trace.observed.decoder_rank != event.decoder_rank_before ||
             record.trace.observed.rf_contact_available !=
@@ -919,8 +1041,9 @@ private:
     void verify_arrivals(
         const SimulationStepEvent& event,
         const DecisionReplayRecord& decision,
-        std::set<std::pair<std::uint32_t, std::uint32_t>>& seen,
-        std::vector<std::pair<std::uint32_t, std::uint32_t>>& inbox) const {
+        std::set<std::tuple<std::string, std::uint32_t, std::uint32_t>>& seen,
+        std::vector<std::tuple<std::string, std::uint32_t, std::uint32_t>>&
+            inbox) const {
         if (event.destination_inbox_before != inbox.size()) {
             throw std::invalid_argument("destination inbox continuity mismatch");
         }
@@ -937,7 +1060,8 @@ private:
         }
         for (const auto& attempt : decision.trace.execution.attempts) {
             if (attempt.delivered) {
-                const auto packet = std::make_pair(
+                const auto packet = std::make_tuple(
+                    decision.descriptor.generation_id,
                     attempt.segment_id, attempt.symbol_seed);
                 if (!seen.contains(packet)) inbox.push_back(packet);
             }
@@ -995,14 +1119,54 @@ private:
         }
     }
 
+    static std::string encode_generation_identities(
+        const std::vector<SimulationGenerationIdentity>& generations) {
+        std::ostringstream output;
+        for (std::size_t index = 0; index < generations.size(); ++index) {
+            if (index > 0) output << ';';
+            const auto& generation = generations[index];
+            output << generation.arrives_at_ms << ',' << generation.tag << ','
+                   << generation.generation_id << ','
+                   << simulation_event_detail::hex_u64(
+                        generation.descriptor_fingerprint) << ','
+                   << generation.required_rank << ','
+                   << generation.initial_source_packets;
+        }
+        return output.str();
+    }
+
+    static std::vector<SimulationGenerationIdentity>
+    decode_generation_identities(const std::string& encoded) {
+        using namespace simulation_event_detail;
+        std::vector<SimulationGenerationIdentity> generations;
+        if (encoded.empty()) return generations;
+        for (const auto& item : split(encoded, ';')) {
+            const auto fields = split(item, ',');
+            if (fields.size() != 6) {
+                throw std::invalid_argument(
+                    "simulation event ledger: invalid generation identities");
+            }
+            const auto required_rank = parse_u64(
+                fields[4], 10, "generation rank");
+            if (required_rank > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::invalid_argument(
+                    "simulation event ledger: generation rank is out of range");
+            }
+            generations.push_back({
+                parse_u64(fields[0], 10, "generation arrival time"),
+                fields[1], fields[2],
+                parse_u64(fields[3], 16, "generation fingerprint"),
+                static_cast<std::uint32_t>(required_rank),
+                parse_u64(fields[5], 10, "generation packet count")});
+        }
+        return generations;
+    }
+
     static std::string encode_session(const SimulationEventSession& session) {
         using namespace simulation_event_detail;
         std::ostringstream output;
         output << "SESSION|" << hex_u64(session.experiment_seed) << '|'
                << hex_u64(session.initial_random_state) << '|'
-               << session.generation_id << '|'
-               << hex_u64(session.descriptor_fingerprint) << '|'
-               << session.required_rank << '|'
                << session.initial_source_buffer << '|'
                << double_hex(session.source_energy_capacity_j) << '|'
                << double_hex(session.source_initial_energy_j) << '|'
@@ -1016,14 +1180,18 @@ private:
                << double_hex(session.destination_position.y) << '|'
                << encode_points(session.ris_positions) << '|'
                << encode_obstacles(session.obstacles) << '|'
-               << encode_bytes(session.contact_schedule.serialize());
+               << encode_bytes(session.contact_schedule.serialize()) << '|'
+               << encode_bytes(
+                    session.generation_arrival_schedule.serialize()) << '|'
+               << encode_bytes(encode_generation_identities(
+                    session.generations));
         return output.str();
     }
 
     static SimulationEventSession decode_session(const std::string& encoded) {
         using namespace simulation_event_detail;
         const auto fields = split(encoded, '|');
-        if (fields.size() != 20 || fields[0] != "SESSION") {
+        if (fields.size() != 19 || fields[0] != "SESSION") {
             throw std::invalid_argument(
                 "simulation event ledger: invalid session metadata");
         }
@@ -1032,11 +1200,6 @@ private:
         session.experiment_seed = parse_u64(fields[cursor++], 16, "seed");
         session.initial_random_state = parse_u64(
             fields[cursor++], 16, "initial RNG");
-        session.generation_id = fields[cursor++];
-        session.descriptor_fingerprint = parse_u64(
-            fields[cursor++], 16, "descriptor fingerprint");
-        session.required_rank = static_cast<std::uint32_t>(
-            parse_u64(fields[cursor++], 10, "required rank"));
         session.initial_source_buffer = parse_u64(
             fields[cursor++], 10, "initial source buffer");
         session.source_energy_capacity_j = parse_double(fields[cursor++], "source capacity");
@@ -1053,6 +1216,11 @@ private:
         session.obstacles = decode_obstacles(fields[cursor++]);
         session.contact_schedule = simulation::ContactSchedule::deserialize(
             decode_bytes(fields[cursor++]));
+        session.generation_arrival_schedule =
+            simulation::GenerationArrivalSchedule::deserialize(
+                decode_bytes(fields[cursor++]));
+        session.generations = decode_generation_identities(
+            decode_bytes(fields[cursor++]));
         return session;
     }
 
@@ -1063,6 +1231,9 @@ private:
         output << "STEP|" << event.step << '|'
                << hex_u64(previous_checksum) << '|'
                << event.simulated_now_ms << '|'
+               << event.active_generation_index << '|'
+               << event.arrived_generation_index << '|'
+               << event.arrived_source_packets << '|'
                << hex_u64(event.random_before) << '|'
                << hex_u64(event.random_after_ris) << '|'
                << hex_u64(event.random_after_action) << '|'
@@ -1098,7 +1269,7 @@ private:
                                             std::uint64_t previous_checksum) {
         using namespace simulation_event_detail;
         const auto fields = split(encoded, '|');
-        if (fields.size() != 32 || fields[0] != "STEP") {
+        if (fields.size() != 35 || fields[0] != "STEP") {
             throw std::invalid_argument(
                 "simulation event ledger: invalid step record");
         }
@@ -1111,6 +1282,23 @@ private:
                 "simulation event ledger: checksum chain mismatch");
         }
         event.simulated_now_ms = parse_u64(fields[cursor++], 10, "time");
+        const auto active_generation_index = parse_u64(
+            fields[cursor++], 10, "active generation index");
+        const auto arrived_generation_index = parse_u64(
+            fields[cursor++], 10, "arrived generation index");
+        if (active_generation_index >
+                std::numeric_limits<std::uint32_t>::max() ||
+            arrived_generation_index >
+                std::numeric_limits<std::uint32_t>::max()) {
+            throw std::invalid_argument(
+                "simulation event ledger: generation index is out of range");
+        }
+        event.active_generation_index = static_cast<std::uint32_t>(
+            active_generation_index);
+        event.arrived_generation_index = static_cast<std::uint32_t>(
+            arrived_generation_index);
+        event.arrived_source_packets = parse_u64(
+            fields[cursor++], 10, "arrived source packets");
         event.random_before = parse_u64(fields[cursor++], 16, "RNG before");
         event.random_after_ris = parse_u64(fields[cursor++], 16, "RNG after RIS");
         event.random_after_action = parse_u64(fields[cursor++], 16, "RNG after action");
