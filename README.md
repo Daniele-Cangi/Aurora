@@ -47,20 +47,20 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
 | LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | The deterministic harness includes no-FEC, repetition and internal LT-like comparisons, but not an established external codec |
-| Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed encoder/decoder state, bounded deterministic runtime repair emission, expiry, exact length, integrity result and authoritative `DecodeReport` | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
+| Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed encoder/decoder state, independent segment expiry, bounded deterministic runtime repair emission, exact length, integrity result and authoritative per-segment `DecodeReport` evidence | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
 | Adaptive transport policy | Modular prototype | Injected codec and policy interfaces, fixed policies, NERVE/GLAND/MUSCLE adaptive policy, bounded per-generation manager, failure response and gradual relaxation | Threshold, PID and risk-sensitive alternatives are not implemented; current evidence remains synthetic despite covering multiple channel traces |
 | Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; the new benchmark isolates coding policy, not the complete cross-layer optimizer |
 | Transport health | Implemented first slice | Consumes only `DecodeReport`; progress polls update coverage without being counted as delivery failures | Aggregation/confidence and multi-flow recovery semantics still need development |
-| Safety supervision | Partial | Hard envelope constrains expiry, freshness, post-action reserve, allowed links, simulated RF airtime, repair amplification and critical protection; the legacy monitor distinguishes `NO_EVIDENCE` | The legacy monitor still lacks hysteresis and calibrated severity thresholds |
+| Safety supervision | Partial | Hard envelope constrains generation/segment expiry, freshness, post-action reserve, allowed links, simulated RF airtime, active-segment repair capacity and critical protection; the legacy monitor distinguishes `NO_EVIDENCE` | The legacy monitor still lacks hysteresis and calibrated severity thresholds |
 | Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | The default single-flow scenario provides limited transition evidence |
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade | `FIELD_BUILD` currently still uses stubbed device operations |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
-| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V2 decision traces with actual repair/attempt/HAL/delivery execution counts, and checksum-chained benchmark channel traces | Replay verifies envelope decisions and execution invariants but does not reproduce HAL/channel physics or the complete simulator time line |
+| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V3 decision traces with per-attempt LBT samples, channel evidence and exact energy/duty transitions, plus checksum-chained benchmark channel traces | Action replay is deterministic from recorded simulation evidence; inter-step harvesting/RIS evolution and physical hardware remain outside the trace |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty refusal, critical scheduling, safety replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
-| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, replayable channel traces, Wilson confidence intervals, per-trial records and safety-decision replay | Build/commit provenance and complete simulator event replay are not implemented |
+| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, replayable channel/action traces, Wilson confidence intervals, per-trial records and safety-decision replay | Build/commit provenance and complete inter-step simulator event replay are not implemented |
 
 ---
 
@@ -88,12 +88,11 @@ The current contract surface is classified explicitly in `transport_contract_sem
 
 | Classification | Fields |
 |---|---|
-| Enforced | version, global deadline, duty fraction, allowed links, RIS tile count, minimum source reserve, observation freshness, maximum repair amplification, minimum critical overhead, generation/source limits, integrity requirement, experiment seed, segment ranges and segment importance |
-| Policy input | global reliability, selector choice, generation importance |
-| Metadata-only | per-segment deadline and target reliability; they are recorded but do not independently expire or guarantee a segment |
+| Enforced | version, global and per-segment deadlines, duty fraction, allowed links, RIS tile count, minimum source reserve, observation freshness, maximum repair amplification, minimum critical overhead, generation/source limits, integrity requirement, experiment seed, segment ranges and segment importance |
+| Policy input | global reliability, per-segment target reliability, selector choice and generation importance |
 | Unsupported | payload-semantic interpretation; Aurora transports opaque bytes |
 
-“Policy input” does not mean an achieved SLA. In particular, global reliability selects protection behaviour but is not a measured guarantee.
+“Policy input” does not mean an achieved SLA. Global reliability selects protection behaviour; per-segment target reliability orders eligible runtime repairs after importance and before deadline. `SegmentDecodeReport::observed_target_met` records exact success in one trial, not an ensemble guarantee.
 
 ### 3. Adaptive protection with memory
 
@@ -171,7 +170,7 @@ authoritative DecodeReport
    ↓
 FlowHealth → Optimizer → SafetyEnvelope
    ↓
-DecisionReplayLog V2 + bounded policy feedback
+DecisionReplayLog V3 + bounded policy feedback
 ```
 
 The same report determines delivery, coverage/rank, critical completion, integrity outcome, and health feedback. A decision trace is saved only after runtime execution counts have been attached and checked against the constrained decision. The former monolithic delivery decoder and parallel organism health decoder were removed from the active simulator path.
@@ -302,7 +301,9 @@ Record and independently replay safety decisions:
 ./build/bin/aurora_replay decision-trace.log
 ```
 
-The V2 replay recomputes each `SafetyEnvelope` decision and validates that the recorded link, critical-only scheduling, repair emission and attempt counts match execution. HAL acceptance and channel delivery counts are retained as observed outcomes, not recomputed physical evidence.
+The V3 replay recomputes each `SafetyEnvelope` decision and validates every admitted attempt. For the dependency-light simulator it re-evaluates LBT from recorded RSSI samples, channel delivery from recorded SNR/coding/fading/threshold evidence, and exact energy/duty transitions from the admitted pre-action state. It also rejects attempts against expired or completed segments. Recorded samples remain simulation evidence rather than calibrated physical measurements; inter-step harvesting, RIS evolution and real `FIELD_BUILD` hardware are not reconstructed.
+
+V2 traces do not contain the required per-segment and per-attempt evidence and are intentionally rejected; regenerate them with the current simulator.
 
 Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
 

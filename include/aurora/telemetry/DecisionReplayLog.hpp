@@ -5,6 +5,7 @@
 #include "../transport/TransportContract.hpp"
 
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -35,7 +36,7 @@ struct ReplayVerification {
 // detects accidental corruption and reordering; it is not a cryptographic signature.
 class DecisionReplayLog {
 public:
-    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V2";
+    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V3";
 
     void record(const transport::TransportContract& contract,
                 const transport::GenerationDescriptor& descriptor,
@@ -45,6 +46,10 @@ public:
             trace.generation_id != descriptor.generation_id) {
             throw std::invalid_argument(
                 "decision trace: trace and descriptor generation IDs must match");
+        }
+        if (!trace.execution.recorded) {
+            throw std::invalid_argument(
+                "decision trace: V3 requires a recorded execution transition");
         }
         if (const auto error = trace.execution_error()) {
             throw std::invalid_argument("decision trace: " + *error);
@@ -247,6 +252,32 @@ private:
         throw std::invalid_argument(std::string("decision trace: invalid ") + field);
     }
 
+    static int parse_int(const std::string& encoded, const char* field) {
+        std::size_t consumed = 0;
+        long value = 0;
+        try {
+            value = std::stol(encoded, &consumed, 10);
+        } catch (const std::exception&) {
+            throw std::invalid_argument(std::string("decision trace: invalid ") + field);
+        }
+        if (consumed != encoded.size() ||
+            value < std::numeric_limits<int>::min() ||
+            value > std::numeric_limits<int>::max()) {
+            throw std::invalid_argument(std::string("decision trace: invalid ") + field);
+        }
+        return static_cast<int>(value);
+    }
+
+    static std::vector<std::string> split_delimited(
+        const std::string& encoded, char delimiter) {
+        std::vector<std::string> fields;
+        if (encoded.empty()) return fields;
+        std::istringstream input(encoded);
+        std::string field;
+        while (std::getline(input, field, delimiter)) fields.push_back(field);
+        return fields;
+    }
+
     static safety::LinkMode parse_link(const std::string& encoded) {
         const auto value = parse_u32(encoded, "link mode");
         if (value > static_cast<std::uint32_t>(safety::LinkMode::BACKSCATTER)) {
@@ -306,6 +337,192 @@ private:
         return execution;
     }
 
+    static std::string encode_descriptor_segments(
+        const std::vector<transport::GenerationSegmentDescriptor>& segments) {
+        std::ostringstream encoded;
+        for (std::size_t index = 0; index < segments.size(); ++index) {
+            if (index != 0) encoded << ';';
+            const auto& segment = segments[index];
+            encoded << segment.segment_id << ','
+                    << segment.source_symbol_count << ','
+                    << static_cast<unsigned>(segment.importance) << ','
+                    << segment.expires_at_ms << ','
+                    << hex_u64(double_bits(segment.target_reliability)) << ','
+                    << segment.coding.emitted_symbols;
+        }
+        return encoded.str();
+    }
+
+    static std::vector<transport::GenerationSegmentDescriptor> decode_descriptor_segments(
+        const std::string& encoded,
+        std::size_t expected_count,
+        std::uint64_t created_at_ms,
+        std::uint64_t generation_expiry_ms,
+        std::uint32_t expected_source_symbols) {
+        std::vector<transport::GenerationSegmentDescriptor> segments;
+        std::uint64_t source_total = 0;
+        for (const auto& item : split_delimited(encoded, ';')) {
+            const auto fields = split_delimited(item, ',');
+            if (fields.size() != 6) {
+                throw std::invalid_argument("decision trace: malformed descriptor segment");
+            }
+            transport::GenerationSegmentDescriptor segment;
+            segment.segment_id = parse_u32(fields[0], "segment ID");
+            segment.source_symbol_count = parse_u32(fields[1], "segment source symbols");
+            const auto importance = parse_u32(fields[2], "segment importance");
+            if (importance > static_cast<std::uint32_t>(
+                    transport::TransportImportance::ELASTIC)) {
+                throw std::invalid_argument("decision trace: invalid segment importance");
+            }
+            segment.importance = static_cast<transport::TransportImportance>(importance);
+            segment.expires_at_ms = parse_u64(fields[3], 10, "segment expiry");
+            if (segment.expires_at_ms < created_at_ms ||
+                segment.expires_at_ms > generation_expiry_ms) {
+                throw std::invalid_argument("decision trace: invalid segment expiry");
+            }
+            segment.deadline_ms = segment.expires_at_ms - created_at_ms;
+            segment.target_reliability = bits_double(
+                parse_u64(fields[4], 16, "segment reliability"));
+            if (!std::isfinite(segment.target_reliability) ||
+                segment.target_reliability <= 0.0 ||
+                segment.target_reliability > 1.0) {
+                throw std::invalid_argument("decision trace: invalid segment reliability");
+            }
+            segment.coding.emitted_symbols = parse_u32(
+                fields[5], "segment spawn emissions");
+            if (segment.segment_id != segments.size()) {
+                throw std::invalid_argument("decision trace: non-contiguous segment IDs");
+            }
+            source_total += segment.source_symbol_count;
+            segments.push_back(segment);
+        }
+        if (segments.size() != expected_count ||
+            source_total != expected_source_symbols) {
+            throw std::invalid_argument("decision trace: descriptor segment summary mismatch");
+        }
+        return segments;
+    }
+
+    static std::string encode_segment_states(
+        const std::vector<safety::SegmentTransportState>& segments) {
+        std::ostringstream encoded;
+        for (std::size_t index = 0; index < segments.size(); ++index) {
+            if (index != 0) encoded << ';';
+            const auto& segment = segments[index];
+            encoded << segment.segment_id << ','
+                    << segment.emitted_symbols << ','
+                    << segment.decoder_rank << ','
+                    << segment.complete << ','
+                    << segment.expired;
+        }
+        return encoded.str();
+    }
+
+    static std::vector<safety::SegmentTransportState> decode_segment_states(
+        const std::string& encoded, std::size_t expected_count) {
+        std::vector<safety::SegmentTransportState> segments;
+        for (const auto& item : split_delimited(encoded, ';')) {
+            const auto fields = split_delimited(item, ',');
+            if (fields.size() != 5) {
+                throw std::invalid_argument("decision trace: malformed segment runtime state");
+            }
+            safety::SegmentTransportState segment;
+            segment.segment_id = parse_u32(fields[0], "runtime segment ID");
+            segment.emitted_symbols = parse_u64(fields[1], 10, "runtime segment emissions");
+            segment.decoder_rank = parse_u32(fields[2], "runtime segment rank");
+            segment.complete = parse_bool(fields[3], "runtime segment completion");
+            segment.expired = parse_bool(fields[4], "runtime segment expiry");
+            if (segment.segment_id != segments.size()) {
+                throw std::invalid_argument("decision trace: non-contiguous runtime segment IDs");
+            }
+            segments.push_back(segment);
+        }
+        if (segments.size() != expected_count) {
+            throw std::invalid_argument("decision trace: runtime segment count mismatch");
+        }
+        return segments;
+    }
+
+    static std::string encode_attempts(
+        const std::vector<safety::TransportAttemptTrace>& attempts) {
+        std::ostringstream encoded;
+        for (std::size_t index = 0; index < attempts.size(); ++index) {
+            if (index != 0) encoded << ';';
+            const auto& value = attempts[index];
+            encoded << value.simulated_now_ms << ','
+                    << value.packet_sequence << ',' << value.symbol_seed << ','
+                    << value.segment_id << ',' << value.critical << ','
+                    << value.attempted << ',' << value.hal_evaluated << ','
+                    << value.hal_replayable << ',' << value.hal_accepted << ','
+                    << value.transmitted << ',' << value.delivered << ','
+                    << static_cast<unsigned>(value.refusal) << ','
+                    << hex_u64(double_bits(value.energy_before_j)) << ','
+                    << hex_u64(double_bits(value.energy_after_j)) << ','
+                    << hex_u64(double_bits(value.energy_cost_j)) << ','
+                    << hex_u64(double_bits(value.duty_before_s)) << ','
+                    << hex_u64(double_bits(value.duty_after_s)) << ','
+                    << hex_u64(double_bits(value.rf_airtime_s)) << ','
+                    << value.lbt_evaluated << ',' << value.lbt_threshold_dbm << ','
+                    << value.lbt_first_rssi_dbm << ',' << value.lbt_second_valid << ','
+                    << value.lbt_second_rssi_dbm << ',' << value.channel_evaluated << ','
+                    << hex_u64(double_bits(value.channel_snr_db)) << ','
+                    << hex_u64(double_bits(value.channel_coding_gain_db)) << ','
+                    << hex_u64(double_bits(value.channel_fading_db)) << ','
+                    << hex_u64(double_bits(value.channel_threshold_db));
+        }
+        return encoded.str();
+    }
+
+    static std::vector<safety::TransportAttemptTrace> decode_attempts(
+        const std::string& encoded, std::size_t expected_count) {
+        std::vector<safety::TransportAttemptTrace> attempts;
+        for (const auto& item : split_delimited(encoded, ';')) {
+            const auto fields = split_delimited(item, ',');
+            if (fields.size() != 28) {
+                throw std::invalid_argument("decision trace: malformed transport attempt");
+            }
+            std::size_t cursor = 0;
+            safety::TransportAttemptTrace value;
+            value.simulated_now_ms = parse_u64(fields[cursor++], 10, "attempt time");
+            value.packet_sequence = parse_u32(fields[cursor++], "packet sequence");
+            value.symbol_seed = parse_u32(fields[cursor++], "symbol seed");
+            value.segment_id = parse_u32(fields[cursor++], "attempt segment ID");
+            value.critical = parse_bool(fields[cursor++], "attempt critical flag");
+            value.attempted = parse_bool(fields[cursor++], "attempted flag");
+            value.hal_evaluated = parse_bool(fields[cursor++], "HAL evaluated flag");
+            value.hal_replayable = parse_bool(fields[cursor++], "HAL replayable flag");
+            value.hal_accepted = parse_bool(fields[cursor++], "HAL accepted flag");
+            value.transmitted = parse_bool(fields[cursor++], "transmitted flag");
+            value.delivered = parse_bool(fields[cursor++], "delivered flag");
+            const auto refusal = parse_u32(fields[cursor++], "attempt refusal");
+            if (refusal > static_cast<std::uint32_t>(safety::AttemptRefusal::HAL)) {
+                throw std::invalid_argument("decision trace: invalid attempt refusal");
+            }
+            value.refusal = static_cast<safety::AttemptRefusal>(refusal);
+            value.energy_before_j = bits_double(parse_u64(fields[cursor++], 16, "energy before"));
+            value.energy_after_j = bits_double(parse_u64(fields[cursor++], 16, "energy after"));
+            value.energy_cost_j = bits_double(parse_u64(fields[cursor++], 16, "energy cost"));
+            value.duty_before_s = bits_double(parse_u64(fields[cursor++], 16, "duty before"));
+            value.duty_after_s = bits_double(parse_u64(fields[cursor++], 16, "duty after"));
+            value.rf_airtime_s = bits_double(parse_u64(fields[cursor++], 16, "RF airtime"));
+            value.lbt_evaluated = parse_bool(fields[cursor++], "LBT evaluated flag");
+            value.lbt_threshold_dbm = parse_int(fields[cursor++], "LBT threshold");
+            value.lbt_first_rssi_dbm = parse_int(fields[cursor++], "first LBT RSSI");
+            value.lbt_second_valid = parse_bool(fields[cursor++], "second LBT flag");
+            value.lbt_second_rssi_dbm = parse_int(fields[cursor++], "second LBT RSSI");
+            value.channel_evaluated = parse_bool(fields[cursor++], "channel evaluated flag");
+            value.channel_snr_db = bits_double(parse_u64(fields[cursor++], 16, "channel SNR"));
+            value.channel_coding_gain_db = bits_double(parse_u64(fields[cursor++], 16, "channel coding gain"));
+            value.channel_fading_db = bits_double(parse_u64(fields[cursor++], 16, "channel fading"));
+            value.channel_threshold_db = bits_double(parse_u64(fields[cursor++], 16, "channel threshold"));
+            attempts.push_back(value);
+        }
+        if (attempts.size() != expected_count) {
+            throw std::invalid_argument("decision trace: transport attempt count mismatch");
+        }
+        return attempts;
+    }
+
     static std::uint32_t critical_source_count(
         const transport::GenerationDescriptor& descriptor) {
         std::uint32_t count = 0;
@@ -356,13 +573,16 @@ private:
                << '|' << contract.allow_rf
                << '|' << contract.allow_optical
                << '|' << contract.allow_backscatter
+               << '|' << hex_u64(double_bits(contract.duty_frac))
                << '|' << hex_u64(double_bits(contract.minimum_source_reserve))
                << '|' << contract.maximum_observation_age_ms
                << '|' << hex_u64(double_bits(contract.maximum_repair_amplification))
                << '|' << hex_u64(double_bits(contract.minimum_critical_overhead))
+               << '|' << descriptor.created_at_ms
                << '|' << descriptor.expires_at_ms
                << '|' << descriptor.total_source_symbols
-               << '|' << critical_source_count(descriptor)
+               << '|' << descriptor.segments.size()
+               << '|' << encode_descriptor_segments(descriptor.segments)
                << '|' << trace.observed.observed_at_ms
                << '|' << trace.observed.now_ms
                << '|' << hex_u64(double_bits(trace.observed.source_energy_reserve))
@@ -376,11 +596,15 @@ private:
                << '|' << trace.observed.emitted_symbols
                << '|' << trace.observed.critical_emitted_symbols
                << '|' << trace.observed.decoder_rank
-               << '|' << trace.observed.required_rank;
+               << '|' << trace.observed.required_rank
+               << '|' << trace.observed.segments.size()
+               << '|' << encode_segment_states(trace.observed.segments);
         append_decision(output, trace.proposed);
         append_decision(output, trace.decision);
         append_execution(output, trace.execution);
-        output << '|' << trace.constraints_applied.size()
+        output << '|' << trace.execution.attempts.size()
+               << '|' << encode_attempts(trace.execution.attempts)
+               << '|' << trace.constraints_applied.size()
                << '|' << encode_constraints(trace.constraints_applied);
         return output.str();
     }
@@ -418,7 +642,7 @@ private:
                                                std::size_t expected_index,
                                                std::uint64_t expected_previous_checksum) {
         const auto fields = split_fields(payload);
-        if (fields.size() != 47 || fields.front() != "R") {
+        if (fields.size() != 54 || fields.front() != "R") {
             throw std::invalid_argument("decision trace: malformed record field count");
         }
         std::size_t cursor = 1;
@@ -439,6 +663,8 @@ private:
         contract.allow_rf = parse_bool(fields.at(cursor++), "RF permission");
         contract.allow_optical = parse_bool(fields.at(cursor++), "optical permission");
         contract.allow_backscatter = parse_bool(fields.at(cursor++), "backscatter permission");
+        contract.duty_frac = bits_double(
+            parse_u64(fields.at(cursor++), 16, "duty fraction"));
         contract.minimum_source_reserve = bits_double(
             parse_u64(fields.at(cursor++), 16, "reserve floor"));
         contract.maximum_observation_age_ms = parse_u64(
@@ -447,18 +673,15 @@ private:
             parse_u64(fields.at(cursor++), 16, "repair amplification"));
         contract.minimum_critical_overhead = bits_double(
             parse_u64(fields.at(cursor++), 16, "critical overhead"));
+        descriptor.created_at_ms = parse_u64(fields.at(cursor++), 10, "creation time");
         descriptor.expires_at_ms = parse_u64(fields.at(cursor++), 10, "expiry");
         descriptor.total_source_symbols = parse_u32(fields.at(cursor++), "source symbols");
-        const auto critical_sources = parse_u32(fields.at(cursor++), "critical source symbols");
-        if (critical_sources > descriptor.total_source_symbols) {
-            throw std::invalid_argument("decision trace: critical source count exceeds total");
-        }
-        if (critical_sources > 0) {
-            transport::GenerationSegmentDescriptor segment;
-            segment.source_symbol_count = critical_sources;
-            segment.importance = transport::TransportImportance::CRITICAL;
-            descriptor.segments.push_back(segment);
-        }
+        const auto descriptor_segment_count = static_cast<std::size_t>(
+            parse_u64(fields.at(cursor++), 10, "descriptor segment count"));
+        descriptor.segments = decode_descriptor_segments(
+            fields.at(cursor++), descriptor_segment_count,
+            descriptor.created_at_ms, descriptor.expires_at_ms,
+            descriptor.total_source_symbols);
         trace.observed.observed_at_ms = parse_u64(fields.at(cursor++), 10, "observation time");
         trace.observed.now_ms = parse_u64(fields.at(cursor++), 10, "decision time");
         trace.observed.source_energy_reserve = bits_double(
@@ -483,9 +706,17 @@ private:
             fields.at(cursor++), 10, "critical emitted symbols");
         trace.observed.decoder_rank = parse_u32(fields.at(cursor++), "decoder rank");
         trace.observed.required_rank = parse_u32(fields.at(cursor++), "required rank");
+        const auto runtime_segment_count = static_cast<std::size_t>(
+            parse_u64(fields.at(cursor++), 10, "runtime segment count"));
+        trace.observed.segments = decode_segment_states(
+            fields.at(cursor++), runtime_segment_count);
         trace.proposed = parse_decision(fields, cursor);
         trace.decision = parse_decision(fields, cursor);
         trace.execution = parse_execution(fields, cursor);
+        const auto attempt_count = static_cast<std::size_t>(
+            parse_u64(fields.at(cursor++), 10, "transport attempt count"));
+        trace.execution.attempts = decode_attempts(
+            fields.at(cursor++), attempt_count);
         const auto constraint_count = static_cast<std::size_t>(
             parse_u64(fields.at(cursor++), 10, "constraint count"));
         trace.constraints_applied = decode_constraints(fields.at(cursor++), constraint_count);
@@ -510,6 +741,17 @@ private:
 
     static bool same_state(const safety::TransportState& left,
                            const safety::TransportState& right) {
+        if (left.segments.size() != right.segments.size()) return false;
+        for (std::size_t index = 0; index < left.segments.size(); ++index) {
+            const auto& a = left.segments[index];
+            const auto& b = right.segments[index];
+            if (a.segment_id != b.segment_id ||
+                a.emitted_symbols != b.emitted_symbols ||
+                a.decoder_rank != b.decoder_rank ||
+                a.complete != b.complete || a.expired != b.expired) {
+                return false;
+            }
+        }
         return left.observed_at_ms == right.observed_at_ms &&
                left.now_ms == right.now_ms &&
                double_bits(left.source_energy_reserve) == double_bits(right.source_energy_reserve) &&

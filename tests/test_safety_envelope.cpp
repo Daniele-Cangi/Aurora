@@ -118,6 +118,51 @@ int main() {
     assert(!crosses_reserve.decision.permitted);
     assert(crosses_reserve.decision.transmission_attempts == 0);
 
+    const auto segmented_contract = TransportContract::parse(
+        "deadline:2s;rf:off;optical:off;backscatter:on;seed:78;"
+        "max_repair_amplification:3;"
+        "segment:0-31,critical,100ms,0.999;"
+        "segment:32-63,important,1s,0.99");
+    const auto segmented = controller.spawn(
+        segmented_contract, "segment-safety",
+        std::vector<std::uint8_t>(64, 0x78), 16, 0);
+    const auto segmented_runtime = controller.runtime_state(
+        segmented.descriptor.generation_id, 101);
+    assert(segmented_runtime.has_value());
+    TransportState segment_state;
+    segment_state.observed_at_ms = 101;
+    segment_state.now_ms = 101;
+    segment_state.source_energy_reserve = 0.8;
+    segment_state.rf_duty_remaining = 1.0;
+    segment_state.emitted_symbols = segmented_runtime->emitted_symbols;
+    segment_state.critical_emitted_symbols =
+        segmented_runtime->critical_emitted_symbols;
+    for (const auto& segment : segmented_runtime->segments) {
+        segment_state.segments.push_back({
+            segment.segment_id, segment.emitted_symbols,
+            segment.decoder_rank, segment.complete, segment.expired});
+    }
+    TransportDecision expired_critical;
+    expired_critical.link = LinkMode::BACKSCATTER;
+    expired_critical.critical_only = true;
+    expired_critical.repair_symbols = 10'000;
+    const auto live_segment_only = envelope.constrain(
+        segmented_contract, segmented.descriptor,
+        segment_state, expired_critical);
+    assert(live_segment_only.decision.permitted);
+    assert(!live_segment_only.decision.critical_only);
+    assert(live_segment_only.decision.repair_symbols > 0);
+
+    segment_state.now_ms = 1'001;
+    segment_state.observed_at_ms = 1'001;
+    for (auto& segment : segment_state.segments) segment.expired = true;
+    const auto no_live_segment = envelope.constrain(
+        segmented_contract, segmented.descriptor,
+        segment_state, expired_critical);
+    assert(!no_live_segment.decision.permitted);
+    assert(no_live_segment.constraints_applied.back() ==
+           "no unexpired incomplete segment remains");
+
     std::cout << "safety envelope tests passed\n";
     return 0;
 }

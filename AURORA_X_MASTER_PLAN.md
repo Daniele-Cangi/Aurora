@@ -522,7 +522,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
 
-The current `DecisionReplayLog` verifies safety decisions from canonical recorded inputs. The benchmark can also replay exact delivered/lost channel slots across controller versions. Neither mechanism yet replays contact topology, generation arrivals, energy evolution or the complete simulator time line.
+The current V3 `DecisionReplayLog` verifies safety decisions and deterministically replays each admitted simulation action from recorded LBT, channel, energy and duty evidence. The benchmark can also replay exact delivered/lost channel slots across controller versions. Neither mechanism yet reconstructs contact topology, generation arrivals, inter-step harvesting/RIS evolution or the complete simulator time line.
 
 ### Exit gate
 

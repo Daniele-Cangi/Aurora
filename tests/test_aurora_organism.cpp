@@ -361,6 +361,55 @@ void runtime_repairs_are_deterministic_segment_aware_and_bounded() {
         rounded_generation.descriptor.generation_id, 1, false).emitted_symbols == 0);
 }
 
+void segment_deadlines_and_reliability_priority_are_operational() {
+    const auto deadline_contract = TransportContract::parse(
+        "deadline:2s;seed:201;max_repair_amplification:4;"
+        "segment:0-31,critical,100ms,0.999;"
+        "segment:32-63,important,1s,0.99");
+    AlienFountainOrganism deadline_controller;
+    const auto generated = deadline_controller.spawn(
+        deadline_contract, "segment-deadline", payload(64, 201), 16, 0);
+    assert(generated.descriptor.segments[0].expires_at_ms == 100);
+    assert(generated.descriptor.segments[1].expires_at_ms == 1'000);
+
+    const auto live_repairs = deadline_controller.emit_repairs(
+        generated.descriptor.generation_id, 3, false, 101);
+    assert(live_repairs.emitted_symbols > 0);
+    for (const auto& packet : live_repairs.packets) {
+        assert(packet.segment_id == 1);
+    }
+
+    const auto late_report = deadline_controller.integrate(
+        generated.descriptor.generation_id,
+        minimum_decodable_packets(generated),
+        101);
+    assert(late_report.status == DecodeStatus::SEGMENT_EXPIRED);
+    assert(late_report.terminal_failure());
+    assert(late_report.expired_segments == 1);
+    assert(late_report.late_symbols ==
+           generated.descriptor.segments[0].source_symbol_count);
+    assert(!late_report.delivered());
+    assert(late_report.segment_reports.size() == 2);
+    assert(late_report.segment_reports[0].status ==
+           aurora::transport::SegmentDecodeStatus::EXPIRED);
+    assert(!late_report.segment_reports[0].observed_target_met);
+    assert(late_report.segment_reports[1].status ==
+           aurora::transport::SegmentDecodeStatus::COMPLETE);
+    assert(late_report.segment_reports[1].observed_target_met);
+
+    const auto reliability_contract = TransportContract::parse(
+        "deadline:1s;seed:202;max_repair_amplification:4;"
+        "segment:0-31,important,1s,0.9;"
+        "segment:32-63,important,1s,0.999");
+    AlienFountainOrganism reliability_controller;
+    const auto prioritized = reliability_controller.spawn(
+        reliability_contract, "segment-reliability", payload(64, 202), 16, 0);
+    const auto repair = reliability_controller.emit_repairs(
+        prioritized.descriptor.generation_id, 1, false, 1);
+    assert(repair.emitted_symbols == 1);
+    assert(repair.packets.front().segment_id == 1);
+}
+
 } // namespace
 
 int main() {
@@ -373,6 +422,7 @@ int main() {
     generation_store_is_bounded();
     generation_size_limits_are_enforced();
     runtime_repairs_are_deterministic_segment_aware_and_bounded();
+    segment_deadlines_and_reliability_priority_are_operational();
     std::cout << "generation lifecycle tests passed\n";
     return 0;
 }

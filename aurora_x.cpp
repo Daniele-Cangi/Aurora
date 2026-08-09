@@ -234,8 +234,10 @@ struct Node {
     bool delivered = false;
     fec::SegmentKind segment_kind = fec::SegmentKind::BULK;
     SendRefusal refusal = SendRefusal::NONE;
+    aurora::safety::TransportAttemptTrace trace;
   };
   using HalTransmit = function<bool(phy::Mode, const fec::Pkt&)>;
+  using PacketEligibility = function<bool(const fec::Pkt&)>;
 
   string id; geom::Vec2 pos;
   energy::Store bat{10.0, 6.0};
@@ -255,55 +257,117 @@ struct Node {
 
   SendResult send_one(world::World& W, Node& rx, phy::Mode m,
                       uint64_t simulated_now_ms=0, bool critical_only=false,
-                      const HalTransmit& injected_hal={}){
+                      const HalTransmit& injected_hal={},
+                      const PacketEligibility& eligible={}){
     SendResult result;
     if(buf.empty()) { result.refusal=SendRefusal::EMPTY_BUFFER; return result; }
     if(tx_idx >= buf.size()) tx_idx = 0; // ring safety
     size_t selected = buf.size();
     for(size_t checked=0; checked<buf.size(); ++checked){
       const size_t candidate=(tx_idx+checked)%buf.size();
-      if(!critical_only || buf[candidate].kind==fec::SegmentKind::CRITICAL){ selected=candidate; break; }
+      if((!critical_only || buf[candidate].kind==fec::SegmentKind::CRITICAL) &&
+         (!eligible || eligible(buf[candidate]))){ selected=candidate; break; }
     }
     if(selected==buf.size()){ result.refusal=SendRefusal::NO_ELIGIBLE_PACKET; return result; }
     auto pkt = buf[selected];
     tx_idx = (selected + 1) % buf.size();
     result.attempted = true;
     result.segment_kind = pkt.kind;
+    auto& attempt = result.trace;
+    attempt.simulated_now_ms = simulated_now_ms;
+    attempt.packet_sequence = pkt.seq;
+    attempt.symbol_seed = pkt.fp.seed;
+    attempt.segment_id = pkt.segment_id;
+    attempt.critical = pkt.kind == fec::SegmentKind::CRITICAL;
+    attempt.attempted = true;
 
     size_t B = pkt.fp.data.size()+8;
     double J = phy::Jpkt(m,B);
-    if(!bat.can_spend(J)){ result.refusal=SendRefusal::ENERGY; return result; }
     const double rf_airtime = HAL::LoraAirtimeSeconds(pkt.fp.data.size());
+    attempt.energy_before_j = bat.E;
+    attempt.energy_after_j = bat.E;
+    attempt.energy_cost_j = J;
+    attempt.duty_before_s = simulated_rf_duty.remaining_s(simulated_now_ms);
+    attempt.duty_after_s = attempt.duty_before_s;
+    attempt.rf_airtime_s = m==phy::Mode::RF ? rf_airtime : 0.0;
+    auto refuse = [&](SendRefusal refusal,
+                      aurora::safety::AttemptRefusal replay_refusal) {
+      result.refusal = refusal;
+      attempt.refusal = replay_refusal;
+      attempt.energy_after_j = bat.E;
+      attempt.duty_after_s = simulated_rf_duty.remaining_s(simulated_now_ms);
+      return result;
+    };
+    if(!bat.can_spend(J)){
+      return refuse(SendRefusal::ENERGY, aurora::safety::AttemptRefusal::ENERGY);
+    }
     if(m==phy::Mode::RF &&
        !simulated_rf_duty.can_allow(simulated_now_ms, rf_airtime)){
-      result.refusal=SendRefusal::DUTY;
-      return result;
+      return refuse(SendRefusal::DUTY, aurora::safety::AttemptRefusal::DUTY);
     }
 
     const auto default_hal = [&](phy::Mode mode, const fec::Pkt& packet){
+      attempt.hal_evaluated = true;
       if(mode==phy::Mode::RF){
-        return HAL::LORA_TX_SIMULATION(packet.fp.data.data(), packet.fp.data.size());
+        const auto hal = HAL::LORA_TX_SIMULATION_TRACE(
+          packet.fp.data.data(), packet.fp.data.size());
+        attempt.hal_replayable = hal.replayable;
+        attempt.lbt_evaluated = true;
+        attempt.lbt_threshold_dbm = hal.lbt.threshold_dbm;
+        attempt.lbt_first_rssi_dbm = hal.lbt.first_rssi_dbm;
+        attempt.lbt_second_valid = hal.lbt.second_valid;
+        attempt.lbt_second_rssi_dbm = hal.lbt.second_rssi_dbm;
+        return hal.accepted;
       }
+#ifdef FIELD_BUILD
+      attempt.hal_replayable = false;
+#else
+      attempt.hal_replayable = true;
+#endif
       if(mode==phy::Mode::IR){
         return HAL::IR_TX(packet.fp.data.data(), packet.fp.data.size(), 3500);
       }
       vector<uint8_t> bits(packet.fp.data.size()*8, 1);
       return HAL::BS_MODULATE(bits.data(), bits.size(), 450);
     };
-    const bool hal_ok = injected_hal ? injected_hal(m, pkt) : default_hal(m, pkt);
-    if(!hal_ok){ result.refusal=SendRefusal::HAL; return result; }
+    bool hal_ok = false;
+    if(injected_hal){
+      attempt.hal_evaluated = true;
+      attempt.hal_replayable = false;
+      hal_ok = injected_hal(m, pkt);
+    } else {
+      hal_ok = default_hal(m, pkt);
+    }
+    attempt.hal_accepted = hal_ok;
+    if(!hal_ok){
+      return refuse(SendRefusal::HAL, aurora::safety::AttemptRefusal::HAL);
+    }
 
-    if(!bat.spend(J)) { result.refusal=SendRefusal::ENERGY; return result; }
+    if(!bat.spend(J)) {
+      return refuse(SendRefusal::ENERGY, aurora::safety::AttemptRefusal::ENERGY);
+    }
     if(m==phy::Mode::RF &&
        !simulated_rf_duty.consume(simulated_now_ms, rf_airtime)){
-      result.refusal=SendRefusal::DUTY;
-      return result;
+      bat.E += J;
+      return refuse(SendRefusal::DUTY, aurora::safety::AttemptRefusal::DUTY);
     }
     result.transmitted = true;
+    attempt.transmitted = true;
+    attempt.refusal = aurora::safety::AttemptRefusal::NONE;
     double g  = W.multibounce_best(pos, rx.pos, 2);
     double SNR= phy::snr_db(g,m,W.illum);
     double coding_gain = (m==phy::Mode::RF? 8.0 : m==phy::Mode::IR? 3.0 : 4.0);
-    result.delivered = channel::pass_realistic(SNR, m, coding_gain, /*rician*/ false);
+    const auto channel_outcome = channel::pass_realistic_trace(
+      SNR, m, coding_gain, /*rician*/ false);
+    attempt.channel_evaluated = true;
+    attempt.channel_snr_db = channel_outcome.snr_db;
+    attempt.channel_coding_gain_db = channel_outcome.coding_gain_db;
+    attempt.channel_fading_db = channel_outcome.fading_db;
+    attempt.channel_threshold_db = channel_outcome.threshold_db;
+    result.delivered = channel_outcome.delivered;
+    attempt.delivered = result.delivered;
+    attempt.energy_after_j = bat.E;
+    attempt.duty_after_s = simulated_rf_duty.remaining_s(simulated_now_ms);
     if(result.delivered && !rx.seen.count(packet_key(pkt))) rx.inbox.push_back(pkt);
     return result;
   }
@@ -403,9 +467,17 @@ struct Engine {
     observed.rf_duty_remaining_s = source.duty_remaining_seconds(simulated_now_ms);
     observed.rf_airtime_per_attempt_s =
       HAL::LoraAirtimeSeconds(generation_descriptor.symbol_size);
-    if (const auto runtime = organism->runtime_state(generation_id)) {
+    if (const auto runtime = organism->runtime_state(generation_id, simulated_now_ms)) {
       observed.emitted_symbols = runtime->emitted_symbols;
       observed.critical_emitted_symbols = runtime->critical_emitted_symbols;
+      for (const auto& segment : runtime->segments) {
+        observed.segments.push_back({
+          segment.segment_id,
+          segment.emitted_symbols,
+          segment.decoder_rank,
+          segment.complete,
+          segment.expired});
+      }
     }
     observed.decoder_rank = last_decode_report.decoder_rank;
     observed.required_rank = static_cast<uint32_t>(K);
@@ -437,7 +509,8 @@ struct Engine {
       auto repairs = organism->emit_repairs(
         generation_id,
         trace.decision.repair_symbols,
-        trace.decision.critical_only);
+        trace.decision.critical_only,
+        simulated_now_ms);
       if (repairs.emitted_symbols != trace.decision.repair_symbols) {
         throw logic_error("runtime repair emission disagrees with SafetyEnvelope decision");
       }
@@ -453,8 +526,23 @@ struct Engine {
     };
 
     for(uint32_t i=0; i<trace.decision.transmission_attempts; ++i){
+      const auto eligible = [&](const fec::Pkt& packet) {
+        if(packet.segment_id >= generation_descriptor.segments.size()) return false;
+        const auto& segment = generation_descriptor.segments[packet.segment_id];
+        if(simulated_now_ms > segment.expires_at_ms) return false;
+        if(packet.segment_id < trace.observed.segments.size()) {
+          const auto& runtime = trace.observed.segments[packet.segment_id];
+          if(runtime.complete || runtime.expired) return false;
+        }
+        return true;
+      };
       const auto sent = source.send_one(
-        net.W, destination, mode, simulated_now_ms, trace.decision.critical_only);
+        net.W, destination, mode, simulated_now_ms,
+        trace.decision.critical_only, {}, eligible);
+      if(!sent.attempted) {
+        throw logic_error("SafetyEnvelope admitted an action without an eligible packet");
+      }
+      trace.execution.attempts.push_back(sent.trace);
       if(sent.attempted) ++summary.attempts;
       if(sent.transmitted) ++summary.hal_accepted;
       if(sent.delivered) ++summary.delivered;

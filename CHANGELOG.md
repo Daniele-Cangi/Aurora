@@ -15,6 +15,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Injectable `GenerationCodec`, `TransportPolicy` and `GenerationManager` boundaries with fixed and biological policy implementations.
 - Generation-scoped deterministic runtime repair emission with segment-aware critical scheduling and immutable descriptors.
 - Dependency-light GitHub Actions build and CTest jobs for Linux and Windows.
+- Independent segment expiry, late-symbol accounting, per-segment decode reports, and reliability-prioritized runtime repair selection.
+- V3 decision traces with per-attempt LBT, channel, energy and simulation-duty transition evidence.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
 
 ### Changed
@@ -23,7 +25,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
 - Made simulation and coding randomness reproducible from the contract seed.
 - Added `--decision-trace <path>` to the main simulator.
-- Upgraded decision provenance to V2 with actual repair, attempt, HAL-acceptance and delivery counts; inconsistent execution traces are rejected.
+- Upgraded decision provenance to V3: actual repair/attempt aggregates are backed by replayable per-attempt HAL/channel/resource transitions; incomplete or inconsistent execution traces are rejected.
+- V2 decision traces are no longer accepted because they cannot provide V3 segment/action evidence and must be regenerated.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.
