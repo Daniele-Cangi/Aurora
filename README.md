@@ -8,7 +8,7 @@ Aurora-X is an ambitious systems research project exploring a long-term goal:
 
 The current repository contains a substantial C++20 research implementation covering fountain-style forward error correction, adaptive redundancy, traffic classes, simulated RF/optical/backscatter links, energy and RIS models, supervisory state, cross-layer optimization, signed payloads, telemetry, UDP experiments, and an interactive dashboard.
 
-Aurora-X is **not yet a field-deployed extreme-network stack**, a validated replacement for established FEC standards, or a production security system. The internal LT-like simulator now has one coherent generation/decode path, but its channel, energy, safety-state, HAL, dashboard, and security layers still include simulation or prototype behaviour that must not be used for quantitative field claims.
+Aurora-X is **not yet a field-deployed extreme-network stack**, a validated replacement for established FEC standards, or a production security system. The internal LT-like simulator now has a coherent descriptor-driven path for deterministic concurrent generation arrivals and decoding, but its channel, energy, safety-state, HAL, dashboard, and security layers still include simulation or prototype behaviour that must not be used for quantitative field claims.
 
 The project is not being reduced in scope. Its engineering path and maximum target architecture are defined in [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md).
 
@@ -57,9 +57,9 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
-| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V6 decision traces, V2 simulator event ledgers, canonical contact schedules and benchmark channel traces; paired replay reconstructs the current single-generation timeline from scheduled contact, harvesting and RIS through proposal, action, arrival and supervision | Concurrent nodes, multiple external generation arrivals, imported emulation traces and physical hardware remain outside the current event model |
+| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V6 decision traces, V3 simulator event ledgers, canonical contact and generation-arrival schedules, and benchmark channel traces; paired replay reconstructs multiple FIFO-scheduled generations from external arrival through contact, harvesting, RIS, proposal, action and supervision | Concurrent/mobile nodes, alternative generation schedulers, imported emulation traces and physical hardware remain outside the current event model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, paired simulator-event/decision replay, replayable benchmark channel traces, Wilson confidence intervals, per-trial records and configure-time build/profile fingerprints | Provenance and checksum chains detect reproducibility failures and corruption but do not authenticate the producing build |
 
 ---
@@ -247,11 +247,13 @@ include/aurora/
   telemetry/DecisionReplayLog.hpp  Canonical decision log and verifier
   telemetry/SimulationEventLedger.hpp  Inter-step simulator event ledger
   simulation/ContactSchedule.hpp       Canonical link-contact windows
+  simulation/GenerationArrivalSchedule.hpp Canonical external arrivals
   simulation/ChannelTrace.hpp      Canonical channel traces and generators
   simulation/BaselineBenchmark.hpp Replayable statistical comparison harness
 apps/
   aurora_replay.cpp          Independent proposal/action/safety replay tool
   aurora_contact_schedule.cpp Canonical contact-schedule creator
+  aurora_generation_arrivals.cpp Canonical generation-arrival creator
   aurora_benchmark.cpp       CSV baseline runner
 src/core/
   AuroraSafetyMonitor.hpp    Legacy safety-state prototype
@@ -265,6 +267,7 @@ tests/
   test_channel_trace.cpp
   test_simulation_event_ledger.cpp
   test_contact_schedule.cpp
+  test_generation_arrival_schedule.cpp
 aurora_batch_test.cpp        Experimental parameter sweep harness
 aurora_udp_*.cpp             UDP transport experiments
 aurora_dash_lab.py           Live monitoring dashboard
@@ -331,11 +334,29 @@ Create and apply deterministic contact windows before recording:
 Windows are half-open `[start_ms, end_ms)`. Gaps mean complete loss of contact; link sets are `none`, `all`, or `+`-joined subsets of `rf`, `optical`, and `backscatter`.
 Use `--contact-schedule-out <path>` to persist the exact canonical schedule selected for a run.
 
-The paired verifier first reconstructs scheduled link availability, each harvesting/ingest transition, deterministic RIS perturbation, illumination, world gain and SNR summary from the session topology and global RNG checkpoints. It then derives the exact V6 proposal, recomputes the `SafetyEnvelope` decision—including link replacement or rejection outside a contact window—and validates LBT samples, fading, delivery, energy/duty, pacing randomness and destination inbox arrivals. Finally it applies UCB and supervisory feedback while enforcing contact, RNG, energy, buffer, inbox and decoder-rank continuity across steps.
+Create a deterministic external-generation arrival schedule and replay it with the same run:
 
-This covers scheduled link contacts in the current fixed-node, single-generation simulator. The ledger records an initial generation arrival at simulation time zero; multiple external arrivals, concurrent/mobile nodes and imported field traces are not yet implemented. All samples remain simulation evidence rather than calibrated measurements, and real `FIELD_BUILD` hardware is not reconstructed.
+```bash
+./build/bin/aurora_generation_arrivals arrivals.trace \
+  0:alpha \
+  2000:beta \
+  5000:gamma
 
-V2 through V5 decision traces do not contain the complete V6 contact, proposal, action and supervisory evidence and are intentionally rejected. V1 simulator event ledgers do not carry a contact schedule and are also rejected; regenerate paired artifacts with the current simulator.
+./build/bin/aurora_x \
+  --generation-arrivals arrivals.trace \
+  --generation-arrivals-out arrivals-used.trace \
+  --contact-schedule contacts.trace \
+  --decision-trace decision-trace.log \
+  --event-ledger simulation-events.log
+```
+
+Each entry is `<time-ms>:<tag>`. The first arrival must be at 0 ms; later times are unique, strictly increasing and aligned to the simulator's 1000 ms step. Tags are unique stable identifiers containing only letters, digits, `.`, `_` or `-`. The engine deterministically pre-constructs every immutable descriptor, releases its initial symbols only at the declared time, and services arrived non-terminal generations in FIFO order. A later generation can therefore coexist in the source/destination stores while an earlier generation is still being decoded. Use `--generation-arrivals-out <path>` to persist the exact schedule used.
+
+The paired verifier first reconstructs the declared generation releases, scheduled link availability, each harvesting/ingest transition, deterministic RIS perturbation, illumination, world gain and SNR summary from the session topology and global RNG checkpoints. It binds every step to the active generation identity, then derives the exact V6 proposal, recomputes the `SafetyEnvelope` decision—including link replacement or rejection outside a contact window—and validates LBT samples, fading, delivery, energy/duty, pacing randomness and generation-qualified destination inbox arrivals. Finally it applies UCB and supervisory feedback while enforcing arrival, contact, RNG, energy, buffer, inbox and per-generation decoder-rank continuity across steps.
+
+This covers scheduled link contacts and multiple external arrivals in the current fixed-node simulator. Scheduling is deliberately FIFO among arrived non-terminal generations; concurrent/mobile nodes, priority/deadline-aware generation scheduling and imported field traces are not yet implemented. Arrival replay is unavailable in interactive-lab and `FIELD_BUILD` modes. All samples remain simulation evidence rather than calibrated measurements, and real field hardware is not reconstructed.
+
+V2 through V5 decision traces do not contain the complete V6 contact, proposal, action and supervisory evidence and are intentionally rejected. V1/V2 simulator event ledgers do not carry the complete contact-plus-generation schedule and are also rejected; regenerate paired artifacts with the current simulator.
 
 Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
 
