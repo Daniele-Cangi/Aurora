@@ -394,6 +394,8 @@ struct Engine {
   aurora::safety::SafetyEnvelope safety_envelope;
   aurora::telemetry::DecisionReplayLog decision_trace_log;
   aurora::telemetry::SimulationEventLedger simulation_event_log;
+  aurora::simulation::ContactSchedule contact_schedule =
+    aurora::simulation::ContactSchedule::always_available();
   
   // T1: Flag per stream interattivo e stato corrente
   bool interactive_stream_ = false;
@@ -463,6 +465,7 @@ struct Engine {
       session.obstacles.push_back({
         {obstacle.first.x, obstacle.first.y}, obstacle.second});
     }
+    session.contact_schedule = contact_schedule;
     simulation_event_log.begin(std::move(session));
   }
 
@@ -471,6 +474,8 @@ struct Engine {
     aurora::telemetry::SimulationStepEvent event;
     event.step = static_cast<uint64_t>(step);
     event.simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+    event.contact_available = contact_schedule.availability_at(
+      event.simulated_now_ms);
     event.random_before = util::rng.s;
     event.source_energy_before_tick_j = source.bat.E;
     event.destination_energy_before_tick_j = destination.bat.E;
@@ -554,7 +559,9 @@ struct Engine {
   }
 
   aurora::safety::TransportState transport_state(
-      Node& source, uint64_t simulated_now_ms) const {
+      Node& source,
+      uint64_t simulated_now_ms,
+      const aurora::simulation::ContactAvailability& contact) const {
     aurora::safety::TransportState observed;
     observed.observed_at_ms = simulated_now_ms;
     observed.now_ms = simulated_now_ms;
@@ -569,6 +576,9 @@ struct Engine {
     observed.rf_duty_remaining_s = source.duty_remaining_seconds(simulated_now_ms);
     observed.rf_airtime_per_attempt_s =
       HAL::LoraAirtimeSeconds(generation_descriptor.symbol_size);
+    observed.rf_contact_available = contact.rf;
+    observed.optical_contact_available = contact.optical;
+    observed.backscatter_contact_available = contact.backscatter;
     if (const auto runtime = organism->runtime_state(generation_id, simulated_now_ms)) {
       observed.emitted_symbols = runtime->emitted_symbols;
       observed.critical_emitted_symbols = runtime->critical_emitted_symbols;
@@ -935,7 +945,8 @@ struct Engine {
       const auto proposal_decision = opt.propose(proposal_input);
       const auto proposal_after_derivation = opt.proposal_state();
       const auto proposed = proposal_decision.transport;
-      const auto observed = transport_state(S, simulated_now_ms);
+      const auto observed = transport_state(
+        S, simulated_now_ms, simulation_event.contact_available);
       auto decision_trace = safety_envelope.constrain(I, generation_descriptor, observed, proposed);
       double hop = HAL::FHSS_next(proposal_decision.covert_sequence);
       HAL::LORA_CFG(
@@ -1172,7 +1183,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     const auto proposal_decision = opt.propose(proposal_input);
     const auto proposal_after_derivation = opt.proposal_state();
     const auto proposed = proposal_decision.transport;
-    const auto observed = engine.transport_state(S, simulated_now_ms);
+    const auto observed = engine.transport_state(
+      S, simulated_now_ms, simulation_event.contact_available);
     auto decision_trace = engine.safety_envelope.constrain(
       engine.I, engine.generation_descriptor, observed, proposed);
     double hop = HAL::FHSS_next(proposal_decision.covert_sequence);
@@ -1295,6 +1307,8 @@ int main(int argc, char* argv[]){
   bool interactive_lab = false;
   std::string decision_trace_path;
   std::string event_ledger_path;
+  std::string contact_schedule_path;
+  std::string contact_schedule_out_path;
   for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--interactive-lab") {
       interactive_lab = true;
@@ -1310,16 +1324,39 @@ int main(int argc, char* argv[]){
         return 2;
       }
       event_ledger_path = argv[++i];
+    } else if (std::string(argv[i]) == "--contact-schedule") {
+      if (i + 1 >= argc) {
+        std::cerr << "--contact-schedule requires a file path\n";
+        return 2;
+      }
+      contact_schedule_path = argv[++i];
+    } else if (std::string(argv[i]) == "--contact-schedule-out") {
+      if (i + 1 >= argc) {
+        std::cerr << "--contact-schedule-out requires a file path\n";
+        return 2;
+      }
+      contact_schedule_out_path = argv[++i];
     }
   }
 
   auto engine = std::make_unique<Engine>();
 #ifdef FIELD_BUILD
-  if (!event_ledger_path.empty()) {
-    std::cerr << "--event-ledger is simulation-only and is unavailable in FIELD_BUILD\n";
+  if (!event_ledger_path.empty() || !contact_schedule_path.empty() ||
+      !contact_schedule_out_path.empty()) {
+    std::cerr << "event/contact replay options are simulation-only and unavailable in FIELD_BUILD\n";
     return 2;
   }
 #endif
+  if (!contact_schedule_path.empty()) {
+    try {
+      engine->contact_schedule =
+        aurora::simulation::ContactSchedule::load(contact_schedule_path);
+    } catch (const std::exception& error) {
+      std::cerr << "[CONTACT] failed to load schedule: "
+                << error.what() << '\n';
+      return 2;
+    }
+  }
   bool ok = false;
   if (interactive_lab) {
     ok = aurora_run_interactive_lab(*engine, 5000);
@@ -1347,6 +1384,19 @@ int main(int argc, char* argv[]){
                 << '\n';
     } catch (const std::exception& error) {
       std::cerr << "[REPLAY] failed to save simulation event ledger: "
+                << error.what() << '\n';
+      return 2;
+    }
+  }
+  if (!contact_schedule_out_path.empty()) {
+    try {
+      engine->contact_schedule.save(contact_schedule_out_path);
+      std::cerr << "[CONTACT] schedule saved: "
+                << contact_schedule_out_path
+                << " windows=" << engine->contact_schedule.windows().size()
+                << '\n';
+    } catch (const std::exception& error) {
+      std::cerr << "[CONTACT] failed to save schedule: "
                 << error.what() << '\n';
       return 2;
     }

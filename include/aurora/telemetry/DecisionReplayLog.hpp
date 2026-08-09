@@ -41,7 +41,7 @@ struct ReplayVerification {
 // it is not a cryptographic signature.
 class DecisionReplayLog {
 public:
-    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V5";
+    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V6";
 
     void record(const transport::TransportContract& contract,
                 const transport::GenerationDescriptor& descriptor,
@@ -56,7 +56,7 @@ public:
         }
         if (!trace.execution.recorded) {
             throw std::invalid_argument(
-                "decision trace: V5 requires a recorded execution transition");
+                "decision trace: V6 requires a recorded execution transition");
         }
         if (const auto error = trace.execution_error()) {
             throw std::invalid_argument("decision trace: " + *error);
@@ -1112,6 +1112,9 @@ private:
                << '|' << hex_u64(double_bits(trace.observed.backscatter_energy_cost_per_attempt_j))
                << '|' << hex_u64(double_bits(trace.observed.rf_duty_remaining_s))
                << '|' << hex_u64(double_bits(trace.observed.rf_airtime_per_attempt_s))
+               << '|' << trace.observed.rf_contact_available
+               << '|' << trace.observed.optical_contact_available
+               << '|' << trace.observed.backscatter_contact_available
                << '|' << trace.observed.emitted_symbols
                << '|' << trace.observed.critical_emitted_symbols
                << '|' << trace.observed.decoder_rank
@@ -1169,7 +1172,7 @@ private:
                                                std::size_t expected_index,
                                                std::uint64_t expected_previous_checksum) {
         const auto fields = split_fields(payload);
-        if (fields.size() != 65 || fields.front() != "R") {
+        if (fields.size() != 68 || fields.front() != "R") {
             throw std::invalid_argument("decision trace: malformed record field count");
         }
         std::size_t cursor = 1;
@@ -1235,6 +1238,12 @@ private:
             parse_u64(fields.at(cursor++), 16, "RF duty seconds remaining"));
         trace.observed.rf_airtime_per_attempt_s = bits_double(
             parse_u64(fields.at(cursor++), 16, "RF airtime cost"));
+        trace.observed.rf_contact_available = parse_bool(
+            fields.at(cursor++), "RF contact availability");
+        trace.observed.optical_contact_available = parse_bool(
+            fields.at(cursor++), "optical contact availability");
+        trace.observed.backscatter_contact_available = parse_bool(
+            fields.at(cursor++), "backscatter contact availability");
         trace.observed.emitted_symbols = parse_u64(
             fields.at(cursor++), 10, "emitted symbols");
         trace.observed.critical_emitted_symbols = parse_u64(
@@ -1408,6 +1417,9 @@ private:
                double_bits(left.backscatter_energy_cost_per_attempt_j) == double_bits(right.backscatter_energy_cost_per_attempt_j) &&
                double_bits(left.rf_duty_remaining_s) == double_bits(right.rf_duty_remaining_s) &&
                double_bits(left.rf_airtime_per_attempt_s) == double_bits(right.rf_airtime_per_attempt_s) &&
+               left.rf_contact_available == right.rf_contact_available &&
+               left.optical_contact_available == right.optical_contact_available &&
+               left.backscatter_contact_available == right.backscatter_contact_available &&
                left.emitted_symbols == right.emitted_symbols &&
                left.critical_emitted_symbols == right.critical_emitted_symbols &&
                left.decoder_rank == right.decoder_rank &&

@@ -260,6 +260,9 @@ aurora_link_common(aurora_replay)
 add_executable(aurora_benchmark apps/aurora_benchmark.cpp)
 aurora_link_common(aurora_benchmark)
 
+add_executable(aurora_contact_schedule apps/aurora_contact_schedule.cpp)
+aurora_link_common(aurora_contact_schedule)
+
 # -------------------------------------------------------------------
 # Tests
 if(BUILD_TESTING)
@@ -299,18 +302,39 @@ if(BUILD_TESTING)
   aurora_link_common(test_simulation_event_ledger)
   add_test(NAME aurora.simulation_event_ledger COMMAND test_simulation_event_ledger)
 
+  add_executable(test_contact_schedule tests/test_contact_schedule.cpp)
+  aurora_link_common(test_contact_schedule)
+  add_test(NAME aurora.contact_schedule COMMAND test_contact_schedule)
+
   set(_AURORA_EVENT_DECISION_TRACE
       "${CMAKE_CURRENT_BINARY_DIR}/simulation-event-decisions.trace")
   set(_AURORA_EVENT_LEDGER
       "${CMAKE_CURRENT_BINARY_DIR}/simulation-events.trace")
+  set(_AURORA_CONTACT_SCHEDULE
+      "${CMAKE_CURRENT_BINARY_DIR}/contact-schedule.trace")
+  set(_AURORA_CONTACT_SCHEDULE_USED
+      "${CMAKE_CURRENT_BINARY_DIR}/contact-schedule-used.trace")
+  add_test(
+    NAME aurora.contact_schedule_generate
+    COMMAND aurora_contact_schedule
+      "${_AURORA_CONTACT_SCHEDULE}"
+      "0:1000:rf"
+      "1000:18446744073709551615:all")
+  set_tests_properties(
+    aurora.contact_schedule_generate
+    PROPERTIES FIXTURES_SETUP aurora_contact_schedule_fixture)
   add_test(
     NAME aurora.simulation_event_generate
     COMMAND aurora_x
+      --contact-schedule "${_AURORA_CONTACT_SCHEDULE}"
+      --contact-schedule-out "${_AURORA_CONTACT_SCHEDULE_USED}"
       --decision-trace "${_AURORA_EVENT_DECISION_TRACE}"
       --event-ledger "${_AURORA_EVENT_LEDGER}")
   set_tests_properties(
     aurora.simulation_event_generate
-    PROPERTIES FIXTURES_SETUP aurora_simulation_event_fixture)
+    PROPERTIES
+      FIXTURES_REQUIRED aurora_contact_schedule_fixture
+      FIXTURES_SETUP aurora_simulation_event_fixture)
   add_test(
     NAME aurora.simulation_event_replay
     COMMAND aurora_replay
@@ -318,6 +342,14 @@ if(BUILD_TESTING)
       "${_AURORA_EVENT_LEDGER}")
   set_tests_properties(
     aurora.simulation_event_replay
+    PROPERTIES FIXTURES_REQUIRED aurora_simulation_event_fixture)
+  add_test(
+    NAME aurora.contact_schedule_roundtrip
+    COMMAND ${CMAKE_COMMAND} -E compare_files
+      "${_AURORA_CONTACT_SCHEDULE}"
+      "${_AURORA_CONTACT_SCHEDULE_USED}")
+  set_tests_properties(
+    aurora.contact_schedule_roundtrip
     PROPERTIES FIXTURES_REQUIRED aurora_simulation_event_fixture)
 
   # Keep standard assert() checks active even in optimized test configurations.
@@ -331,6 +363,7 @@ if(BUILD_TESTING)
     target_compile_options(test_channel_trace PRIVATE /UNDEBUG)
     target_compile_options(test_runtime_correctness PRIVATE /UNDEBUG)
     target_compile_options(test_simulation_event_ledger PRIVATE /UNDEBUG)
+    target_compile_options(test_contact_schedule PRIVATE /UNDEBUG)
   else()
     target_compile_options(test_aurora_organism PRIVATE -UNDEBUG)
     target_compile_options(test_transport_contract PRIVATE -UNDEBUG)
@@ -341,6 +374,7 @@ if(BUILD_TESTING)
     target_compile_options(test_channel_trace PRIVATE -UNDEBUG)
     target_compile_options(test_runtime_correctness PRIVATE -UNDEBUG)
     target_compile_options(test_simulation_event_ledger PRIVATE -UNDEBUG)
+    target_compile_options(test_contact_schedule PRIVATE -UNDEBUG)
   endif()
 
   if(USE_RAPTORQ)
@@ -397,6 +431,7 @@ set(_AURORA_ALL_TARGETS
   aurora_x
   aurora_replay
   aurora_benchmark
+  aurora_contact_schedule
   test_raptorq_adapter
   test_aurora_organism
   test_transport_contract
@@ -406,6 +441,8 @@ set(_AURORA_ALL_TARGETS
   test_baseline_benchmark
   test_channel_trace
   test_runtime_correctness
+  test_simulation_event_ledger
+  test_contact_schedule
   aurora_batch_test
   aurora_deadline_sweep
   aurora_selector_test

@@ -397,7 +397,7 @@ Implement interchangeable policies:
 
 The biological policy earns its place by outperforming or stabilizing better than explicit baselines, not by terminology.
 
-**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The V5 decision trace reconstructs proposal, action and supervisory transitions. A paired simulator event ledger now reconstructs the current fixed-topology, single-generation event stream, including harvesting, ingest, RIS, channel history, global RNG use and packet arrivals. Scheduled contacts and multiple external generation arrivals remain future event types rather than hidden state in the implemented scenario.
+**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The V6 decision trace reconstructs contact-aware proposal, action and supervisory transitions. A paired V2 simulator ledger reconstructs the current fixed-node, single-generation stream, including declared contact windows, harvesting, ingest, RIS, channel history, global RNG use and packet arrivals. Multiple external generation arrivals remain a future event type rather than hidden state in the implemented scenario.
 
 ### Exit gate
 
@@ -438,7 +438,7 @@ At minimum compare:
 - multi-link disagreement;
 - stale channel estimates.
 
-**Current status:** IID, Gilbert–Elliott burst loss, scheduled outages, slow drift and abrupt shock/recovery are implemented as canonical deterministic trace generators. Asymmetric links, reordering/duplication, contact windows, explicit deadline scheduling, energy/harvesting, multi-link disagreement and stale estimates remain pending.
+**Current status:** IID, Gilbert–Elliott burst loss, scheduled outages, slow drift and abrupt shock/recovery are implemented as canonical deterministic benchmark traces. The main orchestrator now accepts canonical per-link `ContactSchedule` windows and replays them end-to-end. Contact-aware comparative baselines, asymmetric links, reordering/duplication, explicit deadline scheduling, benchmark energy/harvesting, multi-link disagreement and stale estimates remain pending.
 
 ## Phase 3C — Experimental discipline
 
@@ -524,7 +524,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
 
-The current V5 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies the safety decision; replays each admitted action; applies UCB feedback; and reconstructs the bounded supervisory transition. The paired `SimulationEventLedger` binds those records to fixed topology and the time-zero generation arrival, then independently reconstructs inter-step harvesting/ingest, RIS phases, world gain, channel history, LBT/fading/pacing randomness, inbox arrivals and state continuity. This covers the complete event timeline of the implemented fixed-topology, single-generation simulator. Scheduled contact changes, concurrent nodes, multiple external arrivals and imported field/emulation traces remain pending.
+The current V6 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies contact-aware safety decisions; replays each admitted action; applies UCB feedback; and reconstructs the bounded supervisory transition. The paired V2 `SimulationEventLedger` embeds a canonical `ContactSchedule`, binds records to fixed node topology and the time-zero generation arrival, then independently reconstructs contact availability, inter-step harvesting/ingest, RIS phases, world gain, channel history, LBT/fading/pacing randomness, inbox arrivals and state continuity. This covers the event timeline of the implemented fixed-node, single-generation simulator. Concurrent/mobile nodes, multiple external arrivals and imported field/emulation traces remain pending.
 
 ### Exit gate
 

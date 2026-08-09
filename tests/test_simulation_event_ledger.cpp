@@ -62,6 +62,7 @@ aurora::telemetry::SimulationStepEvent first_event(
     event.snr_optical_db = environment.snr_optical_db;
     event.snr_backscatter_db = environment.snr_backscatter_db;
     event.ris_phases = environment.ris_phases;
+    event.contact_available = session.contact_schedule.availability_at(0);
     return event;
 }
 
@@ -77,7 +78,7 @@ int main() {
     ledger.record(event);
 
     const auto encoded = ledger.serialize();
-    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V1\n"));
+    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V2\n"));
     assert(encoded == ledger.serialize());
     const auto restored = SimulationEventLedger::deserialize(encoded);
     assert(restored.serialize() == encoded);
@@ -85,6 +86,19 @@ int main() {
     const auto structure = restored.verify_structure();
     assert(structure.ok);
     assert(structure.records_verified == 1);
+
+    auto legacy_v1 = encoded;
+    legacy_v1.replace(
+        0,
+        std::string("AURORA_SIMULATION_EVENT_LEDGER_V2").size(),
+        "AURORA_SIMULATION_EVENT_LEDGER_V1");
+    bool legacy_rejected = false;
+    try {
+        (void)SimulationEventLedger::deserialize(legacy_v1);
+    } catch (const std::invalid_argument&) {
+        legacy_rejected = true;
+    }
+    assert(legacy_rejected);
 
     auto false_environment = event;
     false_environment.ris_phases.front() ^= 1U;
@@ -94,6 +108,16 @@ int main() {
     const auto semantic_result = semantic_tamper.verify_structure();
     assert(!semantic_result.ok);
     assert(semantic_result.failure_reason.find("RIS/world transition") !=
+           std::string::npos);
+
+    auto false_contact = event;
+    false_contact.contact_available.rf = false;
+    SimulationEventLedger contact_tamper;
+    contact_tamper.begin(metadata);
+    contact_tamper.record(false_contact);
+    const auto contact_result = contact_tamper.verify_structure();
+    assert(!contact_result.ok);
+    assert(contact_result.failure_reason.find("contact availability") !=
            std::string::npos);
 
     auto corrupted = encoded;

@@ -48,12 +48,26 @@ struct TransportState {
     double backscatter_energy_cost_per_attempt_j = 0.0;
     double rf_duty_remaining_s = 0.0;
     double rf_airtime_per_attempt_s = 0.0;
+    // Deterministic contact observation for the three existing link models.
+    // Defaults preserve the legacy continuously-connected simulation.
+    bool rf_contact_available = true;
+    bool optical_contact_available = true;
+    bool backscatter_contact_available = true;
     std::uint64_t emitted_symbols = 0;
     std::uint64_t critical_emitted_symbols = 0;
     std::uint32_t decoder_rank = 0;
     std::uint32_t required_rank = 0;
     std::vector<SegmentTransportState> segments;
 };
+
+inline bool contact_available(const TransportState& state, LinkMode link) {
+    switch (link) {
+        case LinkMode::RF: return state.rf_contact_available;
+        case LinkMode::OPTICAL: return state.optical_contact_available;
+        case LinkMode::BACKSCATTER: return state.backscatter_contact_available;
+    }
+    return false;
+}
 
 struct TransportDecision {
     LinkMode link = LinkMode::RF;
@@ -133,6 +147,10 @@ struct TransportDecisionTrace {
             (execution.transmission_attempts != 0 ||
              execution.repair_symbols_emitted != 0)) {
             return "rejected decision was executed";
+        }
+        if (execution.transmission_attempts > 0 &&
+            !contact_available(observed, execution.link)) {
+            return "execution used a link outside its contact window";
         }
         if (execution.attempts.size() != execution.transmission_attempts) {
             return "execution attempt trace count does not match the decision";
@@ -362,7 +380,8 @@ public:
                 return trace;
             }
             trace.decision.link = *replacement;
-            trace.constraints_applied.push_back("proposed link replaced by an allowed link");
+            trace.constraints_applied.push_back(
+                "proposed link replaced by an allowed in-contact link");
         }
 
         const auto bounded_total = std::min<long double>(
@@ -533,6 +552,7 @@ private:
                                  const TransportState& state,
                                  LinkMode link) {
         if (!link_allowed(contract, link)) return false;
+        if (!contact_available(state, link)) return false;
         if (link == LinkMode::RF && state.rf_duty_remaining <= 0.0) return false;
         return maximum_affordable_attempts(contract, state, link) > 0;
     }
