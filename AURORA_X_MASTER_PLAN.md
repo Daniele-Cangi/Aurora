@@ -381,7 +381,7 @@ The supervisor must use separate enter and exit thresholds, minimum dwell times,
 - Energy reserve and duty constraints cannot be violated by panic response.
 - CRITICAL mode cannot transition directly to aggressive exploration.
 
-**Current status:** the supervisory monitor now preserves `NO_EVIDENCE`, excludes inactive flow classes, validates telemetry fractions, uses separate enter/exit thresholds and consecutive transition evidence, requires `CRITICAL -> DEGRADED -> HEALTHY` recovery, and forces conservative operation when evidence is missing. The hard `SafetyEnvelope` remains authoritative for per-action constraints. Confidence calibration, timestamp-based stale-health detection and full controller-state replay remain pending.
+**Current status:** the supervisory monitor now preserves `NO_EVIDENCE`, excludes inactive flow classes, validates telemetry fractions, expires timestamped evidence against a monotonic simulation clock, uses separate enter/exit thresholds and consecutive transition evidence, requires `CRITICAL -> DEGRADED -> HEALTHY` recovery, and forces conservative operation when evidence is missing. Its complete bounded evidence window, clock, pending hysteresis transition and operating-mode transition are replayed before/after every recorded action. The hard `SafetyEnvelope` remains authoritative for per-action constraints. Confidence calibration and field-derived freshness limits remain pending.
 
 ## Phase 2D — Policy comparison
 
@@ -397,7 +397,7 @@ Implement interchangeable policies:
 
 The biological policy earns its place by outperforming or stabilizing better than explicit baselines, not by terminology.
 
-**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The implemented decision trace records and replays the hard safety-envelope decision; full controller-state replay is not yet complete.
+**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The implemented decision trace records and replays the hard safety-envelope decision and the full supervisory-controller transition. UCB/channel-selector state and RNG-backed proposal derivation are not yet reconstructed, so complete cross-layer controller replay remains pending.
 
 ### Exit gate
 
@@ -524,7 +524,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
 
-The current V3 `DecisionReplayLog` verifies safety decisions and deterministically replays each admitted simulation action from recorded LBT, channel, energy and duty evidence. The benchmark can also replay exact delivered/lost channel slots across controller versions. Neither mechanism yet reconstructs contact topology, generation arrivals, inter-step harvesting/RIS evolution or the complete simulator time line.
+The current V4 `DecisionReplayLog` verifies safety decisions, deterministically replays each admitted simulation action from recorded LBT, channel, energy and duty evidence, and reconstructs the complete bounded supervisory state transition with timestamp freshness and cross-record continuity. The benchmark can also replay exact delivered/lost channel slots across controller versions. Neither mechanism yet reconstructs UCB/RNG proposal derivation, contact topology, generation arrivals, inter-step harvesting/RIS evolution or the complete simulator time line.
 
 ### Exit gate
 

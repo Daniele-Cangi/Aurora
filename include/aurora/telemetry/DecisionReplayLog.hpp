@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../control/ControllerTransition.hpp"
 #include "../safety/SafetyEnvelope.hpp"
 #include "../transport/Generation.hpp"
 #include "../transport/TransportContract.hpp"
@@ -24,6 +25,7 @@ struct DecisionReplayRecord {
     transport::TransportContract contract;
     transport::GenerationDescriptor descriptor;
     safety::TransportDecisionTrace trace;
+    control::ControllerTransition controller;
 };
 
 struct ReplayVerification {
@@ -32,15 +34,17 @@ struct ReplayVerification {
     std::string failure_reason;
 };
 
-// Canonical, deterministic provenance for safety decisions. The checksum chain
-// detects accidental corruption and reordering; it is not a cryptographic signature.
+// Canonical, deterministic provenance for action and supervisory-controller
+// transitions. The checksum chain detects accidental corruption and reordering;
+// it is not a cryptographic signature.
 class DecisionReplayLog {
 public:
-    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V3";
+    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V4";
 
     void record(const transport::TransportContract& contract,
                 const transport::GenerationDescriptor& descriptor,
-                const safety::TransportDecisionTrace& trace) {
+                const safety::TransportDecisionTrace& trace,
+                const control::ControllerTransition& controller) {
         contract.validate();
         if (descriptor.generation_id.empty() ||
             trace.generation_id != descriptor.generation_id) {
@@ -49,12 +53,27 @@ public:
         }
         if (!trace.execution.recorded) {
             throw std::invalid_argument(
-                "decision trace: V3 requires a recorded execution transition");
+                "decision trace: V4 requires a recorded execution transition");
         }
         if (const auto error = trace.execution_error()) {
             throw std::invalid_argument("decision trace: " + *error);
         }
-        records_.push_back({contract, descriptor, trace});
+        if (const auto error = controller.validation_error()) {
+            throw std::invalid_argument("decision trace: controller " + *error);
+        }
+        if (controller.now_ms != trace.observed.now_ms) {
+            throw std::invalid_argument(
+                "decision trace: controller and transport times do not match");
+        }
+        if (!records_.empty()) {
+            const auto& previous = records_.back().controller;
+            if (!(previous.after == controller.before) ||
+                previous.mode_after != controller.mode_before) {
+                throw std::invalid_argument(
+                    "decision trace: controller state is not contiguous");
+            }
+        }
+        records_.push_back({contract, descriptor, trace, controller});
     }
 
     [[nodiscard]] const std::vector<DecisionReplayRecord>& records() const {
@@ -166,6 +185,30 @@ public:
                 verification.failure_reason =
                     "execution mismatch at record " + std::to_string(index) + ": " + *error;
                 return verification;
+            }
+            if (const auto error = record.controller.validation_error()) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "controller mismatch at record " + std::to_string(index) +
+                    ": " + *error;
+                return verification;
+            }
+            if (record.controller.now_ms != record.trace.observed.now_ms) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "controller time mismatch at record " + std::to_string(index);
+                return verification;
+            }
+            if (index > 0) {
+                const auto& previous = records_[index - 1].controller;
+                if (!(previous.after == record.controller.before) ||
+                    previous.mode_after != record.controller.mode_before) {
+                    verification.ok = false;
+                    verification.failure_reason =
+                        "controller continuity mismatch at record " +
+                        std::to_string(index);
+                    return verification;
+                }
             }
             ++verification.records_verified;
         }
@@ -284,6 +327,150 @@ private:
             throw std::invalid_argument("decision trace: invalid link mode");
         }
         return static_cast<safety::LinkMode>(value);
+    }
+
+    static safety::SafetyState parse_safety_state(const std::string& encoded) {
+        const auto value = parse_int(encoded, "safety state");
+        switch (value) {
+            case -1: return safety::SafetyState::NO_EVIDENCE;
+            case 0: return safety::SafetyState::HEALTHY;
+            case 1: return safety::SafetyState::DEGRADED;
+            case 2: return safety::SafetyState::CRITICAL;
+            default:
+                throw std::invalid_argument("decision trace: invalid safety state");
+        }
+    }
+
+    static control::OperatingMode parse_operating_mode(const std::string& encoded) {
+        const auto value = parse_u32(encoded, "operating mode");
+        if (value > static_cast<std::uint32_t>(control::OperatingMode::AGGRESSIVE)) {
+            throw std::invalid_argument("decision trace: invalid operating mode");
+        }
+        return static_cast<control::OperatingMode>(value);
+    }
+
+    static std::string encode_safety_evidence(
+        const safety::SafetyEvidenceSample& sample) {
+        std::ostringstream encoded;
+        encoded << sample.observed_at_ms << ','
+                << hex_u64(double_bits(sample.duty_left)) << ','
+                << hex_u64(double_bits(sample.nerve_fail_rate)) << ','
+                << hex_u64(double_bits(sample.gland_fail_rate)) << ','
+                << hex_u64(double_bits(sample.muscle_fail_rate)) << ','
+                << hex_u64(double_bits(sample.nerve_cov)) << ','
+                << hex_u64(double_bits(sample.gland_cov)) << ','
+                << hex_u64(double_bits(sample.muscle_cov)) << ','
+                << sample.nerve_has_evidence << ','
+                << sample.gland_has_evidence << ','
+                << sample.muscle_has_evidence;
+        return encoded.str();
+    }
+
+    static safety::SafetyEvidenceSample decode_safety_evidence(
+        const std::string& encoded) {
+        const auto fields = split_delimited(encoded, ',');
+        if (fields.size() != 11) {
+            throw std::invalid_argument("decision trace: malformed safety evidence");
+        }
+        safety::SafetyEvidenceSample sample;
+        std::size_t cursor = 0;
+        sample.observed_at_ms = parse_u64(fields[cursor++], 10, "health observation time");
+        sample.duty_left = bits_double(parse_u64(fields[cursor++], 16, "health duty"));
+        sample.nerve_fail_rate = bits_double(parse_u64(fields[cursor++], 16, "nerve failure rate"));
+        sample.gland_fail_rate = bits_double(parse_u64(fields[cursor++], 16, "gland failure rate"));
+        sample.muscle_fail_rate = bits_double(parse_u64(fields[cursor++], 16, "muscle failure rate"));
+        sample.nerve_cov = bits_double(parse_u64(fields[cursor++], 16, "nerve coverage"));
+        sample.gland_cov = bits_double(parse_u64(fields[cursor++], 16, "gland coverage"));
+        sample.muscle_cov = bits_double(parse_u64(fields[cursor++], 16, "muscle coverage"));
+        sample.nerve_has_evidence = parse_bool(fields[cursor++], "nerve evidence flag");
+        sample.gland_has_evidence = parse_bool(fields[cursor++], "gland evidence flag");
+        sample.muscle_has_evidence = parse_bool(fields[cursor++], "muscle evidence flag");
+        if (const auto error = safety::safety_evidence_error(sample)) {
+            throw std::invalid_argument("decision trace: " + *error);
+        }
+        return sample;
+    }
+
+    static std::string encode_safety_snapshot(
+        const safety::SafetyMonitorSnapshot& snapshot) {
+        const auto& config = snapshot.config;
+        std::ostringstream encoded;
+        encoded << hex_u64(double_bits(config.duty_budget_critical_threshold)) << ','
+                << hex_u64(double_bits(config.duty_budget_degraded_threshold)) << ','
+                << hex_u64(double_bits(config.duty_budget_recovery_margin)) << ','
+                << hex_u64(double_bits(config.fail_rate_critical_threshold)) << ','
+                << hex_u64(double_bits(config.fail_rate_degraded_threshold)) << ','
+                << hex_u64(double_bits(config.fail_rate_recovery_margin)) << ','
+                << config.window_size << ','
+                << config.minimum_window_samples << ','
+                << config.escalation_samples << ','
+                << config.recovery_samples << ','
+                << config.maximum_observation_age_ms << ','
+                << static_cast<int>(snapshot.current_state) << ','
+                << static_cast<int>(snapshot.pending_state) << ','
+                << snapshot.pending_observations << ','
+                << snapshot.last_now_ms << ','
+                << snapshot.clock_initialized
+                << '~' << snapshot.samples.size() << '~';
+        if (snapshot.samples.empty()) encoded << '-';
+        for (std::size_t index = 0; index < snapshot.samples.size(); ++index) {
+            if (index != 0) encoded << ';';
+            encoded << encode_safety_evidence(snapshot.samples[index]);
+        }
+        return encoded.str();
+    }
+
+    static safety::SafetyMonitorSnapshot decode_safety_snapshot(
+        const std::string& encoded) {
+        const auto parts = split_delimited(encoded, '~');
+        if (parts.size() != 3) {
+            throw std::invalid_argument("decision trace: malformed safety snapshot");
+        }
+        const auto fields = split_delimited(parts[0], ',');
+        if (fields.size() != 16) {
+            throw std::invalid_argument("decision trace: malformed safety snapshot header");
+        }
+        safety::SafetyMonitorSnapshot snapshot;
+        auto& config = snapshot.config;
+        std::size_t cursor = 0;
+        config.duty_budget_critical_threshold = bits_double(
+            parse_u64(fields[cursor++], 16, "critical duty threshold"));
+        config.duty_budget_degraded_threshold = bits_double(
+            parse_u64(fields[cursor++], 16, "degraded duty threshold"));
+        config.duty_budget_recovery_margin = bits_double(
+            parse_u64(fields[cursor++], 16, "duty recovery margin"));
+        config.fail_rate_critical_threshold = bits_double(
+            parse_u64(fields[cursor++], 16, "critical failure threshold"));
+        config.fail_rate_degraded_threshold = bits_double(
+            parse_u64(fields[cursor++], 16, "degraded failure threshold"));
+        config.fail_rate_recovery_margin = bits_double(
+            parse_u64(fields[cursor++], 16, "failure recovery margin"));
+        config.window_size = parse_int(fields[cursor++], "safety window size");
+        config.minimum_window_samples = parse_int(fields[cursor++], "minimum safety samples");
+        config.escalation_samples = parse_int(fields[cursor++], "escalation samples");
+        config.recovery_samples = parse_int(fields[cursor++], "recovery samples");
+        config.maximum_observation_age_ms = parse_u64(
+            fields[cursor++], 10, "maximum health observation age");
+        snapshot.current_state = parse_safety_state(fields[cursor++]);
+        snapshot.pending_state = parse_safety_state(fields[cursor++]);
+        snapshot.pending_observations = parse_int(fields[cursor++], "pending observations");
+        snapshot.last_now_ms = parse_u64(fields[cursor++], 10, "safety clock");
+        snapshot.clock_initialized = parse_bool(fields[cursor++], "safety clock flag");
+
+        const auto expected_samples = static_cast<std::size_t>(
+            parse_u64(parts[1], 10, "safety sample count"));
+        if (parts[2] != "-") {
+            for (const auto& item : split_delimited(parts[2], ';')) {
+                snapshot.samples.push_back(decode_safety_evidence(item));
+            }
+        }
+        if (snapshot.samples.size() != expected_samples) {
+            throw std::invalid_argument("decision trace: safety sample count mismatch");
+        }
+        if (const auto error = snapshot.validation_error()) {
+            throw std::invalid_argument("decision trace: invalid safety snapshot: " + *error);
+        }
+        return snapshot;
     }
 
     static void append_decision(std::ostringstream& output,
@@ -605,7 +792,14 @@ private:
         output << '|' << trace.execution.attempts.size()
                << '|' << encode_attempts(trace.execution.attempts)
                << '|' << trace.constraints_applied.size()
-               << '|' << encode_constraints(trace.constraints_applied);
+               << '|' << encode_constraints(trace.constraints_applied)
+               << '|' << record.controller.recorded
+               << '|' << record.controller.now_ms
+               << '|' << encode_safety_evidence(record.controller.observation)
+               << '|' << encode_safety_snapshot(record.controller.before)
+               << '|' << encode_safety_snapshot(record.controller.after)
+               << '|' << static_cast<unsigned>(record.controller.mode_before)
+               << '|' << static_cast<unsigned>(record.controller.mode_after);
         return output.str();
     }
 
@@ -642,7 +836,7 @@ private:
                                                std::size_t expected_index,
                                                std::uint64_t expected_previous_checksum) {
         const auto fields = split_fields(payload);
-        if (fields.size() != 54 || fields.front() != "R") {
+        if (fields.size() != 61 || fields.front() != "R") {
             throw std::invalid_argument("decision trace: malformed record field count");
         }
         std::size_t cursor = 1;
@@ -658,6 +852,7 @@ private:
         auto& contract = record.contract;
         auto& descriptor = record.descriptor;
         auto& trace = record.trace;
+        auto& controller = record.controller;
         trace.generation_id = decode_hex_bytes(fields.at(cursor++));
         descriptor.generation_id = trace.generation_id;
         contract.allow_rf = parse_bool(fields.at(cursor++), "RF permission");
@@ -720,6 +915,13 @@ private:
         const auto constraint_count = static_cast<std::size_t>(
             parse_u64(fields.at(cursor++), 10, "constraint count"));
         trace.constraints_applied = decode_constraints(fields.at(cursor++), constraint_count);
+        controller.recorded = parse_bool(fields.at(cursor++), "controller-recorded flag");
+        controller.now_ms = parse_u64(fields.at(cursor++), 10, "controller transition time");
+        controller.observation = decode_safety_evidence(fields.at(cursor++));
+        controller.before = decode_safety_snapshot(fields.at(cursor++));
+        controller.after = decode_safety_snapshot(fields.at(cursor++));
+        controller.mode_before = parse_operating_mode(fields.at(cursor++));
+        controller.mode_after = parse_operating_mode(fields.at(cursor++));
         if (cursor != fields.size()) {
             throw std::invalid_argument("decision trace: trailing fields");
         }
