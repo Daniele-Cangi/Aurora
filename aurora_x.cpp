@@ -31,6 +31,7 @@ using namespace std; using namespace chrono;
 #include "include/aurora/telemetry/DecisionReplayLog.hpp"
 #include "include/aurora/telemetry/SimulationEventLedger.hpp"
 #include "include/aurora/simulation/GenerationArrivalSchedule.hpp"
+#include "include/aurora/simulation/GenerationScheduler.hpp"
 #ifdef AURORA_USE_LIBRAPTORQ
 #include "fec/AuroraRaptorQ.hpp"
 #endif
@@ -375,7 +376,8 @@ struct Net { world::World W; vector<unique_ptr<Node>> nodes;
 using FlowHealth = cl::FlowHealth;
 
 struct Engine {
-  Net net; Intention I; string token_id, bundle_id, generation_id; int K;
+  Net net; Intention I, active_generation_contract;
+  string token_id, bundle_id, generation_id; int K;
   size_t T=128;  // mantenuto 128 per FEC piu rapido
   size_t payload_size;
   aurora::transport::GenerationDescriptor generation_descriptor;
@@ -406,9 +408,12 @@ struct Engine {
     Bundle bundle;
     vector<uint8_t> payload;
     aurora::transport::GenerationDescriptor descriptor;
+    Intention contract;
     aurora::transport::DecodeReport report;
     vector<fec::Pkt> pending_packets;
     int required_rank = 0;
+    aurora::transport::TransportImportance scheduling_importance =
+      aurora::transport::TransportImportance::IMPORTANT;
     bool arrived = false;
     bool terminal = false;
     bool delivered = false;
@@ -441,6 +446,22 @@ struct Engine {
     scheduled_generations.clear();
     scheduled_generations.reserve(generation_arrival_schedule.arrivals().size());
     for (const auto& arrival : generation_arrival_schedule.arrivals()) {
+      Intention generation_contract = I;
+      if (arrival.service_class !=
+          aurora::simulation::GenerationServiceClass::INHERIT) {
+        generation_contract.importance =
+          aurora::simulation::resolve_service_class(
+            arrival.service_class, generation_contract.importance);
+      }
+      if (arrival.deadline_ms != 0) {
+        generation_contract.deadline_s =
+          static_cast<double>(arrival.deadline_ms) / 1000.0;
+        for (auto& segment : generation_contract.segments) {
+          segment.deadline_ms = min(
+            segment.deadline_ms, arrival.deadline_ms);
+        }
+      }
+      generation_contract.validate();
       const string token_payload =
         "ACCESS:TEMP_KEY=abc123;ZONE=42;TTL=24h;CLASS=NORM;ARRIVAL=" +
         arrival.tag + ";";
@@ -450,15 +471,33 @@ struct Engine {
       Bundle bundle = Bundle::make(token);
       auto bytes = tok2bytes(token);
       auto spawned = organism->spawn(
-        I, token.id, bytes, T, arrival.arrives_at_ms);
+        generation_contract, token.id, bytes, T, arrival.arrives_at_ms);
       ScheduledGeneration generation;
       generation.arrival = arrival;
       generation.token = std::move(token);
       generation.bundle = std::move(bundle);
       generation.payload = std::move(bytes);
       generation.descriptor = std::move(spawned.descriptor);
+      generation.contract = std::move(generation_contract);
       generation.pending_packets = std::move(spawned.packets);
       generation.required_rank = spawned.K;
+      if (arrival.service_class !=
+          aurora::simulation::GenerationServiceClass::INHERIT) {
+        generation.scheduling_importance =
+          aurora::simulation::resolve_service_class(
+            arrival.service_class,
+            aurora::transport::TransportImportance::IMPORTANT);
+      } else if (!generation.descriptor.segments.empty()) {
+        generation.scheduling_importance = min_element(
+          generation.descriptor.segments.begin(),
+          generation.descriptor.segments.end(),
+          [](const auto& left, const auto& right) {
+            return static_cast<uint8_t>(left.importance) <
+              static_cast<uint8_t>(right.importance);
+          })->importance;
+      } else {
+        generation.scheduling_importance = generation.contract.importance;
+      }
       scheduled_generations.push_back(std::move(generation));
     }
     activate_generation(0);
@@ -477,6 +516,7 @@ struct Engine {
     bundle_id = generation.bundle.bid;
     generation_id = generation.descriptor.generation_id;
     generation_descriptor = generation.descriptor;
+    active_generation_contract = generation.contract;
     last_decode_report = generation.report;
     K = generation.required_rank;
     payload_size = generation.payload.size();
@@ -506,12 +546,23 @@ struct Engine {
   }
 
   void select_active_generation(uint64_t simulated_now_ms) {
+    vector<aurora::simulation::GenerationSchedulingCandidate> candidates;
+    candidates.reserve(scheduled_generations.size());
     for (size_t index = 0; index < scheduled_generations.size(); ++index) {
       const auto& generation = scheduled_generations[index];
-      if (generation.arrived && !generation.terminal) {
-        activate_generation(index);
-        return;
-      }
+      candidates.push_back({
+        index,
+        generation.arrival.arrives_at_ms,
+        generation.descriptor.expires_at_ms,
+        generation.scheduling_importance,
+        generation.arrived,
+        generation.terminal});
+    }
+    if (const auto selected =
+          aurora::simulation::select_scheduled_generation(
+            candidates, simulated_now_ms)) {
+      activate_generation(*selected);
+      return;
     }
     for (size_t index = scheduled_generations.size(); index-- > 0;) {
       if (scheduled_generations[index].arrived &&
@@ -564,7 +615,9 @@ struct Engine {
         aurora::telemetry::simulation_descriptor_identity(
           generation.descriptor),
         static_cast<uint32_t>(generation.required_rank),
-        generation.pending_packets.size()});
+        generation.pending_packets.size(),
+        generation.scheduling_importance,
+        generation.descriptor.expires_at_ms});
     }
     simulation_event_log.begin(std::move(session));
   }
@@ -847,7 +900,7 @@ struct Engine {
     transition.mode_before = mode_before;
     transition.mode_after = optimizer.mode();
     decision_trace_log.record(
-      I, generation_descriptor, decision_trace,
+      active_generation_contract, generation_descriptor, decision_trace,
       proposal_transition, transition);
   }
   
@@ -1045,23 +1098,24 @@ struct Engine {
       Sx.decode_rate_symps = (have>0? have / max(1.0, elapsed) : 0.0);
 
       // priority
-      Sx.prio = (Sx.deadline_left_s < I.deadline_s*0.15 ? cl::Priority::CRITICAL
-                : Sx.deadline_left_s < I.deadline_s*0.4 ? cl::Priority::NORMAL
+      Sx.prio = (Sx.deadline_left_s < active_generation_contract.deadline_s*0.15 ? cl::Priority::CRITICAL
+                : Sx.deadline_left_s < active_generation_contract.deadline_s*0.4 ? cl::Priority::NORMAL
                 : cl::Priority::BULK);
-      Sx.emergency_mode = (Sx.deadline_left_s < I.deadline_s*0.08 && (K-have) > (K*0.25));
+      Sx.emergency_mode = (Sx.deadline_left_s < active_generation_contract.deadline_s*0.08 && (K-have) > (K*0.25));
       Sx.covert_seq = static_cast<uint16_t>((I.experiment_seed + static_cast<uint64_t>(step)) & 0xFF);
 
       const auto controller_before = safety_monitor.snapshot();
       const auto controller_mode_before = opt.mode();
       const auto proposal_input = opt.proposal_input(
-        I, Sx, epoch, has_critical_segments());
+        active_generation_contract, Sx, epoch, has_critical_segments());
       const auto proposal_before = opt.proposal_state();
       const auto proposal_decision = opt.propose(proposal_input);
       const auto proposal_after_derivation = opt.proposal_state();
       const auto proposed = proposal_decision.transport;
       const auto observed = transport_state(
         S, simulated_now_ms, simulation_event.contact_available);
-      auto decision_trace = safety_envelope.constrain(I, generation_descriptor, observed, proposed);
+      auto decision_trace = safety_envelope.constrain(
+        active_generation_contract, generation_descriptor, observed, proposed);
       double hop = HAL::FHSS_next(proposal_decision.covert_sequence);
       HAL::LORA_CFG(
         hop, proposal_decision.rf_bandwidth_khz, 12, 5,
@@ -1097,7 +1151,8 @@ struct Engine {
       int have_after = 0; for (auto& p : D.buf) if (p.generation_id == generation_id) have_after++;
       
       // FASE 4: Integra organismo per ottenere risultati reali
-      aurora::FlowProfile flow_profile = organism->build_profile(I);
+      aurora::FlowProfile flow_profile = organism->build_profile(
+        active_generation_contract);
       
       // Raccogli pacchetti ricevuti per questo token_id
       vector<fec::Pkt> received_packets;
@@ -1178,14 +1233,15 @@ struct Engine {
       if(became_expired){
           cout << "[TIMEOUT] Deadline exceeded at step " << step 
                << " (elapsed=" << fixed << setprecision(2) << elapsed 
-               << "s, deadline=" << I.deadline_s << "s)" << endl;
+               << "s, deadline=" << active_generation_contract.deadline_s
+               << "s)" << endl;
       }
 
       epoch += 1.0;
 
       // **PATCH**: sleep adattivo in base al tempo rimanente
       {
-        double dl_rem = std::max(0.0, I.deadline_s - elapsed);
+        double dl_rem = Sx.deadline_left_s;
         int ms; if      (dl_rem < 2.0) ms = 2; else if (dl_rem < 5.0) ms = 6; else ms = 12;
         this_thread::sleep_for(std::chrono::milliseconds(ms));
       }
@@ -1292,7 +1348,11 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     // Stato per optimizer
     cl::NetworkState Sx{};
     Sx.soc_src=S.bat.soc(); Sx.symbols_have=have; Sx.symbols_need=engine.K;
-    Sx.deadline_left_s=max(0.0, engine.I.deadline_s-elapsed);
+    Sx.deadline_left_s = engine.generation_descriptor.expires_at_ms >
+        simulated_now_ms
+      ? static_cast<double>(engine.generation_descriptor.expires_at_ms -
+          simulated_now_ms) / 1000.0
+      : 0.0;
     Sx.duty_left_rf=S.duty_remaining_fraction(simulated_now_ms);
 
     Sx.chan = chan;
@@ -1302,16 +1362,17 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     Sx.chan.push_snr(phy::Mode::IR, simulation_event.snr_optical_db);
     Sx.decode_rate_symps = (have>0? have / max(1.0, elapsed) : 0.0);
 
-    Sx.prio = (Sx.deadline_left_s < engine.I.deadline_s*0.15 ? cl::Priority::CRITICAL
-              : Sx.deadline_left_s < engine.I.deadline_s*0.4 ? cl::Priority::NORMAL
+    Sx.prio = (Sx.deadline_left_s < engine.active_generation_contract.deadline_s*0.15 ? cl::Priority::CRITICAL
+              : Sx.deadline_left_s < engine.active_generation_contract.deadline_s*0.4 ? cl::Priority::NORMAL
               : cl::Priority::BULK);
-    Sx.emergency_mode = (Sx.deadline_left_s < engine.I.deadline_s*0.08 && (engine.K-have) > (engine.K*0.25));
+    Sx.emergency_mode = (Sx.deadline_left_s < engine.active_generation_contract.deadline_s*0.08 && (engine.K-have) > (engine.K*0.25));
     Sx.covert_seq = static_cast<uint16_t>((engine.I.experiment_seed + static_cast<uint64_t>(step)) & 0xFF);
 
     const auto controller_before = engine.safety_monitor.snapshot();
     const auto controller_mode_before = opt.mode();
     const auto proposal_input = opt.proposal_input(
-      engine.I, Sx, epoch, engine.has_critical_segments());
+      engine.active_generation_contract, Sx, epoch,
+      engine.has_critical_segments());
     const auto proposal_before = opt.proposal_state();
     const auto proposal_decision = opt.propose(proposal_input);
     const auto proposal_after_derivation = opt.proposal_state();
@@ -1319,7 +1380,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     const auto observed = engine.transport_state(
       S, simulated_now_ms, simulation_event.contact_available);
     auto decision_trace = engine.safety_envelope.constrain(
-      engine.I, engine.generation_descriptor, observed, proposed);
+      engine.active_generation_contract, engine.generation_descriptor,
+      observed, proposed);
     double hop = HAL::FHSS_next(proposal_decision.covert_sequence);
     HAL::LORA_CFG(
       hop, proposal_decision.rf_bandwidth_khz, 12, 5,
@@ -1354,7 +1416,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     int have_after = 0; for (auto& p : D.buf) if (p.generation_id == engine.generation_id) have_after++;
     
     // Integra organismo
-    aurora::FlowProfile flow_profile = engine.organism->build_profile(engine.I);
+    aurora::FlowProfile flow_profile = engine.organism->build_profile(
+      engine.active_generation_contract);
     
     vector<fec::Pkt> received_packets;
     for (auto& p : D.buf) {
@@ -1424,7 +1487,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
 
     // Sleep adattivo
     {
-      double dl_rem = std::max(0.0, engine.I.deadline_s - elapsed);
+      double dl_rem = Sx.deadline_left_s;
       int ms; if (dl_rem < 2.0) ms = 2; else if (dl_rem < 5.0) ms = 6; else ms = 12;
       this_thread::sleep_for(std::chrono::milliseconds(ms));
     }
