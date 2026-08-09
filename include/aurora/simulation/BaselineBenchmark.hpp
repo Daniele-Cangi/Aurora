@@ -1,5 +1,6 @@
 #pragma once
 
+#include "aurora/build/BuildProvenance.hpp"
 #include "ChannelTrace.hpp"
 #include "../control/TransportPolicy.hpp"
 #include "../fec/GenerationCodec.hpp"
@@ -98,6 +99,7 @@ struct BenchmarkResult {
 
 struct BenchmarkReport {
     BenchmarkScenario scenario;
+    build::BuildProvenance build_provenance;
     std::string channel_trace_fingerprint;
     ChannelTraceCorpus channel_traces;
     std::vector<BenchmarkResult> summaries;
@@ -140,6 +142,7 @@ public:
 
         BenchmarkReport report;
         report.scenario = scenario;
+        report.build_provenance = build::current_build_provenance();
         report.channel_traces = corpus;
         report.channel_trace_fingerprint = corpus.fingerprint();
         report.summaries = {
@@ -522,13 +525,31 @@ inline void save_benchmark_trial_csv(const BenchmarkReport& report,
     if (!output) {
         throw std::runtime_error("baseline benchmark: cannot open trial output: " + path);
     }
-    output << "trace_fingerprint,scenario,scenario_id,experiment_seed,baseline,trial,"
+    output << "build_schema,build_fingerprint,build_commit,build_source_state,compiler_id,"
+              "compiler_version,target_system,target_processor,build_type,build_generator,"
+              "execution_profile,evidence_level,hardware_validated,crypto_profile,fec_profile,"
+              "trace_fingerprint,scenario,scenario_id,experiment_seed,baseline,trial,"
               "payload_delivered,critical_delivered,transmitted_bytes,received_bytes,"
               "transmitted_symbols,received_symbols,source_symbols_recovered,"
               "innovative_symbols,required_source_symbols,effective_overhead,final_status\n";
     output.precision(17);
     for (const auto& trial : report.trial_results) {
-        output << report.channel_trace_fingerprint << ','
+        output << report.build_provenance.schema << ','
+               << report.build_provenance.fingerprint() << ','
+               << report.build_provenance.commit << ','
+               << report.build_provenance.source_state << ','
+               << report.build_provenance.compiler_id << ','
+               << report.build_provenance.compiler_version << ','
+               << report.build_provenance.target_system << ','
+               << report.build_provenance.target_processor << ','
+               << report.build_provenance.build_type << ','
+               << report.build_provenance.generator << ','
+               << report.build_provenance.execution_profile << ','
+               << report.build_provenance.evidence_level << ','
+               << report.build_provenance.hardware_validated << ','
+               << report.build_provenance.crypto_profile << ','
+               << report.build_provenance.fec_profile << ','
+               << report.channel_trace_fingerprint << ','
                << channel_scenario_name(report.scenario.channel.kind) << ','
                << report.channel_traces.scenario_id << ','
                << report.scenario.seed << ','

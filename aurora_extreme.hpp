@@ -308,7 +308,7 @@ namespace cl {
                      const FlowHealth& gland_health,
                      const FlowHealth& muscle_health) {
         // SafetyState preserves 0=HEALTHY, 1=DEGRADED, 2=CRITICAL and uses
-        // -1 for NO_EVIDENCE. No evidence keeps the optimizer NORMAL.
+        // -1 for NO_EVIDENCE. Missing evidence cannot authorize exploration.
         int safety_state_int = static_cast<int>(safety_state);
         double nerve_fail_rate = nerve_health.ewma_fail_rate;
         double gland_fail_rate = gland_health.ewma_fail_rate;
@@ -319,7 +319,7 @@ namespace cl {
         Mode old_mode = mode_;
         
         // Converti safety_state_int a logica
-        if (safety_state_int == 2) {  // CRITICAL
+        if (safety_state_int < 0 || safety_state_int == 2) {  // NO_EVIDENCE or CRITICAL
             mode_ = Mode::CONSERVATIVE;
         } else if (safety_state_int == 1) {  // DEGRADED
             mode_ = Mode::NORMAL;

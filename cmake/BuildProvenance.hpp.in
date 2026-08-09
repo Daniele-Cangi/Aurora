@@ -1,0 +1,76 @@
+#pragma once
+
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
+#include <string>
+
+namespace aurora::build {
+
+// Configure-time identity for reproducible experiment output. This describes
+// the executable that produced a report; it is deliberately not a claim that
+// synthetic evidence came from calibrated physical hardware.
+struct BuildProvenance {
+    std::string schema = "AURORA_BUILD_PROVENANCE_V1";
+    std::string commit = "@AURORA_GIT_COMMIT@";
+    std::string source_state = "@AURORA_GIT_SOURCE_STATE@";
+    std::string compiler_id = "@CMAKE_CXX_COMPILER_ID@";
+    std::string compiler_version = "@CMAKE_CXX_COMPILER_VERSION@";
+    std::string target_system = "@CMAKE_SYSTEM_NAME@";
+    std::string target_processor = "@CMAKE_SYSTEM_PROCESSOR@";
+    std::string build_type = "@AURORA_BUILD_TYPE@";
+    std::string generator = "@CMAKE_GENERATOR@";
+    std::string execution_profile = "@AURORA_EXECUTION_PROFILE@";
+    std::string crypto_profile = "@AURORA_CRYPTO_PROFILE@";
+    std::string fec_profile = "@AURORA_FEC_PROFILE@";
+    std::string evidence_level = "simulation";
+    bool field_build = @AURORA_BUILD_FIELD_BOOL@;
+    bool hardware_validated = false;
+    bool real_crypto = @AURORA_REAL_CRYPTO_BOOL@;
+    bool external_raptorq = @AURORA_RAPTORQ_BOOL@;
+
+    [[nodiscard]] bool commit_known() const {
+        return commit != "unknown";
+    }
+
+    [[nodiscard]] std::string canonical() const {
+        std::ostringstream encoded;
+        encoded << schema << '|'
+                << commit << '|'
+                << source_state << '|'
+                << compiler_id << '|'
+                << compiler_version << '|'
+                << target_system << '|'
+                << target_processor << '|'
+                << build_type << '|'
+                << generator << '|'
+                << execution_profile << '|'
+                << crypto_profile << '|'
+                << fec_profile << '|'
+                << evidence_level << '|'
+                << field_build << '|'
+                << hardware_validated << '|'
+                << real_crypto << '|'
+                << external_raptorq;
+        return encoded.str();
+    }
+
+    [[nodiscard]] std::string fingerprint() const {
+        std::uint64_t hash = 14695981039346656037ULL;
+        for (const unsigned char byte : canonical()) {
+            hash ^= byte;
+            hash *= 1099511628211ULL;
+        }
+        std::ostringstream encoded;
+        encoded << std::hex << std::setw(16) << std::setfill('0') << hash;
+        return encoded.str();
+    }
+
+    bool operator==(const BuildProvenance&) const = default;
+};
+
+inline BuildProvenance current_build_provenance() {
+    return {};
+}
+
+} // namespace aurora::build

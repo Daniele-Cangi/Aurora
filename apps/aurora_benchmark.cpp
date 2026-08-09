@@ -243,7 +243,10 @@ int main(int argc, char* argv[]) {
         if (!trial_output.empty()) save_benchmark_trial_csv(report, trial_output);
 
         std::cout
-            << "baseline,scenario,scenario_id,trace_fingerprint,seed,trials,payload_size,symbol_size,"
+            << "baseline,build_schema,build_fingerprint,build_commit,build_source_state,compiler_id,"
+               "compiler_version,target_system,target_processor,build_type,build_generator,"
+               "execution_profile,evidence_level,hardware_validated,crypto_profile,fec_profile,"
+               "scenario,scenario_id,trace_fingerprint,seed,trials,payload_size,symbol_size,"
                "critical_bytes,deadline_ms,delivery_rate,delivery_ci95_low,"
                "delivery_ci95_high,critical_delivery_rate,critical_ci95_low,"
                "critical_ci95_high,goodput,bytes_per_delivered_byte,"
@@ -252,6 +255,21 @@ int main(int argc, char* argv[]) {
         std::cout << std::fixed << std::setprecision(6);
         for (const auto& result : report.summaries) {
             std::cout << baseline_name(result.baseline) << ','
+                      << report.build_provenance.schema << ','
+                      << report.build_provenance.fingerprint() << ','
+                      << report.build_provenance.commit << ','
+                      << report.build_provenance.source_state << ','
+                      << report.build_provenance.compiler_id << ','
+                      << report.build_provenance.compiler_version << ','
+                      << report.build_provenance.target_system << ','
+                      << report.build_provenance.target_processor << ','
+                      << report.build_provenance.build_type << ','
+                      << report.build_provenance.generator << ','
+                      << report.build_provenance.execution_profile << ','
+                      << report.build_provenance.evidence_level << ','
+                      << report.build_provenance.hardware_validated << ','
+                      << report.build_provenance.crypto_profile << ','
+                      << report.build_provenance.fec_profile << ','
                       << channel_scenario_name(report.scenario.channel.kind) << ','
                       << report.channel_traces.scenario_id << ','
                       << report.channel_trace_fingerprint << ','

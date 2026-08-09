@@ -23,6 +23,18 @@ int main() {
     assert(first.size() == 5);
     assert(first_report.trial_results.size() == scenario.trials * first.size());
     assert(!first_report.channel_trace_fingerprint.empty());
+    assert(!first_report.build_provenance.commit.empty());
+    assert(first_report.build_provenance.schema == "AURORA_BUILD_PROVENANCE_V1");
+    assert(!first_report.build_provenance.source_state.empty());
+    assert(!first_report.build_provenance.compiler_id.empty());
+    assert(!first_report.build_provenance.compiler_version.empty());
+    assert(!first_report.build_provenance.target_system.empty());
+    assert(!first_report.build_provenance.build_type.empty());
+    assert(first_report.build_provenance.evidence_level == "simulation");
+    assert(!first_report.build_provenance.hardware_validated);
+    assert(first_report.build_provenance.fingerprint().size() == 16);
+    assert(first_report.build_provenance.fingerprint() ==
+           replay_report.build_provenance.fingerprint());
 
     auto mismatched = scenario;
     mismatched.channel.kind = ChannelScenarioKind::SLOW_DRIFT;

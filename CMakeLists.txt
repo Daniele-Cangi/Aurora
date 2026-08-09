@@ -18,9 +18,80 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 find_package(Threads REQUIRED)
 
 # -------------------------------------------------------------------
+# Configure-time build provenance for benchmark and replay evidence.
+find_package(Git QUIET)
+set(AURORA_GIT_COMMIT "unknown")
+set(AURORA_GIT_SOURCE_STATE "unknown")
+if(Git_FOUND)
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} rev-parse --verify HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE _AURORA_GIT_REV_RESULT
+    OUTPUT_VARIABLE _AURORA_GIT_REV
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(_AURORA_GIT_REV_RESULT EQUAL 0 AND NOT _AURORA_GIT_REV STREQUAL "")
+    set(AURORA_GIT_COMMIT "${_AURORA_GIT_REV}")
+  endif()
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} status --porcelain
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE _AURORA_GIT_STATUS_RESULT
+    OUTPUT_VARIABLE _AURORA_GIT_STATUS
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(_AURORA_GIT_STATUS_RESULT EQUAL 0)
+    if(_AURORA_GIT_STATUS STREQUAL "")
+      set(AURORA_GIT_SOURCE_STATE "clean")
+    else()
+      set(AURORA_GIT_SOURCE_STATE "dirty")
+    endif()
+  endif()
+endif()
+
+set(AURORA_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+if(AURORA_BUILD_TYPE STREQUAL "")
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(AURORA_BUILD_TYPE "multi-config")
+  else()
+    set(AURORA_BUILD_TYPE "unspecified")
+  endif()
+endif()
+
+set(AURORA_BUILD_FIELD_BOOL false)
+set(AURORA_REAL_CRYPTO_BOOL false)
+set(AURORA_RAPTORQ_BOOL false)
+set(AURORA_EXECUTION_PROFILE "simulation")
+set(AURORA_CRYPTO_PROFILE "insecure-test")
+set(AURORA_FEC_PROFILE "experimental-lt-like")
+if(BUILD_FIELD)
+  set(AURORA_BUILD_FIELD_BOOL true)
+  set(AURORA_EXECUTION_PROFILE "field-experimental")
+endif()
+if(USE_SODIUM)
+  set(AURORA_REAL_CRYPTO_BOOL true)
+  set(AURORA_CRYPTO_PROFILE "ed25519-libsodium")
+endif()
+if(USE_RAPTORQ)
+  set(AURORA_RAPTORQ_BOOL true)
+  set(AURORA_FEC_PROFILE "experimental-lt-like+legacy-raptorq-adapter")
+endif()
+
+set(_AURORA_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${_AURORA_GENERATED_INCLUDE_DIR}/aurora/build")
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildProvenance.hpp.in
+  ${_AURORA_GENERATED_INCLUDE_DIR}/aurora/build/BuildProvenance.hpp
+  @ONLY
+)
+
+# -------------------------------------------------------------------
 # Shared headers/interface target
 add_library(aurora_headers INTERFACE)
 target_include_directories(aurora_headers INTERFACE
+  ${_AURORA_GENERATED_INCLUDE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -339,5 +410,9 @@ message(STATUS "  USE_RAPTORQ       : ${USE_RAPTORQ}")
 message(STATUS "  RAPTORQ_HEADER    : ${RAPTORQ_HEADER_ONLY}")
 message(STATUS "  BUILD_NET_TOOLS   : ${BUILD_NET_TOOLS}")
 message(STATUS "  BUILD_TESTING     : ${BUILD_TESTING}")
+message(STATUS "  Git commit        : ${AURORA_GIT_COMMIT}")
+message(STATUS "  Source state      : ${AURORA_GIT_SOURCE_STATE}")
+message(STATUS "  Execution profile : ${AURORA_EXECUTION_PROFILE}")
+message(STATUS "  Hardware validated: false")
 message(STATUS "  Output directory  : ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 message(STATUS "======================================")
