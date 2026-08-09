@@ -49,7 +49,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | The deterministic harness includes no-FEC, repetition and internal LT-like comparisons, but not an established external codec |
 | Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed encoder/decoder state, independent segment expiry, bounded deterministic runtime repair emission, exact length, integrity result and authoritative per-segment `DecodeReport` evidence | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
 | Adaptive transport policy | Modular prototype | Injected codec and policy interfaces, fixed policies, NERVE/GLAND/MUSCLE adaptive policy, bounded per-generation manager, failure response and gradual relaxation | Threshold, PID and risk-sensitive alternatives are not implemented; current evidence remains synthetic despite covering multiple channel traces |
-| Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection | Uses synthetic channel and hardware models; the new benchmark isolates coding policy, not the complete cross-layer optimizer |
+| Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection, and an isolated replayable proposal RNG | Uses synthetic channel and hardware models; the benchmark still isolates coding policy rather than comparing the complete cross-layer optimizer |
 | Transport health | Implemented first slice | Consumes only `DecodeReport`; progress polls update coverage without being counted as delivery failures | Aggregation/confidence and multi-flow recovery semantics still need development |
 | Safety supervision | Partial | Hard envelope constrains generation/segment expiry, freshness, post-action reserve, allowed links, simulated RF airtime, active-segment repair capacity and critical protection; timestamped health evidence expires deterministically, while the supervisory monitor preserves its bounded window and hysteresis transition state for replay | Thresholds and the default 5-second evidence lifetime remain configurable research values rather than calibrated field limits |
 | Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | The default single-flow scenario provides limited transition evidence |
@@ -57,9 +57,9 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
-| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V4 decision traces with per-attempt action evidence and exact before/after supervisory-controller snapshots, plus checksum-chained benchmark channel traces | Action and supervisory replay are deterministic from recorded simulation evidence; proposal derivation, inter-step harvesting/RIS evolution and physical hardware remain outside the trace |
+| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V5 decision traces that reconstruct proposal derivation, UCB feedback, action execution and supervisory state, plus checksum-chained benchmark channel traces | Per-action controller replay is deterministic from recorded simulation evidence; contact generation, inter-step harvesting/RIS evolution and physical hardware remain outside the trace |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty refusal, critical scheduling, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty refusal, critical scheduling, proposal/RNG/UCB replay, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, replayable channel/action traces, Wilson confidence intervals, per-trial records, safety-decision replay, and configure-time commit/compiler/build/profile fingerprints in benchmark output | Provenance records the producing build but does not authenticate it; complete inter-step simulator event replay is not implemented |
 
 ---
@@ -130,7 +130,7 @@ Aurora-X includes experimental layers for:
 - SNR-based or UCB-based physical-link selection;
 - telemetry-driven feedback.
 
-The main simulator now applies the optimizer through a hard `SafetyEnvelope`, transmits the organism's spawned packets, and feeds the same authoritative `DecodeReport` to delivery and transport health. The supervisory monitor reports `NO_EVIDENCE` until active-flow observations exist, excludes inactive classes, applies Schmitt-style enter/exit thresholds, and requires consecutive evidence before changing an established state. `NO_EVIDENCE` forces conservative operation, and recovery from `CRITICAL` must pass through `DEGRADED`. This bounds mode oscillation, but the configured thresholds are not calibrated physical limits and the monitor's internal transition state is not yet part of the decision replay.
+The main simulator now applies the optimizer through a hard `SafetyEnvelope`, transmits the organism's spawned packets, and feeds the same authoritative `DecodeReport` to delivery and transport health. The supervisory monitor reports `NO_EVIDENCE` until active-flow observations exist, excludes inactive classes, applies Schmitt-style enter/exit thresholds, and requires consecutive evidence before changing an established state. `NO_EVIDENCE` forces conservative operation, and recovery from `CRITICAL` must pass through `DEGRADED`. Proposal, action and supervisory transition state are replayed per action; the configured thresholds remain uncalibrated research values and the surrounding simulator event stream remains outside that proof.
 
 ### 6. Security and provenance experiments
 
@@ -168,9 +168,9 @@ GenerationManager::integrate()
    ↓
 authoritative DecodeReport
    ↓
-FlowHealth → Optimizer → SafetyEnvelope
+FlowHealth → replayable proposal controller → SafetyEnvelope
    ↓
-DecisionReplayLog V4 + timestamped supervisory feedback
+DecisionReplayLog V5 + action and supervisory feedback
 ```
 
 The same report determines delivery, coverage/rank, critical completion, integrity outcome, and health feedback. A decision trace is saved only after runtime execution counts have been attached and checked against the constrained decision. The former monolithic delivery decoder and parallel organism health decoder were removed from the active simulator path.
@@ -240,7 +240,7 @@ aurora_organism.hpp          Compatibility facade for the biological policy
 aurora_intention.hpp         Transitional include for TransportContract
 aurora_hal.hpp               Hardware abstraction and current mock backends
 include/aurora/
-  control/TransportPolicy.hpp  Fixed/adaptive transport policy interfaces
+  control/                   Proposal replay and transport policy interfaces
   fec/                       Codec interface and deterministic LT-like codec
   transport/                 Contract, descriptor, manager, report and health
   safety/SafetyEnvelope.hpp  Hard transport-decision constraints and trace
@@ -248,7 +248,7 @@ include/aurora/
   simulation/ChannelTrace.hpp      Canonical channel traces and generators
   simulation/BaselineBenchmark.hpp Replayable statistical comparison harness
 apps/
-  aurora_replay.cpp          Independent safety-decision replay tool
+  aurora_replay.cpp          Independent proposal/action/safety replay tool
   aurora_benchmark.cpp       CSV baseline runner
 src/core/
   AuroraSafetyMonitor.hpp    Legacy safety-state prototype
@@ -301,9 +301,9 @@ Record and independently replay safety decisions:
 ./build/bin/aurora_replay decision-trace.log
 ```
 
-The V4 replay recomputes each `SafetyEnvelope` decision and validates every admitted attempt. For the dependency-light simulator it re-evaluates LBT from recorded RSSI samples, channel delivery from recorded SNR/coding/fading/threshold evidence, and exact energy/duty transitions from the admitted pre-action state. It also reconstructs every supervisory transition from the complete bounded health-evidence window, timestamps, hysteresis counters and operating mode recorded before and after the action, enforcing continuity across records. Recorded samples remain simulation evidence rather than calibrated physical measurements; UCB/RNG proposal derivation, inter-step harvesting, RIS evolution and real `FIELD_BUILD` hardware are not reconstructed.
+The V5 replay first derives the exact transport proposal from recorded SNR/PER summaries, urgency inputs, operating mode, selector memory, UCB statistics, epoch and isolated RNG state. It then recomputes each `SafetyEnvelope` decision and validates every admitted attempt, including LBT from recorded RSSI samples, channel delivery from recorded SNR/coding/fading/threshold evidence, and exact energy/duty transitions. Finally it applies execution feedback to UCB and reconstructs the bounded supervisory transition, enforcing state continuity across records. Recorded samples remain simulation evidence rather than calibrated physical measurements; contact generation, inter-step harvesting, RIS evolution and real `FIELD_BUILD` hardware are not reconstructed.
 
-V2 and V3 traces do not contain the full V4 action plus supervisory-controller evidence and are intentionally rejected; regenerate them with the current simulator.
+V2 through V4 traces do not contain the complete V5 proposal, action and supervisory evidence and are intentionally rejected; regenerate them with the current simulator.
 
 Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
 

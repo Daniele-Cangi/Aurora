@@ -397,7 +397,7 @@ Implement interchangeable policies:
 
 The biological policy earns its place by outperforming or stabilizing better than explicit baselines, not by terminology.
 
-**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The implemented decision trace records and replays the hard safety-envelope decision and the full supervisory-controller transition. UCB/channel-selector state and RNG-backed proposal derivation are not yet reconstructed, so complete cross-layer controller replay remains pending.
+**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The implemented decision trace reconstructs proposal derivation from UCB/channel-selector state, epoch and isolated RNG state, applies execution feedback, replays the hard safety-envelope decision and restores the full supervisory-controller transition. The remaining replay gap is the surrounding simulator event stream rather than hidden per-action controller state.
 
 ### Exit gate
 
@@ -524,7 +524,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
 
-The current V4 `DecisionReplayLog` verifies safety decisions, deterministically replays each admitted simulation action from recorded LBT, channel, energy and duty evidence, and reconstructs the complete bounded supervisory state transition with timestamp freshness and cross-record continuity. The benchmark can also replay exact delivered/lost channel slots across controller versions. Neither mechanism yet reconstructs UCB/RNG proposal derivation, contact topology, generation arrivals, inter-step harvesting/RIS evolution or the complete simulator time line.
+The current V5 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies the safety decision; replays each admitted action from LBT, channel, energy and duty evidence; applies UCB feedback; and reconstructs the bounded supervisory transition with cross-record continuity. The benchmark can also replay exact delivered/lost channel slots across controller versions. Neither mechanism yet reconstructs contact topology, generation arrivals, inter-step harvesting/RIS evolution or the complete simulator time line.
 
 ### Exit gate
 

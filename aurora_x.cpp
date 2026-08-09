@@ -43,15 +43,6 @@ static std::string mode_to_string(phy::Mode m) {
   }
 }
 
-static aurora::safety::LinkMode safety_link(phy::Mode mode) {
-  switch (mode) {
-    case phy::Mode::RF: return aurora::safety::LinkMode::RF;
-    case phy::Mode::IR: return aurora::safety::LinkMode::OPTICAL;
-    case phy::Mode::BACKSCATTER: return aurora::safety::LinkMode::BACKSCATTER;
-  }
-  return aurora::safety::LinkMode::RF;
-}
-
 static phy::Mode phy_link(aurora::safety::LinkMode mode) {
   switch (mode) {
     case aurora::safety::LinkMode::RF: return phy::Mode::RF;
@@ -578,6 +569,7 @@ struct Engine {
   void update_controller_and_record(
       cl::Optimizer& optimizer,
       const aurora::safety::TransportDecisionTrace& decision_trace,
+      const aurora::control::ProposalTransition& proposal_transition,
       const TelemetrySample& sample,
       uint64_t simulated_now_ms,
       const aurora::safety::SafetyMonitorSnapshot& before,
@@ -627,7 +619,8 @@ struct Engine {
     transition.mode_before = mode_before;
     transition.mode_after = optimizer.mode();
     decision_trace_log.record(
-      I, generation_descriptor, decision_trace, transition);
+      I, generation_descriptor, decision_trace,
+      proposal_transition, transition);
   }
   
   // T1: Emette evento JSON health su stdout
@@ -775,6 +768,7 @@ struct Engine {
     bool delivered=false; vector<uint8_t> out;
 
     cl::Optimizer opt;
+    opt.reseed_proposal(I.experiment_seed);
     telem::ChannelState chan;
     double epoch=1.0;
 
@@ -853,34 +847,44 @@ struct Engine {
 
       const auto controller_before = safety_monitor.snapshot();
       const auto controller_mode_before = opt.mode();
-      auto dec = opt.joint(I, Sx, epoch);
-      aurora::safety::TransportDecision proposed;
-      proposed.link = safety_link(dec.mode);
-      proposed.transmission_attempts = static_cast<uint32_t>(dec.tries & 0xFF);
-      proposed.repair_symbols = static_cast<uint32_t>(dec.overhead & 0x7FFF);
-      proposed.critical_only =
-        Sx.prio == cl::Priority::CRITICAL && has_critical_segments();
-      if (proposed.critical_only) {
-        proposed.transmission_attempts = max(2U, proposed.transmission_attempts);
-      }
+      const auto proposal_input = opt.proposal_input(
+        I, Sx, epoch, has_critical_segments());
+      const auto proposal_before = opt.proposal_state();
+      const auto proposal_decision = opt.propose(proposal_input);
+      const auto proposal_after_derivation = opt.proposal_state();
+      const auto proposed = proposal_decision.transport;
       const auto observed = transport_state(S, simulated_now_ms);
       auto decision_trace = safety_envelope.constrain(I, generation_descriptor, observed, proposed);
-      dec.mode = phy_link(decision_trace.decision.link);
-      double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
-      HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
+      double hop = HAL::FHSS_next(proposal_decision.covert_sequence);
+      HAL::LORA_CFG(
+        hop, proposal_decision.rf_bandwidth_khz, 12, 5,
+        proposal_decision.preamble_symbols);
 
-      uint8_t covert_seq = (dec.tries >> 8) & 0xFF;
-      bool emergency = (dec.overhead & 0x8000) != 0;
+      const uint8_t covert_seq = proposal_decision.covert_sequence;
+      const bool emergency = proposal_decision.emergency;
       const auto executed = execute_decision(
         S, D, chan, decision_trace, simulated_now_ms,
-        dec.min_spacing_ms, dec.jitter_ms, step, true);
+        proposal_decision.minimum_spacing_ms,
+        proposal_decision.jitter_ms, step, true);
       const int tries_real = executed.attempts;
       const int ok_cnt = executed.delivered;
       const string mode_chosen = executed.mode;
       if(step < 3) std::cout << "[ADAPTIVE] step=" << step << " mode_chosen=" << mode_chosen << std::endl;
 
       double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
-      if (tries_real > 0) opt.feedback(dec.mode, reward);
+      aurora::control::ProposalFeedback proposal_feedback;
+      proposal_feedback.applied = tries_real > 0;
+      proposal_feedback.executed_link = decision_trace.decision.link;
+      proposal_feedback.reward = proposal_feedback.applied ? reward : 0.0;
+      opt.apply_feedback(proposal_feedback);
+      aurora::control::ProposalTransition proposal_transition;
+      proposal_transition.recorded = true;
+      proposal_transition.before = proposal_before;
+      proposal_transition.input = proposal_input;
+      proposal_transition.decision = proposal_decision;
+      proposal_transition.after_proposal = proposal_after_derivation;
+      proposal_transition.feedback = proposal_feedback;
+      proposal_transition.after = opt.proposal_state();
       if(emergency){ cout<<"[COVERT] EMERGENCY flag; seq="<<(int)covert_seq<<"\n"; }
 
       int have_after = 0; for (auto& p : D.buf) if (p.generation_id == generation_id) have_after++;
@@ -941,7 +945,7 @@ struct Engine {
         muscle_health_.success_count + muscle_health_.fail_count > 0;
       
       update_controller_and_record(
-        opt, decision_trace, sample, simulated_now_ms,
+        opt, decision_trace, proposal_transition, sample, simulated_now_ms,
         controller_before, controller_mode_before);
 
       emit_health_event(step, nerve_health_, aurora::FlowClass::NERVE);
@@ -1031,6 +1035,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
   bool delivered=false; vector<uint8_t> out;
 
   cl::Optimizer opt;
+  opt.reseed_proposal(engine.I.experiment_seed);
   telem::ChannelState chan;
   double epoch=1.0;
 
@@ -1104,34 +1109,44 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
 
     const auto controller_before = engine.safety_monitor.snapshot();
     const auto controller_mode_before = opt.mode();
-    auto dec = opt.joint(engine.I, Sx, epoch);
-    aurora::safety::TransportDecision proposed;
-    proposed.link = safety_link(dec.mode);
-    proposed.transmission_attempts = static_cast<uint32_t>(dec.tries & 0xFF);
-    proposed.repair_symbols = static_cast<uint32_t>(dec.overhead & 0x7FFF);
-    proposed.critical_only =
-      Sx.prio == cl::Priority::CRITICAL && engine.has_critical_segments();
-    if (proposed.critical_only) {
-      proposed.transmission_attempts = max(2U, proposed.transmission_attempts);
-    }
+    const auto proposal_input = opt.proposal_input(
+      engine.I, Sx, epoch, engine.has_critical_segments());
+    const auto proposal_before = opt.proposal_state();
+    const auto proposal_decision = opt.propose(proposal_input);
+    const auto proposal_after_derivation = opt.proposal_state();
+    const auto proposed = proposal_decision.transport;
     const auto observed = engine.transport_state(S, simulated_now_ms);
     auto decision_trace = engine.safety_envelope.constrain(
       engine.I, engine.generation_descriptor, observed, proposed);
-    dec.mode = phy_link(decision_trace.decision.link);
-    double hop = HAL::FHSS_next( (dec.tries>>8) & 0xFF );
-    HAL::LORA_CFG(hop, dec.rf_bw_khz, 12, 5, dec.preamble_sym);
+    double hop = HAL::FHSS_next(proposal_decision.covert_sequence);
+    HAL::LORA_CFG(
+      hop, proposal_decision.rf_bandwidth_khz, 12, 5,
+      proposal_decision.preamble_symbols);
 
-    uint8_t covert_seq = (dec.tries >> 8) & 0xFF;
-    bool emergency = (dec.overhead & 0x8000) != 0;
+    const uint8_t covert_seq = proposal_decision.covert_sequence;
+    const bool emergency = proposal_decision.emergency;
     const auto executed = engine.execute_decision(
       S, D, chan, decision_trace, simulated_now_ms,
-      dec.min_spacing_ms, dec.jitter_ms, step, false);
+      proposal_decision.minimum_spacing_ms,
+      proposal_decision.jitter_ms, step, false);
     const int tries_real = executed.attempts;
     const int ok_cnt = executed.delivered;
     const string mode_chosen = executed.mode;
 
     double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
-    if (tries_real > 0) opt.feedback(dec.mode, reward);
+    aurora::control::ProposalFeedback proposal_feedback;
+    proposal_feedback.applied = tries_real > 0;
+    proposal_feedback.executed_link = decision_trace.decision.link;
+    proposal_feedback.reward = proposal_feedback.applied ? reward : 0.0;
+    opt.apply_feedback(proposal_feedback);
+    aurora::control::ProposalTransition proposal_transition;
+    proposal_transition.recorded = true;
+    proposal_transition.before = proposal_before;
+    proposal_transition.input = proposal_input;
+    proposal_transition.decision = proposal_decision;
+    proposal_transition.after_proposal = proposal_after_derivation;
+    proposal_transition.feedback = proposal_feedback;
+    proposal_transition.after = opt.proposal_state();
     if(emergency){ cout<<"[COVERT] EMERGENCY flag; seq="<<(int)covert_seq<<"\n"; }
 
     int have_after = 0; for (auto& p : D.buf) if (p.generation_id == engine.generation_id) have_after++;
@@ -1189,7 +1204,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
       engine.muscle_health_.success_count + engine.muscle_health_.fail_count > 0;
     
     engine.update_controller_and_record(
-      opt, decision_trace, sample, simulated_now_ms,
+      opt, decision_trace, proposal_transition, sample, simulated_now_ms,
       controller_before, controller_mode_before);
 
     engine.emit_health_event(step, engine.nerve_health_, aurora::FlowClass::NERVE);

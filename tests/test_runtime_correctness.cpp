@@ -333,6 +333,64 @@ void safety_monitor_snapshot_restores_pending_transition() {
     assert(restored.state() == aurora::safety::SafetyState::CRITICAL);
 }
 
+void cross_layer_proposal_replays_rng_selector_and_ucb_feedback() {
+    aurora::control::ProposalStateSnapshot state;
+    state.random_state = 0x12345678ULL;
+
+    aurora::control::ProposalInput input;
+    input.selector_argmax = false;
+    input.deadline_s = 10.0;
+    input.deadline_left_s = 8.0;
+    input.symbols_have = 2;
+    input.symbols_need = 10;
+    input.snr_db = {12.0, 9.0, 6.0};
+    input.historical_per = {0.1, 0.2, 0.3};
+    input.priority = aurora::control::ProposalPriority::BULK;
+    input.epoch = 4.0;
+
+    aurora::control::ProposalTransition transition;
+    transition.recorded = true;
+    transition.before = state;
+    transition.input = input;
+    transition.decision = aurora::control::derive_proposal(input, state);
+    transition.after_proposal = state;
+    assert(transition.after_proposal.random_state !=
+           transition.before.random_state);
+    transition.feedback = {
+        true, transition.decision.transport.link, 0.5};
+    aurora::control::apply_proposal_feedback(state, transition.feedback);
+    transition.after = state;
+    assert(!transition.validation_error().has_value());
+
+    const auto selected = aurora::control::proposal_link_index(
+        transition.feedback.executed_link);
+    assert(transition.after.ucb_counts[selected] == 1);
+    assert(transition.after.ucb_reward_sums[selected] == 0.5);
+
+    aurora::control::ProposalTransition selector_transition;
+    selector_transition.recorded = true;
+    selector_transition.before = transition.after;
+    selector_transition.input = input;
+    selector_transition.input.selector_argmax = true;
+    selector_transition.input.epoch = 5.0;
+    selector_transition.input.snr_db = {0.0, 1.0, 20.0};
+    selector_transition.decision = aurora::control::derive_proposal(
+        selector_transition.input, state);
+    selector_transition.after_proposal = state;
+    selector_transition.feedback = {
+        false, selector_transition.decision.transport.link, 0.0};
+    aurora::control::apply_proposal_feedback(
+        state, selector_transition.feedback);
+    selector_transition.after = state;
+    assert(selector_transition.after.selector_memory ==
+           aurora::safety::LinkMode::BACKSCATTER);
+    assert(!selector_transition.validation_error().has_value());
+
+    auto tampered = selector_transition;
+    tampered.after.random_state ^= 1ULL;
+    assert(tampered.validation_error().has_value());
+}
+
 } // namespace
 
 int main() {
@@ -347,6 +405,7 @@ int main() {
     optimizer_treats_missing_evidence_as_conservative();
     safety_monitor_expires_stale_evidence_by_timestamp();
     safety_monitor_snapshot_restores_pending_transition();
+    cross_layer_proposal_replays_rng_selector_and_ucb_feedback();
     std::cout << "runtime correctness tests passed\n";
     return 0;
 }

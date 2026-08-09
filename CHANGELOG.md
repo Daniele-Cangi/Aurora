@@ -16,7 +16,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Generation-scoped deterministic runtime repair emission with segment-aware critical scheduling and immutable descriptors.
 - Dependency-light GitHub Actions build and CTest jobs for Linux and Windows.
 - Independent segment expiry, late-symbol accounting, per-segment decode reports, and reliability-prioritized runtime repair selection.
-- V4 decision traces with per-attempt LBT, channel, energy and simulation-duty transitions plus complete bounded supervisory-controller snapshots.
+- V5 decision traces with replayable proposal inputs/state, per-attempt LBT, channel, energy and simulation-duty transitions, plus complete bounded supervisory-controller snapshots.
+- Deterministic cross-layer proposal derivation from selector memory, UCB statistics, epoch and an isolated RNG state, including replayable post-execution UCB feedback.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
 - Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
@@ -27,8 +28,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
 - Made simulation and coding randomness reproducible from the contract seed.
 - Added `--decision-trace <path>` to the main simulator.
-- Upgraded decision provenance to V4: actual repair/attempt aggregates remain backed by replayable per-attempt HAL/channel/resource transitions, while safety-window, hysteresis and operating-mode transitions are independently reconstructed and checked for cross-record continuity.
-- V2 and V3 decision traces are no longer accepted because they cannot provide the complete V4 action and supervisory-controller evidence and must be regenerated.
+- Upgraded decision provenance to V5: proposal derivation, selector/RNG advancement, UCB feedback, per-attempt HAL/channel/resource transitions, and safety-window/operating-mode transitions are independently reconstructed and checked for cross-record continuity.
+- V2 through V4 decision traces are no longer accepted because they cannot provide the complete V5 proposal, action and supervisory evidence and must be regenerated.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.

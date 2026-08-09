@@ -22,6 +22,7 @@
 using namespace std;
 
 #include "aurora_hal.hpp"
+#include "include/aurora/control/CrossLayerProposal.hpp"
 #include "include/aurora/control/OperatingModeController.hpp"
 #include "include/aurora/fec/LtLikeCodec.hpp"
 #include "include/aurora/transport/TransportHealth.hpp"
@@ -168,130 +169,107 @@ namespace cl {
     return clamp(n, 1, cap);
   }
 
-  struct UCB {
-    array<int,3> N{0,0,0};
-    array<double,3> reward{0,0,0};
-    int choose(double t){
-      double C = 1.2; double best=-1e9; int idx=0;
-      for(int i=0;i<3;++i){
-        double avg = (N[i]>0? reward[i]/N[i] : 0.7);
-        double conf = (N[i]>0? C * sqrt(log(max(1.0,t))/N[i]) : 1.0);
-        double score = avg + conf;
-        if(score>best){ best=score; idx=i; }
-      }
-      return idx;
-    }
-    void update(int idx, double r){ N[idx]++; reward[idx]+=r; }
-  };
-
   using FlowHealth = aurora::transport::TransportHealth;
 
   // FASE 4: Mode enum per Optimizer
   using Mode = aurora::control::OperatingMode;
 
   struct Optimizer{
-    UCB bandit;
-    // Hysteresis state for ARGMAX selector
-    phy::Mode last_mode = phy::Mode::RF;
-    double hysteresis_dB = 1.0;
+    aurora::control::ProposalStateSnapshot proposal_state_;
     
     // FASE 4: Operating mode
     Mode mode_ = Mode::NORMAL;
     
-    static int midx(phy::Mode m){ return m==phy::Mode::RF?0: (m==phy::Mode::IR?1:2); }
-    static phy::Mode imode(int i){ return i==0?phy::Mode::RF: (i==1?phy::Mode::IR:phy::Mode::BACKSCATTER); }
-
-  #include "aurora_intention.hpp"
-  Decision joint(const Intention& I, const NetworkState& S, double epoch){
-      phy::Mode m = phy::Mode::RF;
-      if(I.selector_argmax){
-        // ARGMAX SNR + hysteresis
-        double snr_rf  = S.chan.snr_est(phy::Mode::RF);
-        double snr_ir  = S.chan.snr_est(phy::Mode::IR);
-        double snr_bs  = S.chan.snr_est(phy::Mode::BACKSCATTER);
-        phy::Mode best = phy::Mode::RF; double best_snr = snr_rf;
-        if(snr_ir  > best_snr){ best=phy::Mode::IR; best_snr=snr_ir; }
-        if(snr_bs  > best_snr){ best=phy::Mode::BACKSCATTER; best_snr=snr_bs; }
-        double prev_snr = S.chan.snr_est(last_mode);
-        double margin   = best_snr - prev_snr;
-        m = (margin > hysteresis_dB ? best : last_mode);
-      } else {
-        // UCB bandit
-        int choice = bandit.choose(max(1.0, epoch));
-        m = imode(choice);
+    static aurora::control::ProposalPriority proposal_priority(Priority priority) {
+      switch (priority) {
+        case Priority::CRITICAL: return aurora::control::ProposalPriority::CRITICAL;
+        case Priority::NORMAL: return aurora::control::ProposalPriority::NORMAL;
+        case Priority::BULK: return aurora::control::ProposalPriority::BULK;
       }
-      if(S.soc_src<0.18) m = (I.allow_backscatter? phy::Mode::BACKSCATTER : m);
-      last_mode = m;
-
-      double R = target_R_for(S.prio);
-      if(S.emergency_mode) R = max(R, 0.999);
-
-      // FASE 4: Modifica R, budget, cap in base a mode_
-      if (mode_ == Mode::CONSERVATIVE) {
-        // CONSERVATIVE: proteggere NERVE/GLAND, limitare esperimenti/bulk
-        // Aumenta R per flussi critici, riduci cap per limitare bulk
-        if (S.prio == Priority::CRITICAL || S.prio == Priority::NORMAL) {
-          R = max(R, 0.995);  // R più alto per flussi critici
-        }
-      } else if (mode_ == Mode::AGGRESSIVE) {
-        // AGGRESSIVE: più esperimenti su MUSCLE se tutto è stabile
-        // Riduci R leggermente per MUSCLE, aumenta cap per più tentativi
-        if (S.prio == Priority::BULK) {
-          R = max(0.85, R - 0.05);  // R leggermente più basso per bulk
-        }
-      }
-      // NORMAL: comportamento standard (nessuna modifica)
-
-      double urg = urgency(S.symbols_have, S.symbols_need, I.deadline_s, S.deadline_left_s);
-      double budget = allocate_duty_budget(S.duty_left_rf, urg);
-      
-      // FASE 4: Modifica cap in base a mode_
-      int cap_base = (budget>0.5? 48 : budget>0.25? 32 : 20);
-      int cap = cap_base;
-      if (mode_ == Mode::CONSERVATIVE) {
-        cap = max(12, cap_base - 8);  // Riduci cap per limitare bulk
-      } else if (mode_ == Mode::AGGRESSIVE) {
-        cap = min(64, cap_base + 8);  // Aumenta cap per più tentativi
-      }
-
-      double per = per_est(S, m);
-      double ps  = 1.0 - per;
-      int tries = attempts_for_R(R, ps, cap);
-
-      int redundancy = (int)ceil( log(1.0 - R) / log(per) * 0.6 );
-      redundancy = max(5, redundancy);
-      
-      // FASE 4: Modifica redundancy in base a mode_
-      if (mode_ == Mode::CONSERVATIVE && (S.prio == Priority::CRITICAL || S.prio == Priority::NORMAL)) {
-        redundancy = (int)(redundancy * 1.2);  // Aumenta ridondanza per flussi critici
-      } else if (mode_ == Mode::AGGRESSIVE && S.prio == Priority::BULK) {
-        redundancy = max(3, (int)(redundancy * 0.9));  // Riduci leggermente per bulk
-      }
-
-      int base_space = (S.soc_src<0.3 ? 18 : 8);
-      int jitter = (int)round((1.0 - clamp(S.duty_left_rf,0.0,1.0))*40.0) + (S.soc_src<0.3?12:0);
-      int preamble = (int)clamp(8 + (int)(urg*10) + (int)(util::rng.uni()*4), 6, 24);
-      int bw = (util::rng.uni()<0.5 ? 125 : 250);
-      
-      // FASE 4: CONSERVATIVE: favorisci modi radio più robusti per NERVE/GLAND
-      if (mode_ == Mode::CONSERVATIVE && (S.prio == Priority::CRITICAL || S.prio == Priority::NORMAL)) {
-        // Se siamo in CONSERVATIVE e il flusso è critico, preferisci RF (più robusto)
-        // ma solo se non è già stato scelto un modo migliore
-        double snr_rf = S.chan.snr_est(phy::Mode::RF);
-        double snr_ir = S.chan.snr_est(phy::Mode::IR);
-        if (snr_rf > snr_ir - 2.0) {  // Se RF è comparabile (entro 2dB), preferisci RF
-          m = phy::Mode::RF;
-        }
-      }
-
-      int overhead = redundancy & 0x7FFF;
-      if(S.emergency_mode) overhead |= 0x8000;
-      tries = (tries & 0xFF) | ((S.covert_seq & 0xFF) << 8);
-
-      return { m, tries, overhead, jitter, base_space, preamble, bw };
+      throw invalid_argument("optimizer: invalid priority");
     }
 
-    void feedback(phy::Mode m, double reward_val){ bandit.update(midx(m), clamp(reward_val, 0.0, 1.0)); }
+    aurora::control::ProposalInput proposal_input(
+        const Intention& intention,
+        const NetworkState& state,
+        double epoch,
+        bool has_critical_segments) const {
+      aurora::control::ProposalInput input;
+      input.selector_argmax = intention.selector_argmax;
+      input.allow_backscatter = intention.allow_backscatter;
+      input.deadline_s = intention.deadline_s;
+      input.source_soc = state.soc_src;
+      input.rf_duty_remaining = state.duty_left_rf;
+      input.symbols_have = state.symbols_have;
+      input.symbols_need = state.symbols_need;
+      input.deadline_left_s = state.deadline_left_s;
+      input.snr_db = {
+        state.chan.snr_est(phy::Mode::RF),
+        state.chan.snr_est(phy::Mode::IR),
+        state.chan.snr_est(phy::Mode::BACKSCATTER)};
+      input.historical_per = {
+        state.chan.per_est(phy::Mode::RF),
+        state.chan.per_est(phy::Mode::IR),
+        state.chan.per_est(phy::Mode::BACKSCATTER)};
+      input.jamming_score = state.chan.jamming_score;
+      input.priority = proposal_priority(state.prio);
+      input.emergency_mode = state.emergency_mode;
+      input.covert_sequence = state.covert_seq;
+      input.operating_mode = mode_;
+      input.epoch = epoch;
+      input.has_critical_segments = has_critical_segments;
+      return input;
+    }
+
+    aurora::control::ProposalDecision propose(
+        const aurora::control::ProposalInput& input) {
+      return aurora::control::derive_proposal(input, proposal_state_);
+    }
+
+    Decision joint(const Intention& intention,
+                   const NetworkState& state,
+                   double epoch) {
+      const auto proposal = propose(
+        proposal_input(intention, state, epoch, false));
+      const auto mode = proposal.transport.link == aurora::safety::LinkMode::RF
+        ? phy::Mode::RF
+        : proposal.transport.link == aurora::safety::LinkMode::OPTICAL
+          ? phy::Mode::IR
+          : phy::Mode::BACKSCATTER;
+      int tries = static_cast<int>(proposal.transport.transmission_attempts) |
+        (static_cast<int>(proposal.covert_sequence) << 8);
+      int overhead = static_cast<int>(proposal.transport.repair_symbols);
+      if (proposal.emergency) overhead |= 0x8000;
+      return {
+        mode,
+        tries,
+        overhead,
+        proposal.jitter_ms,
+        proposal.minimum_spacing_ms,
+        proposal.preamble_symbols,
+        proposal.rf_bandwidth_khz};
+    }
+
+    void apply_feedback(const aurora::control::ProposalFeedback& feedback) {
+      aurora::control::apply_proposal_feedback(proposal_state_, feedback);
+    }
+
+    void feedback(phy::Mode link, double reward) {
+      const auto replay_link = link == phy::Mode::RF
+        ? aurora::safety::LinkMode::RF
+        : link == phy::Mode::IR
+          ? aurora::safety::LinkMode::OPTICAL
+          : aurora::safety::LinkMode::BACKSCATTER;
+      apply_feedback({true, replay_link, clamp(reward, 0.0, 1.0)});
+    }
+
+    void reseed_proposal(uint64_t seed) {
+      proposal_state_.random_state = seed ? seed : 0xC0FFEEBEEFULL;
+    }
+
+    const aurora::control::ProposalStateSnapshot& proposal_state() const {
+      return proposal_state_;
+    }
     
     // FASE 4: Mode getter/setter
     void set_mode(Mode m) { mode_ = m; }
