@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -16,9 +17,35 @@
 
 namespace aurora::simulation {
 
+enum class GenerationServiceClass : std::uint8_t {
+    INHERIT,
+    CRITICAL,
+    IMPORTANT,
+    ELASTIC
+};
+
+inline transport::TransportImportance resolve_service_class(
+    GenerationServiceClass service_class,
+    transport::TransportImportance inherited) {
+    switch (service_class) {
+        case GenerationServiceClass::INHERIT: return inherited;
+        case GenerationServiceClass::CRITICAL:
+            return transport::TransportImportance::CRITICAL;
+        case GenerationServiceClass::IMPORTANT:
+            return transport::TransportImportance::IMPORTANT;
+        case GenerationServiceClass::ELASTIC:
+            return transport::TransportImportance::ELASTIC;
+    }
+    throw std::invalid_argument(
+        "generation arrival schedule: invalid service class");
+}
+
 struct GenerationArrival {
     std::uint64_t arrives_at_ms = 0;
     std::string tag;
+    GenerationServiceClass service_class = GenerationServiceClass::INHERIT;
+    // Zero inherits the base TransportContract deadline.
+    std::uint64_t deadline_ms = 0;
 
     friend bool operator==(const GenerationArrival&,
                            const GenerationArrival&) = default;
@@ -30,7 +57,7 @@ struct GenerationArrival {
 class GenerationArrivalSchedule {
 public:
     static constexpr std::string_view format_header =
-        "AURORA_GENERATION_ARRIVAL_SCHEDULE_V1";
+        "AURORA_GENERATION_ARRIVAL_SCHEDULE_V2";
     // Matches the default bounded GenerationManager capacity used by the
     // simulator, which pre-constructs descriptors before timed release.
     static constexpr std::size_t maximum_arrivals = 128;
@@ -80,6 +107,18 @@ public:
                 throw std::invalid_argument(
                     "generation arrival schedule: invalid tag");
             }
+            if (static_cast<std::uint8_t>(arrival.service_class) >
+                static_cast<std::uint8_t>(GenerationServiceClass::ELASTIC)) {
+                throw std::invalid_argument(
+                    "generation arrival schedule: invalid service class");
+            }
+            if (arrival.deadline_ms != 0 &&
+                arrival.deadline_ms >
+                    std::numeric_limits<std::uint64_t>::max() -
+                        arrival.arrives_at_ms) {
+                throw std::invalid_argument(
+                    "generation arrival schedule: deadline overflows arrival time");
+            }
             if (std::find(tags.begin(), tags.end(), arrival.tag) != tags.end()) {
                 throw std::invalid_argument(
                     "generation arrival schedule: duplicate tag");
@@ -103,7 +142,9 @@ public:
             std::ostringstream payload;
             payload << "A|" << index << '|'
                     << hex_u64(previous_checksum) << '|'
-                    << arrival.arrives_at_ms << '|' << arrival.tag;
+                    << arrival.arrives_at_ms << '|' << arrival.tag << '|'
+                    << static_cast<unsigned>(arrival.service_class) << '|'
+                    << arrival.deadline_ms;
             const auto encoded = payload.str();
             previous_checksum = transport::fnv1a64(encoded);
             output << encoded << '|' << hex_u64(previous_checksum) << '\n';
@@ -184,7 +225,7 @@ public:
                 footer_seen = true;
                 continue;
             }
-            if (fields.size() != 5 || fields[0] != "A" ||
+            if (fields.size() != 7 || fields[0] != "A" ||
                 parse_u64(fields[1], 10, "arrival index") != arrivals.size() ||
                 parse_u64(fields[2], 16, "previous checksum") !=
                     previous_checksum) {
@@ -195,8 +236,17 @@ public:
                 throw std::invalid_argument(
                     "generation arrival schedule: too many arrivals");
             }
+            const auto service_class = parse_u64(
+                fields[5], 10, "service class");
+            if (service_class > static_cast<std::uint8_t>(
+                    GenerationServiceClass::ELASTIC)) {
+                throw std::invalid_argument(
+                    "generation arrival schedule: invalid service class");
+            }
             arrivals.push_back({
-                parse_u64(fields[3], 10, "arrival time"), fields[4]});
+                parse_u64(fields[3], 10, "arrival time"), fields[4],
+                static_cast<GenerationServiceClass>(service_class),
+                parse_u64(fields[6], 10, "deadline")});
             previous_checksum = checksum;
         }
         if (!footer_seen) {

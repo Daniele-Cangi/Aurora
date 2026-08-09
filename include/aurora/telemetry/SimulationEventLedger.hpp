@@ -3,6 +3,7 @@
 #include "DecisionReplayLog.hpp"
 #include "../simulation/ContactSchedule.hpp"
 #include "../simulation/GenerationArrivalSchedule.hpp"
+#include "../simulation/GenerationScheduler.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -40,6 +41,9 @@ struct SimulationGenerationIdentity {
     std::uint64_t descriptor_fingerprint = 0;
     std::uint32_t required_rank = 0;
     std::uint64_t initial_source_packets = 0;
+    transport::TransportImportance scheduling_importance =
+        transport::TransportImportance::IMPORTANT;
+    std::uint64_t expires_at_ms = 0;
 
     friend bool operator==(const SimulationGenerationIdentity&,
                            const SimulationGenerationIdentity&) = default;
@@ -445,7 +449,7 @@ inline DerivedSimulationEnvironment derive_simulation_environment(
 class SimulationEventLedger {
 public:
     static constexpr std::string_view format_header =
-        "AURORA_SIMULATION_EVENT_LEDGER_V3";
+        "AURORA_SIMULATION_EVENT_LEDGER_V4";
 
     void begin(SimulationEventSession session) {
         if (!records_.empty() || session_.initial_random_state != 0) {
@@ -533,16 +537,26 @@ public:
                 validate_event(event);
                 verify_continuity(index);
                 verify_generation_arrival(event);
-                std::size_t expected_active = session_.generations.size();
+                std::vector<simulation::GenerationSchedulingCandidate>
+                    candidates;
+                candidates.reserve(session_.generations.size());
                 for (std::size_t generation = 0;
                      generation < session_.generations.size(); ++generation) {
-                    if (session_.generations[generation].arrives_at_ms <=
-                            event.simulated_now_ms && !terminal[generation]) {
-                        expected_active = generation;
-                        break;
-                    }
+                    const auto& identity = session_.generations[generation];
+                    candidates.push_back({
+                        generation,
+                        identity.arrives_at_ms,
+                        identity.expires_at_ms,
+                        identity.scheduling_importance,
+                        identity.arrives_at_ms <= event.simulated_now_ms,
+                        terminal[generation]});
                 }
-                if (expected_active == session_.generations.size()) {
+                auto selected = simulation::select_scheduled_generation(
+                    candidates, event.simulated_now_ms);
+                std::size_t expected_active = session_.generations.size();
+                if (selected) {
+                    expected_active = *selected;
+                } else {
                     for (std::size_t generation = session_.generations.size();
                          generation-- > 0;) {
                         if (session_.generations[generation].arrives_at_ms <=
@@ -554,7 +568,7 @@ public:
                 }
                 if (event.active_generation_index != expected_active) {
                     throw std::invalid_argument(
-                        "active generation does not match FIFO schedule");
+                        "active generation does not match priority/deadline schedule");
                 }
                 if (event.decoder_rank_before !=
                     ranks[event.active_generation_index]) {
@@ -771,7 +785,20 @@ private:
                 identity.generation_id.find('|') != std::string::npos ||
                 identity.descriptor_fingerprint == 0 ||
                 identity.required_rank == 0 ||
-                identity.initial_source_packets == 0) {
+                identity.initial_source_packets == 0 ||
+                static_cast<std::uint8_t>(identity.scheduling_importance) >
+                    static_cast<std::uint8_t>(
+                        transport::TransportImportance::ELASTIC) ||
+                identity.expires_at_ms < identity.arrives_at_ms ||
+                (arrival.deadline_ms != 0 &&
+                 identity.expires_at_ms != identity.arrives_at_ms +
+                    arrival.deadline_ms) ||
+                (arrival.service_class !=
+                    simulation::GenerationServiceClass::INHERIT &&
+                 identity.scheduling_importance !=
+                    simulation::resolve_service_class(
+                        arrival.service_class,
+                        transport::TransportImportance::IMPORTANT))) {
                 throw std::invalid_argument(
                     "simulation event ledger: invalid generation identity");
             }
@@ -912,12 +939,30 @@ private:
                                 const DecisionReplayRecord& record) const {
         const auto& identity =
             session_.generations[event.active_generation_index];
+        const auto& arrival = session_.generation_arrival_schedule.arrivals()[
+            event.active_generation_index];
+        auto expected_importance = record.contract.importance;
+        if (arrival.service_class !=
+            simulation::GenerationServiceClass::INHERIT) {
+            expected_importance = simulation::resolve_service_class(
+                arrival.service_class, expected_importance);
+        } else if (!record.descriptor.segments.empty()) {
+            expected_importance = std::min_element(
+                record.descriptor.segments.begin(),
+                record.descriptor.segments.end(),
+                [](const auto& left, const auto& right) {
+                    return static_cast<std::uint8_t>(left.importance) <
+                        static_cast<std::uint8_t>(right.importance);
+                })->importance;
+        }
         if (session_.experiment_seed != record.contract.experiment_seed ||
             identity.generation_id != record.descriptor.generation_id ||
             identity.descriptor_fingerprint !=
                 simulation_descriptor_identity(record.descriptor) ||
             identity.required_rank != record.descriptor.total_source_symbols ||
-            identity.arrives_at_ms != record.descriptor.created_at_ms) {
+            identity.arrives_at_ms != record.descriptor.created_at_ms ||
+            identity.expires_at_ms != record.descriptor.expires_at_ms ||
+            identity.scheduling_importance != expected_importance) {
             std::ostringstream reason;
             reason << "session does not match decision trace generation"
                    << " seed=" << session_.experiment_seed << '/'
@@ -1130,7 +1175,10 @@ private:
                    << simulation_event_detail::hex_u64(
                         generation.descriptor_fingerprint) << ','
                    << generation.required_rank << ','
-                   << generation.initial_source_packets;
+                   << generation.initial_source_packets << ','
+                   << static_cast<unsigned>(
+                        generation.scheduling_importance) << ','
+                   << generation.expires_at_ms;
         }
         return output.str();
     }
@@ -1142,7 +1190,7 @@ private:
         if (encoded.empty()) return generations;
         for (const auto& item : split(encoded, ';')) {
             const auto fields = split(item, ',');
-            if (fields.size() != 6) {
+            if (fields.size() != 8) {
                 throw std::invalid_argument(
                     "simulation event ledger: invalid generation identities");
             }
@@ -1152,12 +1200,21 @@ private:
                 throw std::invalid_argument(
                     "simulation event ledger: generation rank is out of range");
             }
+            const auto importance = parse_u64(
+                fields[6], 10, "generation scheduling importance");
+            if (importance > static_cast<std::uint8_t>(
+                    transport::TransportImportance::ELASTIC)) {
+                throw std::invalid_argument(
+                    "simulation event ledger: generation importance is out of range");
+            }
             generations.push_back({
                 parse_u64(fields[0], 10, "generation arrival time"),
                 fields[1], fields[2],
                 parse_u64(fields[3], 16, "generation fingerprint"),
                 static_cast<std::uint32_t>(required_rank),
-                parse_u64(fields[5], 10, "generation packet count")});
+                parse_u64(fields[5], 10, "generation packet count"),
+                static_cast<transport::TransportImportance>(importance),
+                parse_u64(fields[7], 10, "generation expiry")});
         }
         return generations;
     }

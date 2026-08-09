@@ -32,7 +32,8 @@ aurora::telemetry::SimulationEventSession session() {
     value.generation_arrival_schedule =
         aurora::simulation::GenerationArrivalSchedule({{0, "alpha"}});
     value.generations = {{
-        0, "alpha", "event-ledger-generation", 0x1234ULL, 2, 3}};
+        0, "alpha", "event-ledger-generation", 0x1234ULL, 2, 3,
+        aurora::transport::TransportImportance::IMPORTANT, 600'000}};
     return value;
 }
 
@@ -124,7 +125,7 @@ int main() {
     ledger.record(event);
 
     const auto encoded = ledger.serialize();
-    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V3\n"));
+    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V4\n"));
     assert(encoded == ledger.serialize());
     const auto restored = SimulationEventLedger::deserialize(encoded);
     assert(restored.serialize() == encoded);
@@ -133,14 +134,14 @@ int main() {
     assert(structure.ok);
     assert(structure.records_verified == 1);
 
-    auto legacy_v2 = encoded;
-    legacy_v2.replace(
+    auto legacy_v3 = encoded;
+    legacy_v3.replace(
         0,
-        std::string("AURORA_SIMULATION_EVENT_LEDGER_V3").size(),
-        "AURORA_SIMULATION_EVENT_LEDGER_V2");
+        std::string("AURORA_SIMULATION_EVENT_LEDGER_V4").size(),
+        "AURORA_SIMULATION_EVENT_LEDGER_V3");
     bool legacy_rejected = false;
     try {
-        (void)SimulationEventLedger::deserialize(legacy_v2);
+        (void)SimulationEventLedger::deserialize(legacy_v3);
     } catch (const std::invalid_argument&) {
         legacy_rejected = true;
     }
@@ -186,7 +187,8 @@ int main() {
             {0, "alpha"}, {1'000, "beta"}});
     concurrent_metadata.generations.push_back({
         1'000, "beta", "event-ledger-generation-beta",
-        0x5678ULL, 2, 3});
+        0x5678ULL, 2, 3,
+        aurora::transport::TransportImportance::IMPORTANT, 601'000});
     auto concurrent_first = first_event(concurrent_metadata);
     concurrent_first.random_before = concurrent_metadata.initial_random_state;
     const auto first_environment =
@@ -208,7 +210,7 @@ int main() {
     fifo_tamper.record(wrong_active);
     const auto fifo_result = fifo_tamper.verify_structure();
     assert(!fifo_result.ok);
-    assert(fifo_result.failure_reason.find("FIFO schedule") !=
+    assert(fifo_result.failure_reason.find("priority/deadline schedule") !=
            std::string::npos);
 
     auto corrupted = encoded;

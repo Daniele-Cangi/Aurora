@@ -319,6 +319,14 @@ if(BUILD_TESTING)
     NAME aurora.generation_arrival_schedule
     COMMAND test_generation_arrival_schedule)
 
+  add_executable(
+    test_generation_scheduler
+    tests/test_generation_scheduler.cpp)
+  aurora_link_common(test_generation_scheduler)
+  add_test(
+    NAME aurora.generation_scheduler
+    COMMAND test_generation_scheduler)
+
   set(_AURORA_EVENT_DECISION_TRACE
       "${CMAKE_CURRENT_BINARY_DIR}/simulation-event-decisions.trace")
   set(_AURORA_EVENT_LEDGER
@@ -344,8 +352,8 @@ if(BUILD_TESTING)
     NAME aurora.generation_arrival_schedule_generate
     COMMAND aurora_generation_arrivals
       "${_AURORA_GENERATION_ARRIVALS}"
-      "0:alpha"
-      "2000:beta")
+      "0:alpha:elastic:10000"
+      "1000:beta:critical:5000")
   set_tests_properties(
     aurora.generation_arrival_schedule_generate
     PROPERTIES FIXTURES_SETUP aurora_generation_arrival_fixture)
@@ -401,6 +409,7 @@ if(BUILD_TESTING)
     target_compile_options(test_simulation_event_ledger PRIVATE /UNDEBUG)
     target_compile_options(test_contact_schedule PRIVATE /UNDEBUG)
     target_compile_options(test_generation_arrival_schedule PRIVATE /UNDEBUG)
+    target_compile_options(test_generation_scheduler PRIVATE /UNDEBUG)
   else()
     target_compile_options(test_aurora_organism PRIVATE -UNDEBUG)
     target_compile_options(test_transport_contract PRIVATE -UNDEBUG)
@@ -413,6 +422,7 @@ if(BUILD_TESTING)
     target_compile_options(test_simulation_event_ledger PRIVATE -UNDEBUG)
     target_compile_options(test_contact_schedule PRIVATE -UNDEBUG)
     target_compile_options(test_generation_arrival_schedule PRIVATE -UNDEBUG)
+    target_compile_options(test_generation_scheduler PRIVATE -UNDEBUG)
   endif()
 
   if(USE_RAPTORQ)
@@ -483,6 +493,7 @@ set(_AURORA_ALL_TARGETS
   test_simulation_event_ledger
   test_contact_schedule
   test_generation_arrival_schedule
+  test_generation_scheduler
   aurora_batch_test
   aurora_deadline_sweep
   aurora_selector_test

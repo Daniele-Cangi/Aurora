@@ -23,7 +23,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Canonical checksum-chained `ContactSchedule` files with half-open, non-overlapping windows and per-link RF/optical/backscatter availability.
 - `aurora_contact_schedule` creates validated schedules from explicit time/link specifications for repeatable simulator and CI runs.
 - Canonical checksum-chained `GenerationArrivalSchedule` files plus `aurora_generation_arrivals` for deterministic external generation releases.
-- FIFO simulation of multiple arrived generations with generation-qualified packet replay, per-generation rank continuity and exact schedule round-tripping.
+- Deterministic priority-then-EDF simulation of multiple arrived generations with stable arrival/index tie-breaks, preemption, generation-qualified packet replay, per-generation rank continuity and exact schedule round-tripping.
+- Shared `GenerationScheduler` selection logic and tests for priority, earliest-deadline, stable tie-break and invalid-candidate rejection.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
 - Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
@@ -37,10 +38,12 @@ All notable changes to Aurora-X will be documented in this file.
 - Added `--event-ledger <path>` and optional paired event-ledger verification to `aurora_replay`.
 - Added `--contact-schedule <path>` and `--contact-schedule-out <path>` to the simulation CLI; replay/contact options remain unavailable in `FIELD_BUILD`.
 - Added `--generation-arrivals <path>` and `--generation-arrivals-out <path>` to the simulation CLI; arrival replay remains unavailable in interactive-lab and `FIELD_BUILD` modes.
+- Extended arrival specifications with optional service class and relative deadline fields while preserving the compact inheritance form.
 - Upgraded decision provenance to V5: proposal derivation, selector/RNG advancement, UCB feedback, per-attempt HAL/channel/resource transitions, and safety-window/operating-mode transitions are independently reconstructed and checked for cross-record continuity.
 - V2 through V5 decision traces are no longer accepted because they cannot provide the complete V6 contact, proposal, action and supervisory evidence and must be regenerated.
 - Upgraded decision provenance to V6 and simulator ledgers to V2 so contact availability is serialized, safety-constrained and cross-checked against the embedded schedule; V5/V1 artifacts must be regenerated.
 - Upgraded simulator ledgers to V3 so the canonical arrival schedule, every generation identity, timed packet release, active generation and per-generation rank are replayed; V1/V2 artifacts must be regenerated.
+- Upgraded generation-arrival schedules to V2 and simulator ledgers to V4 so resolved service class, descriptor expiry and priority/deadline selection are independently replayed; V1 schedules and V1–V3 ledgers must be regenerated.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.
