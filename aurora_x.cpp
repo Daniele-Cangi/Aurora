@@ -26,7 +26,7 @@ using namespace std; using namespace chrono;
 #include "aurora_hal.hpp"
 #include "aurora_extreme.hpp"
 #include "aurora_organism.hpp"
-#include "src/core/AuroraSafetyMonitor.hpp"
+#include "include/aurora/safety/SafetyMonitor.hpp"
 #include "include/aurora/safety/SafetyEnvelope.hpp"
 #include "include/aurora/telemetry/DecisionReplayLog.hpp"
 #ifdef AURORA_USE_LIBRAPTORQ
@@ -572,8 +572,62 @@ struct Engine {
     if (const auto error = trace.execution_error()) {
       throw logic_error("transport execution trace mismatch: " + *error);
     }
-    decision_trace_log.record(I, generation_descriptor, trace);
     return summary;
+  }
+
+  void update_controller_and_record(
+      cl::Optimizer& optimizer,
+      const aurora::safety::TransportDecisionTrace& decision_trace,
+      const TelemetrySample& sample,
+      uint64_t simulated_now_ms,
+      const aurora::safety::SafetyMonitorSnapshot& before,
+      cl::Mode mode_before) {
+    aurora::safety::TelemetrySample safety_sample;
+    safety_sample.observed_at_ms = simulated_now_ms;
+    safety_sample.now_ms = simulated_now_ms;
+    safety_sample.step = sample.step;
+    safety_sample.have = sample.have;
+    safety_sample.need = sample.need;
+    safety_sample.mode = sample.mode;
+    safety_sample.tries = sample.tries;
+    safety_sample.successes = sample.successes;
+    safety_sample.reward = sample.reward;
+    safety_sample.snr_rf = sample.snr_rf;
+    safety_sample.snr_ir = sample.snr_ir;
+    safety_sample.snr_bs = sample.snr_bs;
+    safety_sample.soc_src = sample.soc_src;
+    safety_sample.duty_left = sample.duty_left;
+    safety_sample.elapsed_s = sample.elapsed_s;
+    safety_sample.nerve_fail_rate = sample.nerve_fail_rate;
+    safety_sample.gland_fail_rate = sample.gland_fail_rate;
+    safety_sample.muscle_fail_rate = sample.muscle_fail_rate;
+    safety_sample.nerve_cov = sample.nerve_cov;
+    safety_sample.gland_cov = sample.gland_cov;
+    safety_sample.muscle_cov = sample.muscle_cov;
+    safety_sample.nerve_bad_streak = sample.nerve_bad_streak;
+    safety_sample.gland_bad_streak = sample.gland_bad_streak;
+    safety_sample.muscle_bad_streak = sample.muscle_bad_streak;
+    safety_sample.nerve_has_evidence = sample.nerve_has_evidence;
+    safety_sample.gland_has_evidence = sample.gland_has_evidence;
+    safety_sample.muscle_has_evidence = sample.muscle_has_evidence;
+
+    const auto observation = aurora::safety::evidence_from(safety_sample);
+    safety_monitor.observe(safety_sample);
+    current_safety_state_ = safety_monitor.state();
+    optimizer.update_mode(
+      current_safety_state_, nerve_health_, gland_health_, muscle_health_);
+    current_mode_ = optimizer.mode();
+
+    aurora::control::ControllerTransition transition;
+    transition.recorded = true;
+    transition.now_ms = simulated_now_ms;
+    transition.observation = observation;
+    transition.before = before;
+    transition.after = safety_monitor.snapshot();
+    transition.mode_before = mode_before;
+    transition.mode_after = optimizer.mode();
+    decision_trace_log.record(
+      I, generation_descriptor, decision_trace, transition);
   }
   
   // T1: Emette evento JSON health su stdout
@@ -797,6 +851,8 @@ struct Engine {
       Sx.emergency_mode = (Sx.deadline_left_s < I.deadline_s*0.08 && (K-have) > (K*0.25));
       Sx.covert_seq = static_cast<uint16_t>((I.experiment_seed + static_cast<uint64_t>(step)) & 0xFF);
 
+      const auto controller_before = safety_monitor.snapshot();
+      const auto controller_mode_before = opt.mode();
       auto dec = opt.joint(I, Sx, epoch);
       aurora::safety::TransportDecision proposed;
       proposed.link = safety_link(dec.mode);
@@ -852,11 +908,6 @@ struct Engine {
              << res.decoder_rank << "/" << res.required_rank << endl;
       }
       
-      // T1: Emetti eventi JSON health per ogni classe
-      emit_health_event(step, nerve_health_, aurora::FlowClass::NERVE);
-      emit_health_event(step, gland_health_, aurora::FlowClass::GLAND);
-      emit_health_event(step, muscle_health_, aurora::FlowClass::MUSCLE);
-      
       TelemetrySample sample;
       sample.step = step;
       sample.have = have_after;
@@ -889,51 +940,13 @@ struct Engine {
       sample.muscle_has_evidence =
         muscle_health_.success_count + muscle_health_.fail_count > 0;
       
-      // FASE 4: Converti TelemetrySample locale a aurora::safety::TelemetrySample
-      aurora::safety::TelemetrySample safety_sample;
-      safety_sample.step = sample.step;
-      safety_sample.have = sample.have;
-      safety_sample.need = sample.need;
-      safety_sample.mode = sample.mode;
-      safety_sample.tries = sample.tries;
-      safety_sample.successes = sample.successes;
-      safety_sample.reward = sample.reward;
-      safety_sample.snr_rf = sample.snr_rf;
-      safety_sample.snr_ir = sample.snr_ir;
-      safety_sample.snr_bs = sample.snr_bs;
-      safety_sample.soc_src = sample.soc_src;
-      safety_sample.duty_left = sample.duty_left;
-      safety_sample.elapsed_s = sample.elapsed_s;
-      safety_sample.nerve_fail_rate = sample.nerve_fail_rate;
-      safety_sample.gland_fail_rate = sample.gland_fail_rate;
-      safety_sample.muscle_fail_rate = sample.muscle_fail_rate;
-      safety_sample.nerve_cov = sample.nerve_cov;
-      safety_sample.gland_cov = sample.gland_cov;
-      safety_sample.muscle_cov = sample.muscle_cov;
-      safety_sample.nerve_bad_streak = sample.nerve_bad_streak;
-      safety_sample.gland_bad_streak = sample.gland_bad_streak;
-      safety_sample.muscle_bad_streak = sample.muscle_bad_streak;
-      safety_sample.nerve_has_evidence = sample.nerve_has_evidence;
-      safety_sample.gland_has_evidence = sample.gland_has_evidence;
-      safety_sample.muscle_has_evidence = sample.muscle_has_evidence;
-      
-      // FASE 4: Aggiorna SafetyMonitor con sample esteso
-      safety_monitor.observe(safety_sample);
-      
-      // FASE 4: Aggiorna Optimizer mode basato su SafetyState e FlowHealth
-      aurora::safety::SafetyState safety_state = safety_monitor.state();
-      current_safety_state_ = safety_state;  // T1: Aggiorna stato corrente
-      
-      // Chiama update_mode con SafetyState e FlowHealth objects
-      opt.update_mode(safety_state,
-                     nerve_health_,
-                     gland_health_,
-                     muscle_health_);
-      
-      current_mode_ = opt.mode();  // T1: Aggiorna mode corrente
-      
-      // Log mode change (il log è già dentro update_mode, ma lo lasciamo per chiarezza)
-      // Nota: update_mode() già logga quando il mode cambia
+      update_controller_and_record(
+        opt, decision_trace, sample, simulated_now_ms,
+        controller_before, controller_mode_before);
+
+      emit_health_event(step, nerve_health_, aurora::FlowClass::NERVE);
+      emit_health_event(step, gland_health_, aurora::FlowClass::GLAND);
+      emit_health_event(step, muscle_health_, aurora::FlowClass::MUSCLE);
       
       telemetry.record(sample);
 
@@ -1089,6 +1102,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     Sx.emergency_mode = (Sx.deadline_left_s < engine.I.deadline_s*0.08 && (engine.K-have) > (engine.K*0.25));
     Sx.covert_seq = static_cast<uint16_t>((engine.I.experiment_seed + static_cast<uint64_t>(step)) & 0xFF);
 
+    const auto controller_before = engine.safety_monitor.snapshot();
+    const auto controller_mode_before = opt.mode();
     auto dec = opt.joint(engine.I, Sx, epoch);
     aurora::safety::TransportDecision proposed;
     proposed.link = safety_link(dec.mode);
@@ -1142,11 +1157,6 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
       for (const auto& packet : received_packets) used.push_back(packet.fp.data);
     }
     
-    // T1: Emetti eventi JSON health (DOPO apply_flow_feedback per avere dati aggiornati)
-    engine.emit_health_event(step, engine.nerve_health_, aurora::FlowClass::NERVE);
-    engine.emit_health_event(step, engine.gland_health_, aurora::FlowClass::GLAND);
-    engine.emit_health_event(step, engine.muscle_health_, aurora::FlowClass::MUSCLE);
-    
     TelemetrySample sample;
     sample.step = step;
     sample.have = have_after;
@@ -1178,44 +1188,13 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     sample.muscle_has_evidence =
       engine.muscle_health_.success_count + engine.muscle_health_.fail_count > 0;
     
-    aurora::safety::TelemetrySample safety_sample;
-    safety_sample.step = sample.step;
-    safety_sample.have = sample.have;
-    safety_sample.need = sample.need;
-    safety_sample.mode = sample.mode;
-    safety_sample.tries = sample.tries;
-    safety_sample.successes = sample.successes;
-    safety_sample.reward = sample.reward;
-    safety_sample.snr_rf = sample.snr_rf;
-    safety_sample.snr_ir = sample.snr_ir;
-    safety_sample.snr_bs = sample.snr_bs;
-    safety_sample.soc_src = sample.soc_src;
-    safety_sample.duty_left = sample.duty_left;
-    safety_sample.elapsed_s = sample.elapsed_s;
-    safety_sample.nerve_fail_rate = sample.nerve_fail_rate;
-    safety_sample.gland_fail_rate = sample.gland_fail_rate;
-    safety_sample.muscle_fail_rate = sample.muscle_fail_rate;
-    safety_sample.nerve_cov = sample.nerve_cov;
-    safety_sample.gland_cov = sample.gland_cov;
-    safety_sample.muscle_cov = sample.muscle_cov;
-    safety_sample.nerve_bad_streak = sample.nerve_bad_streak;
-    safety_sample.gland_bad_streak = sample.gland_bad_streak;
-    safety_sample.muscle_bad_streak = sample.muscle_bad_streak;
-    safety_sample.nerve_has_evidence = sample.nerve_has_evidence;
-    safety_sample.gland_has_evidence = sample.gland_has_evidence;
-    safety_sample.muscle_has_evidence = sample.muscle_has_evidence;
-    
-    engine.safety_monitor.observe(safety_sample);
-    
-    aurora::safety::SafetyState safety_state = engine.safety_monitor.state();
-    engine.current_safety_state_ = safety_state;
-    
-    opt.update_mode(safety_state,
-                   engine.nerve_health_,
-                   engine.gland_health_,
-                   engine.muscle_health_);
-    
-    engine.current_mode_ = opt.mode();
+    engine.update_controller_and_record(
+      opt, decision_trace, sample, simulated_now_ms,
+      controller_before, controller_mode_before);
+
+    engine.emit_health_event(step, engine.nerve_health_, aurora::FlowClass::NERVE);
+    engine.emit_health_event(step, engine.gland_health_, aurora::FlowClass::GLAND);
+    engine.emit_health_event(step, engine.muscle_health_, aurora::FlowClass::MUSCLE);
     
     engine.telemetry.record(sample);
 

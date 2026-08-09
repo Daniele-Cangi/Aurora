@@ -256,6 +256,83 @@ void optimizer_treats_missing_evidence_as_conservative() {
     assert(optimizer.mode() == cl::Mode::CONSERVATIVE);
 }
 
+void safety_monitor_expires_stale_evidence_by_timestamp() {
+    aurora::safety::SafetyConfig config;
+    config.window_size = 1;
+    config.minimum_window_samples = 1;
+    config.maximum_observation_age_ms = 100;
+    aurora::safety::SafetyMonitor monitor(config);
+
+    aurora::safety::SafetyEvidenceSample healthy;
+    healthy.observed_at_ms = 10;
+    healthy.duty_left = 1.0;
+    healthy.nerve_has_evidence = true;
+    healthy.nerve_fail_rate = 0.0;
+    healthy.nerve_cov = 1.0;
+    monitor.observe(healthy, 10);
+    assert(monitor.state() == aurora::safety::SafetyState::HEALTHY);
+
+    monitor.advance_time(110);
+    assert(monitor.state() == aurora::safety::SafetyState::HEALTHY);
+    monitor.advance_time(111);
+    assert(monitor.state() == aurora::safety::SafetyState::NO_EVIDENCE);
+    assert(monitor.snapshot().samples.empty());
+
+    auto stale = healthy;
+    stale.observed_at_ms = 20;
+    monitor.observe(stale, 200);
+    assert(monitor.state() == aurora::safety::SafetyState::NO_EVIDENCE);
+    assert(monitor.snapshot().samples.empty());
+
+    bool future_rejected = false;
+    try {
+        healthy.observed_at_ms = 250;
+        monitor.observe(healthy, 240);
+    } catch (const std::invalid_argument&) {
+        future_rejected = true;
+    }
+    assert(future_rejected);
+
+    bool clock_reversal_rejected = false;
+    try {
+        monitor.advance_time(199);
+    } catch (const std::invalid_argument&) {
+        clock_reversal_rejected = true;
+    }
+    assert(clock_reversal_rejected);
+}
+
+void safety_monitor_snapshot_restores_pending_transition() {
+    aurora::safety::SafetyConfig config;
+    config.window_size = 1;
+    config.minimum_window_samples = 1;
+    config.escalation_samples = 2;
+    config.maximum_observation_age_ms = 1'000;
+    aurora::safety::SafetyMonitor monitor(config);
+
+    aurora::safety::SafetyEvidenceSample sample;
+    sample.duty_left = 1.0;
+    sample.nerve_has_evidence = true;
+    sample.nerve_fail_rate = 0.0;
+    sample.observed_at_ms = 0;
+    monitor.observe(sample, 0);
+    assert(monitor.state() == aurora::safety::SafetyState::HEALTHY);
+
+    sample.nerve_fail_rate = 0.9;
+    sample.observed_at_ms = 10;
+    monitor.observe(sample, 10);
+    assert(monitor.pending_state() == aurora::safety::SafetyState::CRITICAL);
+    assert(monitor.pending_observations() == 1);
+
+    const auto snapshot = monitor.snapshot();
+    assert(!snapshot.validation_error().has_value());
+    aurora::safety::SafetyMonitor restored(snapshot);
+    assert(restored.snapshot() == snapshot);
+    sample.observed_at_ms = 20;
+    restored.observe(sample, 20);
+    assert(restored.state() == aurora::safety::SafetyState::CRITICAL);
+}
+
 } // namespace
 
 int main() {
@@ -268,6 +345,8 @@ int main() {
     safety_monitor_requires_stable_transitions();
     safety_monitor_rejects_invalid_inputs();
     optimizer_treats_missing_evidence_as_conservative();
+    safety_monitor_expires_stale_evidence_by_timestamp();
+    safety_monitor_snapshot_restores_pending_transition();
     std::cout << "runtime correctness tests passed\n";
     return 0;
 }

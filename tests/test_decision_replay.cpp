@@ -49,6 +49,38 @@ int main() {
     proposed.repair_symbols = 10'000;
     proposed.critical_only = true;
 
+    SafetyConfig safety_config;
+    safety_config.window_size = 1;
+    safety_config.minimum_window_samples = 1;
+    safety_config.maximum_observation_age_ms = 100;
+    SafetyMonitor safety_monitor(safety_config);
+    auto operating_mode = control::OperatingMode::NORMAL;
+    auto health_observation = SafetyEvidenceSample{};
+    health_observation.observed_at_ms = 10;
+    health_observation.duty_left = 1.0;
+    health_observation.nerve_fail_rate = 0.1;
+    health_observation.gland_fail_rate = 0.1;
+    health_observation.nerve_cov = 0.5;
+    health_observation.gland_cov = 0.5;
+    health_observation.nerve_has_evidence = true;
+    health_observation.gland_has_evidence = true;
+    auto controller_transition = [&](const SafetyEvidenceSample& evidence,
+                                     std::uint64_t now_ms) {
+        control::ControllerTransition transition;
+        transition.recorded = true;
+        transition.now_ms = now_ms;
+        transition.observation = evidence;
+        transition.before = safety_monitor.snapshot();
+        transition.mode_before = operating_mode;
+        safety_monitor.observe(evidence, now_ms);
+        transition.after = safety_monitor.snapshot();
+        operating_mode = control::select_operating_mode(
+            control::operating_mode_input(safety_monitor.state(), evidence));
+        transition.mode_after = operating_mode;
+        assert(!transition.validation_error().has_value());
+        return transition;
+    };
+
     telemetry::DecisionReplayLog log;
     auto constrained = envelope.constrain(
         contract, spawned.descriptor, observed, proposed);
@@ -86,7 +118,8 @@ int main() {
     attempt.channel_threshold_db = 0.0;
     constrained.execution.attempts.push_back(attempt);
     assert(!constrained.execution_error().has_value());
-    log.record(contract, spawned.descriptor, constrained);
+    const auto first_controller = controller_transition(health_observation, 10);
+    log.record(contract, spawned.descriptor, constrained, first_controller);
 
     observed.now_ms = 200;
     const auto stale = envelope.constrain(
@@ -95,10 +128,13 @@ int main() {
     stale_execution.execution.recorded = true;
     stale_execution.execution.link = stale_execution.decision.link;
     stale_execution.execution.critical_only = stale_execution.decision.critical_only;
-    log.record(contract, spawned.descriptor, stale_execution);
+    const auto stale_controller = controller_transition(health_observation, 200);
+    assert(stale_controller.after.current_state == SafetyState::NO_EVIDENCE);
+    assert(stale_controller.mode_after == control::OperatingMode::CONSERVATIVE);
+    log.record(contract, spawned.descriptor, stale_execution, stale_controller);
 
     const auto first_encoding = log.serialize();
-    assert(first_encoding.starts_with("AURORA_DECISION_TRACE_V3\n"));
+    assert(first_encoding.starts_with("AURORA_DECISION_TRACE_V4\n"));
     assert(first_encoding == log.serialize());
     const auto restored = telemetry::DecisionReplayLog::deserialize(first_encoding);
     assert(restored.serialize() == first_encoding);
@@ -115,7 +151,8 @@ int main() {
     contradictory.execution.link = contradictory.decision.link;
     contradictory.execution.critical_only = contradictory.decision.critical_only;
     telemetry::DecisionReplayLog contradictory_log;
-    contradictory_log.record(contract, spawned.descriptor, contradictory);
+    contradictory_log.record(
+        contract, spawned.descriptor, contradictory, first_controller);
     const auto mismatch = contradictory_log.verify();
     assert(!mismatch.ok);
     assert(mismatch.records_verified == 0);
@@ -126,7 +163,7 @@ int main() {
     try {
         telemetry::DecisionReplayLog invalid_execution_log;
         invalid_execution_log.record(
-            contract, spawned.descriptor, execution_mismatch);
+            contract, spawned.descriptor, execution_mismatch, first_controller);
     } catch (const std::invalid_argument&) {
         execution_rejected = true;
     }
@@ -137,7 +174,8 @@ int main() {
     bool energy_transition_rejected = false;
     try {
         telemetry::DecisionReplayLog invalid_energy_log;
-        invalid_energy_log.record(contract, spawned.descriptor, energy_mismatch);
+        invalid_energy_log.record(
+            contract, spawned.descriptor, energy_mismatch, first_controller);
     } catch (const std::invalid_argument&) {
         energy_transition_rejected = true;
     }
@@ -148,11 +186,62 @@ int main() {
     bool channel_transition_rejected = false;
     try {
         telemetry::DecisionReplayLog invalid_channel_log;
-        invalid_channel_log.record(contract, spawned.descriptor, channel_mismatch);
+        invalid_channel_log.record(
+            contract, spawned.descriptor, channel_mismatch, first_controller);
     } catch (const std::invalid_argument&) {
         channel_transition_rejected = true;
     }
     assert(channel_transition_rejected);
+
+    auto invalid_controller = first_controller;
+    invalid_controller.mode_after = control::OperatingMode::AGGRESSIVE;
+    bool controller_transition_rejected = false;
+    try {
+        telemetry::DecisionReplayLog invalid_controller_log;
+        invalid_controller_log.record(
+            contract, spawned.descriptor, constrained, invalid_controller);
+    } catch (const std::invalid_argument&) {
+        controller_transition_rejected = true;
+    }
+    assert(controller_transition_rejected);
+
+    auto mistimed_controller = first_controller;
+    ++mistimed_controller.now_ms;
+    mistimed_controller.after.last_now_ms = mistimed_controller.now_ms;
+    bool controller_time_rejected = false;
+    try {
+        telemetry::DecisionReplayLog mistimed_controller_log;
+        mistimed_controller_log.record(
+            contract, spawned.descriptor, constrained, mistimed_controller);
+    } catch (const std::invalid_argument&) {
+        controller_time_rejected = true;
+    }
+    assert(controller_time_rejected);
+
+    bool controller_discontinuity_rejected = false;
+    try {
+        telemetry::DecisionReplayLog discontinuous_log;
+        discontinuous_log.record(
+            contract, spawned.descriptor, constrained, first_controller);
+        discontinuous_log.record(
+            contract, spawned.descriptor, constrained, first_controller);
+    } catch (const std::invalid_argument&) {
+        controller_discontinuity_rejected = true;
+    }
+    assert(controller_discontinuity_rejected);
+
+    auto legacy_v3 = first_encoding;
+    legacy_v3.replace(
+        0,
+        std::string("AURORA_DECISION_TRACE_V4").size(),
+        "AURORA_DECISION_TRACE_V3");
+    bool legacy_v3_rejected = false;
+    try {
+        (void)telemetry::DecisionReplayLog::deserialize(legacy_v3);
+    } catch (const std::invalid_argument&) {
+        legacy_v3_rejected = true;
+    }
+    assert(legacy_v3_rejected);
 
     auto corrupted = first_encoding;
     const auto record_position = corrupted.find("R|");
