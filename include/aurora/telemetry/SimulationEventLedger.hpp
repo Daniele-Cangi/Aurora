@@ -451,7 +451,7 @@ inline DerivedSimulationEnvironment derive_simulation_environment(
 class SimulationEventLedger {
 public:
     static constexpr std::string_view format_header =
-        "AURORA_SIMULATION_EVENT_LEDGER_V5";
+        "AURORA_SIMULATION_EVENT_LEDGER_V6";
 
     void begin(SimulationEventSession session) {
         if (!records_.empty() || session_.initial_random_state != 0) {
@@ -1254,6 +1254,8 @@ private:
                << session.generation_scheduling_policy.service_quantum_ms << '|'
                << session.generation_scheduling_policy.aging_interval_ms << '|'
                << session.generation_scheduling_policy.starvation_limit_ms << '|'
+               << static_cast<unsigned>(
+                    session.generation_scheduling_policy.discipline) << '|'
                << encode_bytes(encode_generation_identities(
                     session.generations));
         return output.str();
@@ -1262,7 +1264,7 @@ private:
     static SimulationEventSession decode_session(const std::string& encoded) {
         using namespace simulation_event_detail;
         const auto fields = split(encoded, '|');
-        if (fields.size() != 22 || fields[0] != "SESSION") {
+        if (fields.size() != 23 || fields[0] != "SESSION") {
             throw std::invalid_argument(
                 "simulation event ledger: invalid session metadata");
         }
@@ -1296,6 +1298,16 @@ private:
             fields[cursor++], 10, "scheduler aging interval");
         session.generation_scheduling_policy.starvation_limit_ms = parse_u64(
             fields[cursor++], 10, "scheduler starvation limit");
+        const auto discipline = parse_u64(
+            fields[cursor++], 10, "scheduler discipline");
+        if (discipline > static_cast<std::uint8_t>(
+                simulation::GenerationSchedulingDiscipline::AGING_FAIR)) {
+            throw std::invalid_argument(
+                "simulation event ledger: invalid scheduler discipline");
+        }
+        session.generation_scheduling_policy.discipline =
+            static_cast<simulation::GenerationSchedulingDiscipline>(
+                discipline);
         session.generations = decode_generation_identities(
             decode_bytes(fields[cursor++]));
         return session;

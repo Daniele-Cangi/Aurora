@@ -268,6 +268,11 @@ add_executable(
   apps/aurora_generation_arrivals.cpp)
 aurora_link_common(aurora_generation_arrivals)
 
+add_executable(
+  aurora_scheduler_benchmark
+  apps/aurora_scheduler_benchmark.cpp)
+aurora_link_common(aurora_scheduler_benchmark)
+
 # -------------------------------------------------------------------
 # Tests
 if(BUILD_TESTING)
@@ -327,6 +332,17 @@ if(BUILD_TESTING)
     NAME aurora.generation_scheduler
     COMMAND test_generation_scheduler)
 
+  add_executable(
+    test_generation_scheduler_benchmark
+    tests/test_generation_scheduler_benchmark.cpp)
+  aurora_link_common(test_generation_scheduler_benchmark)
+  add_test(
+    NAME aurora.generation_scheduler_benchmark
+    COMMAND test_generation_scheduler_benchmark)
+  add_test(
+    NAME aurora.generation_scheduler_benchmark_cli
+    COMMAND aurora_scheduler_benchmark 20 2 2000 3000)
+
   set(_AURORA_EVENT_DECISION_TRACE
       "${CMAKE_CURRENT_BINARY_DIR}/simulation-event-decisions.trace")
   set(_AURORA_EVENT_LEDGER
@@ -364,6 +380,9 @@ if(BUILD_TESTING)
       --contact-schedule-out "${_AURORA_CONTACT_SCHEDULE_USED}"
       --generation-arrivals "${_AURORA_GENERATION_ARRIVALS}"
       --generation-arrivals-out "${_AURORA_GENERATION_ARRIVALS_USED}"
+      --generation-scheduler fair
+      --generation-aging-ms 4000
+      --generation-starvation-ms 6000
       --decision-trace "${_AURORA_EVENT_DECISION_TRACE}"
       --event-ledger "${_AURORA_EVENT_LEDGER}")
   set_tests_properties(
@@ -410,6 +429,7 @@ if(BUILD_TESTING)
     target_compile_options(test_contact_schedule PRIVATE /UNDEBUG)
     target_compile_options(test_generation_arrival_schedule PRIVATE /UNDEBUG)
     target_compile_options(test_generation_scheduler PRIVATE /UNDEBUG)
+    target_compile_options(test_generation_scheduler_benchmark PRIVATE /UNDEBUG)
   else()
     target_compile_options(test_aurora_organism PRIVATE -UNDEBUG)
     target_compile_options(test_transport_contract PRIVATE -UNDEBUG)
@@ -423,6 +443,7 @@ if(BUILD_TESTING)
     target_compile_options(test_contact_schedule PRIVATE -UNDEBUG)
     target_compile_options(test_generation_arrival_schedule PRIVATE -UNDEBUG)
     target_compile_options(test_generation_scheduler PRIVATE -UNDEBUG)
+    target_compile_options(test_generation_scheduler_benchmark PRIVATE -UNDEBUG)
   endif()
 
   if(USE_RAPTORQ)
@@ -481,6 +502,7 @@ set(_AURORA_ALL_TARGETS
   aurora_benchmark
   aurora_contact_schedule
   aurora_generation_arrivals
+  aurora_scheduler_benchmark
   test_raptorq_adapter
   test_aurora_organism
   test_transport_contract
@@ -494,6 +516,7 @@ set(_AURORA_ALL_TARGETS
   test_contact_schedule
   test_generation_arrival_schedule
   test_generation_scheduler
+  test_generation_scheduler_benchmark
   aurora_batch_test
   aurora_deadline_sweep
   aurora_selector_test

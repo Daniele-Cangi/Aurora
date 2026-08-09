@@ -57,7 +57,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
-| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V6 decision traces, V5 simulator event ledgers, canonical contact and V2 generation-arrival schedules, and benchmark channel traces; paired replay reconstructs aging/fair priority/deadline scheduling from external arrival through contact, harvesting, RIS, proposal, action and supervision | Concurrent/mobile nodes, weighted-share policies, imported emulation traces and physical hardware remain outside the current event model |
+| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V6 decision traces, V6 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair adversarial scheduler harness; paired replay reconstructs the configured scheduling discipline from external arrival through contact, harvesting, RIS, proposal, action and supervision | Concurrent/mobile nodes, weighted-share policies, imported emulation traces and physical hardware remain outside the current event model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, paired simulator-event/decision replay, replayable benchmark channel traces, Wilson confidence intervals, per-trial records and configure-time build/profile fingerprints | Provenance and checksum chains detect reproducibility failures and corruption but do not authenticate the producing build |
@@ -248,13 +248,15 @@ include/aurora/
   telemetry/SimulationEventLedger.hpp  Inter-step simulator event ledger
   simulation/ContactSchedule.hpp       Canonical link-contact windows
   simulation/GenerationArrivalSchedule.hpp Canonical external arrivals
-  simulation/GenerationScheduler.hpp       Priority-then-EDF selector
+  simulation/GenerationScheduler.hpp       Strict or aging/fair EDF selector
+  simulation/GenerationSchedulerBenchmark.hpp Adversarial scheduler comparison
   simulation/ChannelTrace.hpp      Canonical channel traces and generators
   simulation/BaselineBenchmark.hpp Replayable statistical comparison harness
 apps/
   aurora_replay.cpp          Independent proposal/action/safety replay tool
   aurora_contact_schedule.cpp Canonical contact-schedule creator
   aurora_generation_arrivals.cpp Canonical generation-arrival creator
+  aurora_scheduler_benchmark.cpp Strict-vs-fair starvation benchmark
   aurora_benchmark.cpp       CSV baseline runner
 src/core/
   AuroraSafetyMonitor.hpp    Legacy safety-state prototype
@@ -270,6 +272,7 @@ tests/
   test_contact_schedule.cpp
   test_generation_arrival_schedule.cpp
   test_generation_scheduler.cpp
+  test_generation_scheduler_benchmark.cpp
 aurora_batch_test.cpp        Experimental parameter sweep harness
 aurora_udp_*.cpp             UDP transport experiments
 aurora_dash_lab.py           Live monitoring dashboard
@@ -347,6 +350,9 @@ Create a deterministic external-generation arrival schedule and replay it with t
 ./build/bin/aurora_x \
   --generation-arrivals arrivals.trace \
   --generation-arrivals-out arrivals-used.trace \
+  --generation-scheduler fair \
+  --generation-aging-ms 2000 \
+  --generation-starvation-ms 3000 \
   --contact-schedule contacts.trace \
   --decision-trace decision-trace.log \
   --event-ledger simulation-events.log
@@ -354,15 +360,23 @@ Create a deterministic external-generation arrival schedule and replay it with t
 
 The compact entry form is `<time-ms>:<tag>` and inherits importance/deadline from the base contract. The extended form is `<time-ms>:<tag>:<class>:<deadline-ms|inherit>`, where class is `critical`, `important`, `elastic` or `inherit`. The first arrival must be at 0 ms; later times are unique, strictly increasing and aligned to the simulator's 1000 ms step. Tags are unique stable identifiers containing only letters, digits, `.`, `_` or `-`.
 
-The engine deterministically pre-constructs every immutable descriptor and releases its initial symbols only at the declared time. Ordinarily it selects by effective class (`critical`, then `important`, then `elastic`), earliest absolute descriptor expiry, arrival time and stable schedule index. A generation waiting without service is promoted by one class every 2000 ms. After 3000 ms it enters the anti-starvation lane, which is ordered by earliest fairness deadline before EDF and the stable tie-breaks. Every selected 1000 ms quantum resets that generation's fairness clock. A later critical or tighter-deadline generation can therefore preempt an earlier generation, while an elastic generation still receives a bounded turn and remains independently decodable across preemption and resume.
+The engine deterministically pre-constructs every immutable descriptor and releases its initial symbols only at the declared time. `--generation-scheduler fair` is the default: it selects by effective class (`critical`, then `important`, then `elastic`), earliest absolute descriptor expiry, arrival time and stable schedule index. A generation waiting without service is promoted by one class every `--generation-aging-ms` (default 2000 ms). After `--generation-starvation-ms` (default 3000 ms) it enters the anti-starvation lane, which is ordered by earliest fairness deadline before EDF and the stable tie-breaks. Every selected 1000 ms quantum resets that generation's fairness clock. A later critical or tighter-deadline generation can therefore preempt an earlier generation, while an elastic generation still receives a bounded turn and remains independently decodable across preemption and resume.
 
-For `N` continuously eligible non-terminal generations, the deterministic maximum gap between service turns is `3000 + (N - 1) * 1000` ms; at the schedule capacity of 128 arrivals this is 130000 ms. The simulator prints the active policy and bound at startup, and the V5 event ledger embeds all three policy intervals plus the independently reconstructed last-service state. Use `--generation-arrivals-out <path>` to persist the exact arrival schedule used.
+For `N` continuously eligible non-terminal generations, the deterministic maximum gap between service turns is `ceil(starvation_ms / 1000) * 1000 + (N - 1) * 1000` ms; rounding accounts for the fixed scheduler tick. With defaults and the schedule capacity of 128 arrivals this is 130000 ms. `--generation-scheduler strict` disables aging and the anti-starvation lane, intentionally leaving the service gap unbounded for baseline comparison. The simulator prints the active policy and bound at startup, and the V6 event ledger embeds the discipline and all three policy intervals plus the independently reconstructed last-service state. Use `--generation-arrivals-out <path>` to persist the exact arrival schedule used.
 
 The paired verifier first reconstructs the declared generation releases, last-service clocks, aging/fair priority/deadline selection, scheduled link availability, each harvesting/ingest transition, deterministic RIS perturbation, illumination, world gain and SNR summary from the session topology and global RNG checkpoints. It binds every step to the active generation identity and resolved per-generation contract, then derives the exact V6 proposal, recomputes the `SafetyEnvelope` decision—including link replacement or rejection outside a contact window—and validates LBT samples, fading, delivery, energy/duty, pacing randomness and generation-qualified destination inbox arrivals. Finally it applies UCB and supervisory feedback while enforcing schedule, contact, RNG, energy, buffer, inbox and per-generation decoder-rank continuity across steps.
 
-This covers scheduled link contacts, bounded starvation prevention and multiple preemptible external arrivals in the current fixed-node simulator. Concurrent/mobile nodes, configurable or weighted-share fairness and imported field traces are not yet implemented. Arrival replay is unavailable in interactive-lab and `FIELD_BUILD` modes. All samples remain simulation evidence rather than calibrated measurements, and real field hardware is not reconstructed.
+This covers scheduled link contacts, configurable bounded starvation prevention and multiple preemptible external arrivals in the current fixed-node simulator. Concurrent/mobile nodes, weighted-share fairness and imported field traces are not yet implemented. Arrival replay and scheduler options are unavailable in `FIELD_BUILD`; arrival replay remains unavailable in interactive-lab mode. All samples remain simulation evidence rather than calibrated measurements, and real field hardware is not reconstructed.
 
-V2 through V5 decision traces do not contain the complete V6 contact, proposal, action and supervisory evidence and are intentionally rejected. V1 generation-arrival schedules lack service/deadline fields, and V1–V4 simulator event ledgers lack the complete aging/fairness evidence; these artifacts are rejected and must be regenerated.
+V2 through V5 decision traces do not contain the complete V6 contact, proposal, action and supervisory evidence and are intentionally rejected. V1 generation-arrival schedules lack service/deadline fields, and V1–V5 simulator event ledgers lack the complete configurable-discipline evidence; these artifacts are rejected and must be regenerated.
+
+Run the deterministic adversarial scheduler comparison (`steps`, `critical contenders`, `aging ms`, `starvation ms`):
+
+```bash
+./build/bin/aurora_scheduler_benchmark 20 2 2000 3000
+```
+
+The default scenario keeps one elastic and two critical generations continuously eligible. Both disciplines receive the same candidates and expiries. CSV reports the comparison bound, observed maximum gap, bound violations and elastic selections; the command succeeds only when strict priority violates the comparison bound while fair scheduling respects it. This is scheduler-level simulation evidence, not a latency or throughput claim for the complete transport stack.
 
 Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
 

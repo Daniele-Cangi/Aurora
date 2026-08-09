@@ -397,7 +397,7 @@ Implement interchangeable policies:
 
 The biological policy earns its place by outperforming or stabilizing better than explicit baselines, not by terminology.
 
-**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The V6 decision trace reconstructs contact-aware proposal, action and supervisory transitions. A paired V5 simulator ledger reconstructs the current fixed-node stream, including canonical external generation arrivals, aging/fair priority-then-EDF selection, fairness deadlines, the bounded service-gap invariant, declared contact windows, harvesting, ingest, RIS, channel history, global RNG use and generation-qualified packet arrivals. Configurable weighted-share policies and concurrent/mobile nodes remain pending.
+**Current status:** the codec, generation manager and transport policy are now separate interfaces. Fixed and biological policies are injectable and deterministic. Threshold, PID-style and risk-sensitive controllers remain pending. The V6 decision trace reconstructs contact-aware proposal, action and supervisory transitions. A paired V6 simulator ledger reconstructs the current fixed-node stream, including canonical external generation arrivals, configurable strict or aging/fair priority-then-EDF selection, fairness deadlines, the bounded service-gap invariant, declared contact windows, harvesting, ingest, RIS, channel history, global RNG use and generation-qualified packet arrivals. Weighted-share policies and concurrent/mobile nodes remain pending.
 
 ### Exit gate
 
@@ -421,7 +421,7 @@ At minimum compare:
 6. Reed–Solomon or another block-code baseline where appropriate;
 7. RaptorQ baseline when a verified implementation is available.
 
-**Current status:** items 1–5 use explicit replayable traces with shared transmission-slot outcomes. Items 6–7 and externally valid comparative conclusions remain pending.
+**Current status:** items 1–5 use explicit replayable traces with shared transmission-slot outcomes. A separate deterministic adversarial scheduler harness now compares strict priority-then-EDF with configurable aging/fair scheduling on identical candidates and reports service-gap bound violations. Items 6–7 and externally valid comparative conclusions remain pending.
 
 ## Phase 3B — Channel scenarios
 
@@ -524,7 +524,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
 
-The current V6 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies contact-aware safety decisions; replays each admitted action; applies UCB feedback; and reconstructs the bounded supervisory transition. The paired V5 `SimulationEventLedger` embeds canonical `ContactSchedule` and V2 `GenerationArrivalSchedule` inputs plus the 1000 ms service quantum, 2000 ms aging interval and 3000 ms fairness deadline. It binds records to fixed node topology, immutable generation identities, resolved service class and descriptor expiry, then independently reconstructs timed generation release, last-service clocks, aging/fair priority-then-EDF selection, the `3000 + (N - 1) * 1000` ms service-gap bound, contact availability, inter-step harvesting/ingest, RIS phases, world gain, channel history, LBT/fading/pacing randomness, generation-qualified inbox arrivals and per-generation state continuity. This covers preemptible external arrivals with bounded starvation prevention in the implemented fixed-node simulator. Concurrent/mobile nodes, configurable weighted-share schedulers and imported field/emulation traces remain pending.
+The current V6 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies contact-aware safety decisions; replays each admitted action; applies UCB feedback; and reconstructs the bounded supervisory transition. The paired V6 `SimulationEventLedger` embeds canonical `ContactSchedule` and V2 `GenerationArrivalSchedule` inputs plus strict/fair discipline, the fixed 1000 ms service quantum and configurable aging/fairness intervals. It binds records to fixed node topology, immutable generation identities, resolved service class and descriptor expiry, then independently reconstructs timed generation release, last-service clocks, configured priority-then-EDF selection, the tick-rounded `ceil(starvation_ms / 1000) * 1000 + (N - 1) * 1000` ms fair service-gap bound, contact availability, inter-step harvesting/ingest, RIS phases, world gain, channel history, LBT/fading/pacing randomness, generation-qualified inbox arrivals and per-generation state continuity. This covers preemptible external arrivals with configurable bounded starvation prevention in the implemented fixed-node simulator. Concurrent/mobile nodes, weighted-share schedulers and imported field/emulation traces remain pending.
 
 ### Exit gate
 

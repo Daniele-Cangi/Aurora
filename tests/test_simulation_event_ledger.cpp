@@ -131,7 +131,7 @@ int main() {
     ledger.record(event);
 
     const auto encoded = ledger.serialize();
-    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V5\n"));
+    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V6\n"));
     assert(encoded == ledger.serialize());
     const auto restored = SimulationEventLedger::deserialize(encoded);
     assert(restored.serialize() == encoded);
@@ -142,14 +142,26 @@ int main() {
     assert(structure.ok);
     assert(structure.records_verified == 1);
 
-    auto legacy_v4 = encoded;
-    legacy_v4.replace(
+    auto strict_metadata = metadata;
+    strict_metadata.generation_scheduling_policy.discipline =
+        aurora::simulation::GenerationSchedulingDiscipline::STRICT_PRIORITY_EDF;
+    SimulationEventLedger strict_ledger;
+    strict_ledger.begin(strict_metadata);
+    strict_ledger.record(event);
+    const auto strict_restored = SimulationEventLedger::deserialize(
+        strict_ledger.serialize());
+    assert(strict_restored.session().generation_scheduling_policy.discipline ==
+           aurora::simulation::GenerationSchedulingDiscipline::STRICT_PRIORITY_EDF);
+    assert(strict_restored.verify_structure().ok);
+
+    auto legacy_v5 = encoded;
+    legacy_v5.replace(
         0,
-        std::string("AURORA_SIMULATION_EVENT_LEDGER_V5").size(),
-        "AURORA_SIMULATION_EVENT_LEDGER_V4");
+        std::string("AURORA_SIMULATION_EVENT_LEDGER_V6").size(),
+        "AURORA_SIMULATION_EVENT_LEDGER_V5");
     bool legacy_rejected = false;
     try {
-        (void)SimulationEventLedger::deserialize(legacy_v4);
+        (void)SimulationEventLedger::deserialize(legacy_v5);
     } catch (const std::invalid_argument&) {
         legacy_rejected = true;
     }
@@ -224,7 +236,9 @@ int main() {
     auto fairness_metadata = metadata;
     fairness_metadata.initial_random_state =
         concurrent_metadata.initial_random_state;
-    fairness_metadata.generation_scheduling_policy = {1'000, 2'000, 3'000};
+    fairness_metadata.generation_scheduling_policy = {
+        1'000, 2'000, 3'000,
+        aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR};
     fairness_metadata.generation_arrival_schedule =
         aurora::simulation::GenerationArrivalSchedule({
             {0, "alpha", aurora::simulation::GenerationServiceClass::ELASTIC,
