@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../control/CrossLayerProposal.hpp"
 #include "../control/ControllerTransition.hpp"
 #include "../safety/SafetyEnvelope.hpp"
 #include "../transport/Generation.hpp"
@@ -25,6 +26,7 @@ struct DecisionReplayRecord {
     transport::TransportContract contract;
     transport::GenerationDescriptor descriptor;
     safety::TransportDecisionTrace trace;
+    control::ProposalTransition proposal;
     control::ControllerTransition controller;
 };
 
@@ -34,16 +36,17 @@ struct ReplayVerification {
     std::string failure_reason;
 };
 
-// Canonical, deterministic provenance for action and supervisory-controller
+// Canonical, deterministic provenance for proposal, action and supervisory
 // transitions. The checksum chain detects accidental corruption and reordering;
 // it is not a cryptographic signature.
 class DecisionReplayLog {
 public:
-    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V4";
+    static constexpr std::string_view format_header = "AURORA_DECISION_TRACE_V5";
 
     void record(const transport::TransportContract& contract,
                 const transport::GenerationDescriptor& descriptor,
                 const safety::TransportDecisionTrace& trace,
+                const control::ProposalTransition& proposal,
                 const control::ControllerTransition& controller) {
         contract.validate();
         if (descriptor.generation_id.empty() ||
@@ -53,13 +56,37 @@ public:
         }
         if (!trace.execution.recorded) {
             throw std::invalid_argument(
-                "decision trace: V4 requires a recorded execution transition");
+                "decision trace: V5 requires a recorded execution transition");
         }
         if (const auto error = trace.execution_error()) {
             throw std::invalid_argument("decision trace: " + *error);
         }
         if (const auto error = controller.validation_error()) {
             throw std::invalid_argument("decision trace: controller " + *error);
+        }
+        if (const auto error = proposal.validation_error()) {
+            throw std::invalid_argument("decision trace: proposal " + *error);
+        }
+        if (const auto error = proposal_context_error(
+                contract, descriptor, trace, proposal)) {
+            throw std::invalid_argument(
+                "decision trace: proposal context " + *error);
+        }
+        if (const auto error = proposal_sequence_error(
+                contract, proposal, records_.empty())) {
+            throw std::invalid_argument(
+                "decision trace: proposal sequence " + *error);
+        }
+        if (!same_decision(proposal.decision.transport, trace.proposed)) {
+            throw std::invalid_argument(
+                "decision trace: proposal derivation does not match transport proposal");
+        }
+        if (proposal.input.operating_mode != controller.mode_before) {
+            throw std::invalid_argument(
+                "decision trace: proposal mode does not match supervisory state");
+        }
+        if (const auto error = proposal_execution_error(proposal, trace)) {
+            throw std::invalid_argument("decision trace: proposal " + *error);
         }
         if (controller.now_ms != trace.observed.now_ms) {
             throw std::invalid_argument(
@@ -72,8 +99,17 @@ public:
                 throw std::invalid_argument(
                     "decision trace: controller state is not contiguous");
             }
+            const auto& previous_proposal = records_.back().proposal;
+            if (!(previous_proposal.after == proposal.before)) {
+                throw std::invalid_argument(
+                    "decision trace: proposal state is not contiguous");
+            }
+            if (proposal.input.epoch != previous_proposal.input.epoch + 1.0) {
+                throw std::invalid_argument(
+                    "decision trace: proposal epoch is not contiguous");
+            }
         }
-        records_.push_back({contract, descriptor, trace, controller});
+        records_.push_back({contract, descriptor, trace, proposal, controller});
     }
 
     [[nodiscard]] const std::vector<DecisionReplayRecord>& records() const {
@@ -193,6 +229,49 @@ public:
                     ": " + *error;
                 return verification;
             }
+            if (const auto error = record.proposal.validation_error()) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "proposal mismatch at record " + std::to_string(index) +
+                    ": " + *error;
+                return verification;
+            }
+            if (const auto error = proposal_context_error(
+                    record.contract, record.descriptor,
+                    record.trace, record.proposal)) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "proposal context mismatch at record " +
+                    std::to_string(index) + ": " + *error;
+                return verification;
+            }
+            if (const auto error = proposal_sequence_error(
+                    record.contract, record.proposal, index == 0)) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "proposal sequence mismatch at record " +
+                    std::to_string(index) + ": " + *error;
+                return verification;
+            }
+            if (!same_decision(
+                    record.proposal.decision.transport,
+                    record.trace.proposed) ||
+                record.proposal.input.operating_mode !=
+                    record.controller.mode_before) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "proposal coherence mismatch at record " +
+                    std::to_string(index);
+                return verification;
+            }
+            if (const auto error = proposal_execution_error(
+                    record.proposal, record.trace)) {
+                verification.ok = false;
+                verification.failure_reason =
+                    "proposal feedback mismatch at record " +
+                    std::to_string(index) + ": " + *error;
+                return verification;
+            }
             if (record.controller.now_ms != record.trace.observed.now_ms) {
                 verification.ok = false;
                 verification.failure_reason =
@@ -206,6 +285,16 @@ public:
                     verification.ok = false;
                     verification.failure_reason =
                         "controller continuity mismatch at record " +
+                        std::to_string(index);
+                    return verification;
+                }
+                const auto& previous_proposal = records_[index - 1].proposal;
+                if (!(previous_proposal.after == record.proposal.before) ||
+                    record.proposal.input.epoch !=
+                        previous_proposal.input.epoch + 1.0) {
+                    verification.ok = false;
+                    verification.failure_reason =
+                        "proposal continuity mismatch at record " +
                         std::to_string(index);
                     return verification;
                 }
@@ -347,6 +436,246 @@ private:
             throw std::invalid_argument("decision trace: invalid operating mode");
         }
         return static_cast<control::OperatingMode>(value);
+    }
+
+    static control::ProposalPriority parse_proposal_priority(
+        const std::string& encoded) {
+        const auto value = parse_u32(encoded, "proposal priority");
+        if (value > static_cast<std::uint32_t>(
+                control::ProposalPriority::BULK)) {
+            throw std::invalid_argument("decision trace: invalid proposal priority");
+        }
+        return static_cast<control::ProposalPriority>(value);
+    }
+
+    static std::string encode_proposal_state(
+        const control::ProposalStateSnapshot& state) {
+        std::ostringstream encoded;
+        encoded << state.ucb_counts[0] << ','
+                << state.ucb_counts[1] << ','
+                << state.ucb_counts[2] << ','
+                << hex_u64(double_bits(state.ucb_reward_sums[0])) << ','
+                << hex_u64(double_bits(state.ucb_reward_sums[1])) << ','
+                << hex_u64(double_bits(state.ucb_reward_sums[2])) << ','
+                << static_cast<unsigned>(state.selector_memory) << ','
+                << hex_u64(double_bits(state.hysteresis_db)) << ','
+                << state.random_state;
+        return encoded.str();
+    }
+
+    static control::ProposalStateSnapshot decode_proposal_state(
+        const std::string& encoded) {
+        const auto fields = split_delimited(encoded, ',');
+        if (fields.size() != 9) {
+            throw std::invalid_argument("decision trace: malformed proposal state");
+        }
+        control::ProposalStateSnapshot state;
+        std::size_t cursor = 0;
+        for (auto& count : state.ucb_counts) {
+            count = parse_u64(fields[cursor++], 10, "UCB count");
+        }
+        for (auto& reward : state.ucb_reward_sums) {
+            reward = bits_double(parse_u64(
+                fields[cursor++], 16, "UCB reward sum"));
+        }
+        state.selector_memory = parse_link(fields[cursor++]);
+        state.hysteresis_db = bits_double(parse_u64(
+            fields[cursor++], 16, "selector hysteresis"));
+        state.random_state = parse_u64(
+            fields[cursor++], 10, "proposal RNG state");
+        if (const auto error = state.validation_error()) {
+            throw std::invalid_argument(
+                "decision trace: invalid proposal state: " + *error);
+        }
+        return state;
+    }
+
+    static std::string encode_proposal_input(
+        const control::ProposalInput& input) {
+        std::ostringstream encoded;
+        encoded << input.selector_argmax << ','
+                << input.allow_backscatter << ','
+                << hex_u64(double_bits(input.deadline_s)) << ','
+                << hex_u64(double_bits(input.source_soc)) << ','
+                << hex_u64(double_bits(input.rf_duty_remaining)) << ','
+                << input.symbols_have << ','
+                << input.symbols_need << ','
+                << hex_u64(double_bits(input.deadline_left_s));
+        for (const auto value : input.snr_db) {
+            encoded << ',' << hex_u64(double_bits(value));
+        }
+        for (const auto value : input.historical_per) {
+            encoded << ',' << hex_u64(double_bits(value));
+        }
+        encoded << ',' << hex_u64(double_bits(input.jamming_score))
+                << ',' << static_cast<unsigned>(input.priority)
+                << ',' << input.emergency_mode
+                << ',' << input.covert_sequence
+                << ',' << static_cast<unsigned>(input.operating_mode)
+                << ',' << hex_u64(double_bits(input.epoch))
+                << ',' << input.has_critical_segments;
+        return encoded.str();
+    }
+
+    static control::ProposalInput decode_proposal_input(
+        const std::string& encoded) {
+        const auto fields = split_delimited(encoded, ',');
+        if (fields.size() != 21) {
+            throw std::invalid_argument("decision trace: malformed proposal input");
+        }
+        control::ProposalInput input;
+        std::size_t cursor = 0;
+        input.selector_argmax = parse_bool(fields[cursor++], "selector choice");
+        input.allow_backscatter = parse_bool(
+            fields[cursor++], "proposal backscatter permission");
+        input.deadline_s = bits_double(parse_u64(
+            fields[cursor++], 16, "proposal deadline"));
+        input.source_soc = bits_double(parse_u64(
+            fields[cursor++], 16, "proposal source state of charge"));
+        input.rf_duty_remaining = bits_double(parse_u64(
+            fields[cursor++], 16, "proposal RF duty"));
+        input.symbols_have = parse_int(fields[cursor++], "proposal symbols have");
+        input.symbols_need = parse_int(fields[cursor++], "proposal symbols need");
+        input.deadline_left_s = bits_double(parse_u64(
+            fields[cursor++], 16, "proposal deadline remaining"));
+        for (auto& value : input.snr_db) {
+            value = bits_double(parse_u64(
+                fields[cursor++], 16, "proposal SNR"));
+        }
+        for (auto& value : input.historical_per) {
+            value = bits_double(parse_u64(
+                fields[cursor++], 16, "proposal historical PER"));
+        }
+        input.jamming_score = bits_double(parse_u64(
+            fields[cursor++], 16, "proposal jamming score"));
+        input.priority = parse_proposal_priority(fields[cursor++]);
+        input.emergency_mode = parse_bool(
+            fields[cursor++], "proposal emergency flag");
+        const auto covert = parse_u32(fields[cursor++], "proposal covert sequence");
+        if (covert > std::numeric_limits<std::uint16_t>::max()) {
+            throw std::invalid_argument(
+                "decision trace: proposal covert sequence is out of range");
+        }
+        input.covert_sequence = static_cast<std::uint16_t>(covert);
+        input.operating_mode = parse_operating_mode(fields[cursor++]);
+        input.epoch = bits_double(parse_u64(
+            fields[cursor++], 16, "proposal epoch"));
+        input.has_critical_segments = parse_bool(
+            fields[cursor++], "proposal critical-segment flag");
+        if (const auto error = input.validation_error()) {
+            throw std::invalid_argument(
+                "decision trace: invalid proposal input: " + *error);
+        }
+        return input;
+    }
+
+    static std::string encode_proposal_decision(
+        const control::ProposalDecision& decision) {
+        const auto& transport = decision.transport;
+        std::ostringstream encoded;
+        encoded << static_cast<unsigned>(transport.link) << ','
+                << transport.transmission_attempts << ','
+                << transport.repair_symbols << ','
+                << transport.critical_only << ','
+                << transport.permitted << ','
+                << decision.jitter_ms << ','
+                << decision.minimum_spacing_ms << ','
+                << decision.preamble_symbols << ','
+                << decision.rf_bandwidth_khz << ','
+                << static_cast<unsigned>(decision.covert_sequence) << ','
+                << decision.emergency;
+        return encoded.str();
+    }
+
+    static control::ProposalDecision decode_proposal_decision(
+        const std::string& encoded) {
+        const auto fields = split_delimited(encoded, ',');
+        if (fields.size() != 11) {
+            throw std::invalid_argument("decision trace: malformed proposal decision");
+        }
+        control::ProposalDecision decision;
+        std::size_t cursor = 0;
+        decision.transport.link = parse_link(fields[cursor++]);
+        decision.transport.transmission_attempts = parse_u32(
+            fields[cursor++], "proposal transmission attempts");
+        decision.transport.repair_symbols = parse_u32(
+            fields[cursor++], "proposal repair symbols");
+        decision.transport.critical_only = parse_bool(
+            fields[cursor++], "proposal critical-only flag");
+        decision.transport.permitted = parse_bool(
+            fields[cursor++], "proposal permission flag");
+        decision.jitter_ms = parse_int(fields[cursor++], "proposal jitter");
+        decision.minimum_spacing_ms = parse_int(
+            fields[cursor++], "proposal minimum spacing");
+        decision.preamble_symbols = parse_int(
+            fields[cursor++], "proposal preamble");
+        decision.rf_bandwidth_khz = parse_int(
+            fields[cursor++], "proposal RF bandwidth");
+        const auto covert = parse_u32(fields[cursor++], "proposal covert byte");
+        if (covert > std::numeric_limits<std::uint8_t>::max()) {
+            throw std::invalid_argument(
+                "decision trace: proposal covert byte is out of range");
+        }
+        decision.covert_sequence = static_cast<std::uint8_t>(covert);
+        decision.emergency = parse_bool(fields[cursor++], "proposal emergency output");
+        return decision;
+    }
+
+    static std::string encode_proposal_feedback(
+        const control::ProposalFeedback& feedback) {
+        std::ostringstream encoded;
+        encoded << feedback.applied << ','
+                << static_cast<unsigned>(feedback.executed_link) << ','
+                << hex_u64(double_bits(feedback.reward));
+        return encoded.str();
+    }
+
+    static control::ProposalFeedback decode_proposal_feedback(
+        const std::string& encoded) {
+        const auto fields = split_delimited(encoded, ',');
+        if (fields.size() != 3) {
+            throw std::invalid_argument("decision trace: malformed proposal feedback");
+        }
+        control::ProposalFeedback feedback;
+        feedback.applied = parse_bool(fields[0], "proposal feedback flag");
+        feedback.executed_link = parse_link(fields[1]);
+        feedback.reward = bits_double(parse_u64(
+            fields[2], 16, "proposal feedback reward"));
+        if (const auto error = feedback.validation_error()) {
+            throw std::invalid_argument(
+                "decision trace: invalid proposal feedback: " + *error);
+        }
+        return feedback;
+    }
+
+    static std::string encode_proposal_transition(
+        const control::ProposalTransition& transition) {
+        std::ostringstream encoded;
+        encoded << transition.recorded << '~'
+                << encode_proposal_state(transition.before) << '~'
+                << encode_proposal_input(transition.input) << '~'
+                << encode_proposal_decision(transition.decision) << '~'
+                << encode_proposal_state(transition.after_proposal) << '~'
+                << encode_proposal_feedback(transition.feedback) << '~'
+                << encode_proposal_state(transition.after);
+        return encoded.str();
+    }
+
+    static control::ProposalTransition decode_proposal_transition(
+        const std::string& encoded) {
+        const auto fields = split_delimited(encoded, '~');
+        if (fields.size() != 7) {
+            throw std::invalid_argument("decision trace: malformed proposal transition");
+        }
+        control::ProposalTransition transition;
+        transition.recorded = parse_bool(fields[0], "proposal-recorded flag");
+        transition.before = decode_proposal_state(fields[1]);
+        transition.input = decode_proposal_input(fields[2]);
+        transition.decision = decode_proposal_decision(fields[3]);
+        transition.after_proposal = decode_proposal_state(fields[4]);
+        transition.feedback = decode_proposal_feedback(fields[5]);
+        transition.after = decode_proposal_state(fields[6]);
+        return transition;
     }
 
     static std::string encode_safety_evidence(
@@ -760,6 +1089,9 @@ private:
                << '|' << contract.allow_rf
                << '|' << contract.allow_optical
                << '|' << contract.allow_backscatter
+               << '|' << contract.selector_argmax
+               << '|' << hex_u64(double_bits(contract.deadline_s))
+               << '|' << contract.experiment_seed
                << '|' << hex_u64(double_bits(contract.duty_frac))
                << '|' << hex_u64(double_bits(contract.minimum_source_reserve))
                << '|' << contract.maximum_observation_age_ms
@@ -793,6 +1125,7 @@ private:
                << '|' << encode_attempts(trace.execution.attempts)
                << '|' << trace.constraints_applied.size()
                << '|' << encode_constraints(trace.constraints_applied)
+               << '|' << encode_proposal_transition(record.proposal)
                << '|' << record.controller.recorded
                << '|' << record.controller.now_ms
                << '|' << encode_safety_evidence(record.controller.observation)
@@ -836,7 +1169,7 @@ private:
                                                std::size_t expected_index,
                                                std::uint64_t expected_previous_checksum) {
         const auto fields = split_fields(payload);
-        if (fields.size() != 61 || fields.front() != "R") {
+        if (fields.size() != 65 || fields.front() != "R") {
             throw std::invalid_argument("decision trace: malformed record field count");
         }
         std::size_t cursor = 1;
@@ -852,12 +1185,19 @@ private:
         auto& contract = record.contract;
         auto& descriptor = record.descriptor;
         auto& trace = record.trace;
+        auto& proposal = record.proposal;
         auto& controller = record.controller;
         trace.generation_id = decode_hex_bytes(fields.at(cursor++));
         descriptor.generation_id = trace.generation_id;
         contract.allow_rf = parse_bool(fields.at(cursor++), "RF permission");
         contract.allow_optical = parse_bool(fields.at(cursor++), "optical permission");
         contract.allow_backscatter = parse_bool(fields.at(cursor++), "backscatter permission");
+        contract.selector_argmax = parse_bool(
+            fields.at(cursor++), "proposal selector choice");
+        contract.deadline_s = bits_double(
+            parse_u64(fields.at(cursor++), 16, "proposal contract deadline"));
+        contract.experiment_seed = parse_u64(
+            fields.at(cursor++), 10, "proposal experiment seed");
         contract.duty_frac = bits_double(
             parse_u64(fields.at(cursor++), 16, "duty fraction"));
         contract.minimum_source_reserve = bits_double(
@@ -915,6 +1255,7 @@ private:
         const auto constraint_count = static_cast<std::size_t>(
             parse_u64(fields.at(cursor++), 10, "constraint count"));
         trace.constraints_applied = decode_constraints(fields.at(cursor++), constraint_count);
+        proposal = decode_proposal_transition(fields.at(cursor++));
         controller.recorded = parse_bool(fields.at(cursor++), "controller-recorded flag");
         controller.now_ms = parse_u64(fields.at(cursor++), 10, "controller transition time");
         controller.observation = decode_safety_evidence(fields.at(cursor++));
@@ -939,6 +1280,109 @@ private:
                left.repair_symbols == right.repair_symbols &&
                left.critical_only == right.critical_only &&
                left.permitted == right.permitted;
+    }
+
+    static std::optional<std::string> proposal_context_error(
+        const transport::TransportContract& contract,
+        const transport::GenerationDescriptor& descriptor,
+        const safety::TransportDecisionTrace& trace,
+        const control::ProposalTransition& proposal) {
+        const auto& input = proposal.input;
+        if (input.selector_argmax != contract.selector_argmax ||
+            input.allow_backscatter != contract.allow_backscatter ||
+            double_bits(input.deadline_s) != double_bits(contract.deadline_s)) {
+            return "does not match contract policy inputs";
+        }
+        if (trace.observed.decoder_rank >
+                static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            trace.observed.required_rank >
+                static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+            return "observed rank is outside proposal input range";
+        }
+        if (double_bits(input.source_soc) !=
+                double_bits(trace.observed.source_energy_reserve) ||
+            double_bits(input.rf_duty_remaining) !=
+                double_bits(trace.observed.rf_duty_remaining) ||
+            input.symbols_have !=
+                static_cast<int>(trace.observed.decoder_rank) ||
+            input.symbols_need !=
+                static_cast<int>(trace.observed.required_rank)) {
+            return "does not match observed transport state";
+        }
+
+        const auto expected_priority = input.deadline_left_s <
+                contract.deadline_s * 0.15
+            ? control::ProposalPriority::CRITICAL
+            : input.deadline_left_s < contract.deadline_s * 0.4
+                ? control::ProposalPriority::NORMAL
+                : control::ProposalPriority::BULK;
+        const bool expected_emergency = input.deadline_left_s <
+                contract.deadline_s * 0.08 &&
+            (input.symbols_need - input.symbols_have) >
+                (static_cast<double>(input.symbols_need) * 0.25);
+        bool expected_critical_segments = false;
+        for (const auto& segment : descriptor.segments) {
+            if (segment.importance ==
+                transport::TransportImportance::CRITICAL) {
+                expected_critical_segments = true;
+                break;
+            }
+        }
+        if (input.priority != expected_priority ||
+            input.emergency_mode != expected_emergency ||
+            input.has_critical_segments != expected_critical_segments) {
+            return "priority/emergency inputs do not match generation state";
+        }
+        return std::nullopt;
+    }
+
+    static std::optional<std::string> proposal_sequence_error(
+        const transport::TransportContract& contract,
+        const control::ProposalTransition& proposal,
+        bool first_record) {
+        const double epoch = proposal.input.epoch;
+        if (std::floor(epoch) != epoch ||
+            epoch > static_cast<double>(
+                std::numeric_limits<std::uint64_t>::max())) {
+            return "epoch is not a bounded integer";
+        }
+        if (first_record) {
+            const auto expected_random_state = contract.experiment_seed != 0
+                ? contract.experiment_seed
+                : 0xC0FFEEBEEFULL;
+            if (epoch != 1.0 ||
+                proposal.before.random_state != expected_random_state) {
+                return "initial epoch/RNG state does not match the contract seed";
+            }
+        }
+        const auto step = static_cast<std::uint64_t>(epoch - 1.0);
+        const auto expected_covert = static_cast<std::uint16_t>(
+            (contract.experiment_seed + step) & 0xFFULL);
+        if (proposal.input.covert_sequence != expected_covert) {
+            return "covert sequence does not match seed and epoch";
+        }
+        return std::nullopt;
+    }
+
+    static std::optional<std::string> proposal_execution_error(
+        const control::ProposalTransition& proposal,
+        const safety::TransportDecisionTrace& trace) {
+        const bool expected_applied = trace.execution.transmission_attempts > 0;
+        if (proposal.feedback.applied != expected_applied) {
+            return "feedback application does not match execution";
+        }
+        if (proposal.feedback.executed_link != trace.execution.link) {
+            return "feedback link does not match execution";
+        }
+        const double expected_reward = expected_applied
+            ? static_cast<double>(trace.execution.delivered_attempts) /
+                static_cast<double>(trace.execution.transmission_attempts)
+            : 0.0;
+        if (double_bits(proposal.feedback.reward) !=
+            double_bits(expected_reward)) {
+            return "feedback reward does not match execution";
+        }
+        return std::nullopt;
     }
 
     static bool same_state(const safety::TransportState& left,
