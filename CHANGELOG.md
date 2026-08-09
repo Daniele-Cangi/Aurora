@@ -26,6 +26,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Deterministic aging/fair priority-then-EDF simulation of multiple arrived generations with stable fairness-deadline/arrival/index tie-breaks, preemption, generation-qualified packet replay, per-generation rank continuity and exact schedule round-tripping.
 - Shared `GenerationScheduler` selection logic and tests for priority, earliest-deadline, stable tie-break and invalid-candidate rejection.
 - Bounded starvation prevention: one-class promotion every 2000 ms, a 3000 ms fairness deadline and a replayable maximum service gap of `3000 + (N - 1) * 1000` ms.
+- `aurora_scheduler_benchmark` compares strict priority-then-EDF against aging/fair scheduling under an identical deterministic adversarial workload and reports service-gap violations plus elastic selections.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
 - Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
@@ -39,6 +40,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Added `--event-ledger <path>` and optional paired event-ledger verification to `aurora_replay`.
 - Added `--contact-schedule <path>` and `--contact-schedule-out <path>` to the simulation CLI; replay/contact options remain unavailable in `FIELD_BUILD`.
 - Added `--generation-arrivals <path>` and `--generation-arrivals-out <path>` to the simulation CLI; arrival replay remains unavailable in interactive-lab and `FIELD_BUILD` modes.
+- Added `--generation-scheduler <strict|fair>`, `--generation-aging-ms` and `--generation-starvation-ms`; scheduler options remain simulation-only in `FIELD_BUILD`.
 - Extended arrival specifications with optional service class and relative deadline fields while preserving the compact inheritance form.
 - Upgraded decision provenance to V5: proposal derivation, selector/RNG advancement, UCB feedback, per-attempt HAL/channel/resource transitions, and safety-window/operating-mode transitions are independently reconstructed and checked for cross-record continuity.
 - V2 through V5 decision traces are no longer accepted because they cannot provide the complete V6 contact, proposal, action and supervisory evidence and must be regenerated.
@@ -46,6 +48,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Upgraded simulator ledgers to V3 so the canonical arrival schedule, every generation identity, timed packet release, active generation and per-generation rank are replayed; V1/V2 artifacts must be regenerated.
 - Upgraded generation-arrival schedules to V2 and simulator ledgers to V4 so resolved service class, descriptor expiry and priority/deadline selection are independently replayed; V1 schedules and V1–V3 ledgers must be regenerated.
 - Upgraded simulator ledgers to V5 so scheduling intervals and per-generation last-service state independently reconstruct aging, fairness-lane entry and the starvation bound; V1–V4 ledgers must be regenerated.
+- Upgraded simulator ledgers to V6 so strict/fair discipline and configurable aging/starvation intervals are replayed exactly; V1–V5 ledgers must be regenerated.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.

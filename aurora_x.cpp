@@ -506,15 +506,24 @@ struct Engine {
     begin_simulation_event_session(source, *net.get("DST"));
     cout << "[GENERATION_SCHEDULE] arrivals=" << scheduled_generations.size()
          << " fingerprint=" << generation_arrival_schedule.fingerprint()
+         << " discipline="
+         << (generation_scheduling_policy.discipline ==
+                aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR
+              ? "fair" : "strict")
          << " quantum_ms="
          << generation_scheduling_policy.service_quantum_ms
          << " aging_ms=" << generation_scheduling_policy.aging_interval_ms
          << " starvation_ms="
          << generation_scheduling_policy.starvation_limit_ms
-         << " maximum_gap_ms="
-         << aurora::simulation::maximum_service_gap_ms(
-              generation_scheduling_policy, scheduled_generations.size())
-         << endl;
+         << " maximum_gap_ms=";
+    if (generation_scheduling_policy.discipline ==
+        aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR) {
+      cout << aurora::simulation::maximum_service_gap_ms(
+        generation_scheduling_policy, scheduled_generations.size());
+    } else {
+      cout << "unbounded";
+    }
+    cout << endl;
   }
 
   void activate_generation(size_t index) {
@@ -1521,7 +1530,30 @@ int main(int argc, char* argv[]){
   std::string contact_schedule_out_path;
   std::string generation_arrival_schedule_path;
   std::string generation_arrival_schedule_out_path;
-  for (int i = 1; i < argc; ++i) {
+  aurora::simulation::GenerationSchedulingPolicy generation_scheduling_policy;
+  [[maybe_unused]] bool generation_scheduling_option_seen = false;
+  const auto positive_option = [&](int& index, const char* option) {
+    if (index + 1 >= argc) {
+      throw invalid_argument(string(option) + " requires a positive integer");
+    }
+    const string text = argv[++index];
+    if (text.empty() || text.front() == '-') {
+      throw invalid_argument(string(option) + " requires a positive integer");
+    }
+    size_t consumed = 0;
+    uint64_t value = 0;
+    try {
+      value = stoull(text, &consumed, 10);
+    } catch (...) {
+      throw invalid_argument(string(option) + " requires a positive integer");
+    }
+    if (consumed != text.size() || value == 0) {
+      throw invalid_argument(string(option) + " requires a positive integer");
+    }
+    return value;
+  };
+  try {
+    for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--interactive-lab") {
       interactive_lab = true;
     } else if (std::string(argv[i]) == "--decision-trace") {
@@ -1560,16 +1592,48 @@ int main(int argc, char* argv[]){
         return 2;
       }
       generation_arrival_schedule_out_path = argv[++i];
+    } else if (std::string(argv[i]) == "--generation-scheduler") {
+      if (i + 1 >= argc) {
+        throw invalid_argument(
+          "--generation-scheduler requires strict or fair");
+      }
+      const string discipline = argv[++i];
+      if (discipline == "strict") {
+        generation_scheduling_policy.discipline =
+          aurora::simulation::GenerationSchedulingDiscipline::STRICT_PRIORITY_EDF;
+      } else if (discipline == "fair") {
+        generation_scheduling_policy.discipline =
+          aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR;
+      } else {
+        throw invalid_argument(
+          "--generation-scheduler requires strict or fair");
+      }
+      generation_scheduling_option_seen = true;
+    } else if (std::string(argv[i]) == "--generation-aging-ms") {
+      generation_scheduling_policy.aging_interval_ms = positive_option(
+        i, "--generation-aging-ms");
+      generation_scheduling_option_seen = true;
+    } else if (std::string(argv[i]) == "--generation-starvation-ms") {
+      generation_scheduling_policy.starvation_limit_ms = positive_option(
+        i, "--generation-starvation-ms");
+      generation_scheduling_option_seen = true;
     }
+    }
+    generation_scheduling_policy.validate();
+  } catch (const exception& error) {
+    cerr << error.what() << '\n';
+    return 2;
   }
 
   auto engine = std::make_unique<Engine>();
+  engine->generation_scheduling_policy = generation_scheduling_policy;
 #ifdef FIELD_BUILD
   if (!event_ledger_path.empty() || !contact_schedule_path.empty() ||
       !contact_schedule_out_path.empty() ||
       !generation_arrival_schedule_path.empty() ||
-      !generation_arrival_schedule_out_path.empty()) {
-    std::cerr << "event/contact/arrival replay options are simulation-only and unavailable in FIELD_BUILD\n";
+      !generation_arrival_schedule_out_path.empty() ||
+      generation_scheduling_option_seen) {
+    std::cerr << "event/contact/arrival/scheduler options are simulation-only and unavailable in FIELD_BUILD\n";
     return 2;
   }
 #endif
@@ -1591,6 +1655,17 @@ int main(int argc, char* argv[]){
     } catch (const std::exception& error) {
       std::cerr << "[ARRIVAL] failed to load schedule: "
                 << error.what() << '\n';
+      return 2;
+    }
+  }
+  if (engine->generation_scheduling_policy.discipline ==
+      aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR) {
+    try {
+      (void)aurora::simulation::maximum_service_gap_ms(
+        engine->generation_scheduling_policy,
+        engine->generation_arrival_schedule.arrivals().size());
+    } catch (const exception& error) {
+      cerr << "[SCHEDULER] invalid policy: " << error.what() << '\n';
       return 2;
     }
   }

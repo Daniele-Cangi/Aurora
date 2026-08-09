@@ -13,6 +13,11 @@
 
 namespace aurora::simulation {
 
+enum class GenerationSchedulingDiscipline : std::uint8_t {
+    STRICT_PRIORITY_EDF,
+    AGING_FAIR
+};
+
 struct GenerationSchedulingCandidate {
     std::size_t index = 0;
     std::uint64_t arrives_at_ms = 0;
@@ -28,12 +33,20 @@ struct GenerationSchedulingPolicy {
     std::uint64_t service_quantum_ms = 1'000;
     std::uint64_t aging_interval_ms = 2'000;
     std::uint64_t starvation_limit_ms = 3'000;
+    GenerationSchedulingDiscipline discipline =
+        GenerationSchedulingDiscipline::AGING_FAIR;
 
     void validate() const {
         if (service_quantum_ms == 0 || aging_interval_ms == 0 ||
             starvation_limit_ms == 0) {
             throw std::invalid_argument(
                 "generation scheduler: policy intervals must be positive");
+        }
+        if (static_cast<std::uint8_t>(discipline) >
+            static_cast<std::uint8_t>(
+                GenerationSchedulingDiscipline::AGING_FAIR)) {
+            throw std::invalid_argument(
+                "generation scheduler: invalid discipline");
         }
     }
 
@@ -45,15 +58,31 @@ inline std::uint64_t maximum_service_gap_ms(
     const GenerationSchedulingPolicy& policy,
     std::size_t eligible_generations) {
     policy.validate();
+    if (policy.discipline != GenerationSchedulingDiscipline::AGING_FAIR) {
+        throw std::invalid_argument(
+            "generation scheduler: strict priority has no service-gap bound");
+    }
     if (eligible_generations == 0) return 0;
+    const auto remainder = policy.starvation_limit_ms %
+        policy.service_quantum_ms;
+    if (remainder != 0 && policy.starvation_limit_ms >
+        std::numeric_limits<std::uint64_t>::max() -
+            (policy.service_quantum_ms - remainder)) {
+        throw std::overflow_error(
+            "generation scheduler: rounded starvation limit overflows");
+    }
+    const auto rounded_starvation_limit_ms = remainder == 0
+        ? policy.starvation_limit_ms
+        : policy.starvation_limit_ms +
+            (policy.service_quantum_ms - remainder);
     const auto additional_quanta = eligible_generations - 1;
     if (additional_quanta >
         (std::numeric_limits<std::uint64_t>::max() -
-         policy.starvation_limit_ms) / policy.service_quantum_ms) {
+         rounded_starvation_limit_ms) / policy.service_quantum_ms) {
         throw std::overflow_error(
             "generation scheduler: service-gap bound overflows");
     }
-    return policy.starvation_limit_ms +
+    return rounded_starvation_limit_ms +
         static_cast<std::uint64_t>(additional_quanta) *
             policy.service_quantum_ms;
 }
@@ -92,11 +121,16 @@ inline std::optional<std::size_t> select_scheduled_generation(
                 "generation scheduler: invalid last-service time");
         }
         const auto waiting_ms = now_ms - last_service;
-        const auto promotions = std::min<std::uint64_t>(
-            priority, waiting_ms / policy.aging_interval_ms);
+        const bool fairness_enabled = policy.discipline ==
+            GenerationSchedulingDiscipline::AGING_FAIR;
+        const auto promotions = fairness_enabled
+            ? std::min<std::uint64_t>(
+                priority, waiting_ms / policy.aging_interval_ms)
+            : 0;
         const auto effective_priority = static_cast<std::uint8_t>(
             priority - promotions);
-        const bool starved = waiting_ms >= policy.starvation_limit_ms;
+        const bool starved = fairness_enabled &&
+            waiting_ms >= policy.starvation_limit_ms;
         const auto fairness_deadline =
             last_service > std::numeric_limits<std::uint64_t>::max() -
                     policy.starvation_limit_ms

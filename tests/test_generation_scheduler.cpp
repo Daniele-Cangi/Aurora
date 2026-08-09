@@ -23,11 +23,26 @@ int main() {
 
     candidates[2].expires_at_ms = 5'000;
     assert(select_scheduled_generation(candidates, 2'000) == 0);
+    auto strict_policy = GenerationSchedulingPolicy{};
+    strict_policy.discipline =
+        aurora::simulation::GenerationSchedulingDiscipline::STRICT_PRIORITY_EDF;
+    assert(select_scheduled_generation(
+        candidates, 2'000, strict_policy) == 2);
+
+    bool strict_bound_rejected = false;
+    try {
+        (void)maximum_service_gap_ms(strict_policy, candidates.size());
+    } catch (const std::invalid_argument&) {
+        strict_bound_rejected = true;
+    }
+    assert(strict_bound_rejected);
 
     candidates[2].importance = TransportImportance::ELASTIC;
     assert(select_scheduled_generation(candidates, 2'000) == 0);
 
-    const GenerationSchedulingPolicy policy{1'000, 2'000, 3'000};
+    const GenerationSchedulingPolicy policy{
+        1'000, 2'000, 3'000,
+        aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR};
     std::vector<GenerationSchedulingCandidate> aging{
         {0, 0, 7'000, TransportImportance::ELASTIC, true, false, 0},
         {1, 0, 9'000, TransportImportance::CRITICAL, true, false, 3'000}};
@@ -49,6 +64,9 @@ int main() {
     bounded[1].last_served_at_ms = 4'000;
     assert(select_scheduled_generation(bounded, 5'000, policy) == 2);
     assert(maximum_service_gap_ms(policy, bounded.size()) == 5'000);
+    auto unaligned_policy = policy;
+    unaligned_policy.starvation_limit_ms = 2'501;
+    assert(maximum_service_gap_ms(unaligned_policy, bounded.size()) == 5'000);
 
     candidates[0].terminal = true;
     candidates[2].terminal = true;
@@ -76,7 +94,9 @@ int main() {
 
     bool invalid_policy_rejected = false;
     try {
-        (void)select_scheduled_generation(candidates, 2'000, {0, 1, 1});
+        (void)select_scheduled_generation(candidates, 2'000, {
+            0, 1, 1,
+            aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR});
     } catch (const std::invalid_argument&) {
         invalid_policy_rejected = true;
     }
