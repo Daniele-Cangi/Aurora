@@ -61,6 +61,9 @@ int main() {
         TransportContract::parse("segment:0-10,critical;segment:10-20,important");
     });
     expect_invalid([] {
+        TransportContract::parse("deadline:100ms;segment:0-10,critical,101ms,0.99");
+    });
+    expect_invalid([] {
         TransportContract unsupported;
         unsupported.version = 2;
         unsupported.validate();
@@ -83,8 +86,8 @@ int main() {
     assert(global_deadline !=
            aurora::transport::transport_contract_semantic_audit.end());
     assert(duty != aurora::transport::transport_contract_semantic_audit.end());
-    assert(segment_deadline->semantics == ContractFieldSemantics::METADATA_ONLY);
-    assert(segment_reliability->semantics == ContractFieldSemantics::METADATA_ONLY);
+    assert(segment_deadline->semantics == ContractFieldSemantics::ENFORCED);
+    assert(segment_reliability->semantics == ContractFieldSemantics::POLICY_INPUT);
     assert(global_deadline->semantics == ContractFieldSemantics::ENFORCED);
     assert(duty->semantics == ContractFieldSemantics::ENFORCED);
 

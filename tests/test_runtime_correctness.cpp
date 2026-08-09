@@ -109,6 +109,47 @@ void critical_only_selects_only_critical_packets() {
     assert(sent.segment_kind == fec::SegmentKind::CRITICAL);
 }
 
+void simulation_attempts_replay_hal_channel_energy_and_duty() {
+    world::World world;
+    Node source;
+    Node receiver;
+    source.pos = {0.0, 0.0};
+    receiver.pos = {0.1, 0.1};
+    source.configure_simulation_duty(1.0);
+    source.buf.push_back(packet(5, fec::SegmentKind::BULK));
+    util::rng.reseed(0x515151ULL);
+
+    aurora::safety::TransportDecisionTrace replay;
+    replay.generation_id = "runtime-generation";
+    replay.decision.link = aurora::safety::LinkMode::RF;
+    replay.decision.repair_symbols = 0;
+    replay.execution.recorded = true;
+    replay.execution.link = aurora::safety::LinkMode::RF;
+    replay.execution.repair_symbols_emitted = 0;
+
+    bool channel_observed = false;
+    for (int count = 0; count < 20 && !channel_observed; ++count) {
+        const auto sent = source.send_one(
+            world, receiver, phy::Mode::RF, 10, false);
+        assert(sent.attempted);
+        assert(sent.trace.hal_evaluated);
+        assert(sent.trace.hal_replayable);
+        assert(sent.trace.lbt_evaluated);
+        replay.execution.attempts.push_back(sent.trace);
+        if (sent.trace.hal_accepted) ++replay.execution.hal_accepted_attempts;
+        if (sent.delivered) ++replay.execution.delivered_attempts;
+        channel_observed = sent.trace.channel_evaluated;
+    }
+    assert(channel_observed);
+    replay.decision.transmission_attempts = static_cast<std::uint32_t>(
+        replay.execution.attempts.size());
+    replay.execution.transmission_attempts = replay.decision.transmission_attempts;
+    replay.observed.now_ms = 10;
+    replay.observed.rf_duty_remaining_s =
+        replay.execution.attempts.front().duty_before_s;
+    assert(!replay.execution_error().has_value());
+}
+
 void safety_monitor_ignores_inactive_flow_classes() {
     aurora::safety::SafetyConfig config;
     config.window_size = 5;
@@ -139,6 +180,7 @@ int main() {
     simulation_duty_uses_contract_budget();
     refused_transmissions_never_reach_receiver();
     critical_only_selects_only_critical_packets();
+    simulation_attempts_replay_hal_channel_energy_and_duty();
     safety_monitor_ignores_inactive_flow_classes();
     std::cout << "runtime correctness tests passed\n";
     return 0;

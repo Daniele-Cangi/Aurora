@@ -84,7 +84,36 @@ struct SimulationDutyLimiter {
     return true;
   }
 };
-struct LBT { double thresh_dBm=-95; int dwell_ms=5; bool clear(function<int(void)> rssi){ int a=rssi(); if(a<thresh_dBm){ this_thread::sleep_for(milliseconds(dwell_ms)); int b=rssi(); return b<thresh_dBm; } return false; } };
+struct LBTResult {
+  bool accepted=false;
+  int threshold_dbm=-95;
+  int first_rssi_dbm=0;
+  bool second_valid=false;
+  int second_rssi_dbm=0;
+};
+struct LBT {
+  double thresh_dBm=-95;
+  int dwell_ms=5;
+  LBTResult clear_trace(function<int(void)> rssi){
+    LBTResult result;
+    result.threshold_dbm=static_cast<int>(thresh_dBm);
+    result.first_rssi_dbm=rssi();
+    if(result.first_rssi_dbm<thresh_dBm){
+      this_thread::sleep_for(milliseconds(dwell_ms));
+      result.second_valid=true;
+      result.second_rssi_dbm=rssi();
+      result.accepted=result.second_rssi_dbm<thresh_dBm;
+    }
+    return result;
+  }
+  bool clear(function<int(void)> rssi){ return clear_trace(move(rssi)).accepted; }
+};
+
+struct SimulationTransmitTrace {
+  bool accepted=false;
+  bool replayable=true;
+  LBTResult lbt;
+};
 
 // Backend
 #ifdef FIELD_BUILD
@@ -111,12 +140,16 @@ struct SX1262 {
     this_thread::sleep_for(milliseconds((int)(t_s*1000)));
     return true;
   }
-  bool tx_simulation(const uint8_t*, size_t len){
+  SimulationTransmitTrace tx_simulation_trace(const uint8_t*, size_t len){
+    SimulationTransmitTrace result;
     double t_s=max(0.005, len / (125000.0/8.0));
-    if(!lbt.clear([&](){return rssi();})) return false;
+    result.lbt=lbt.clear_trace([&](){return rssi();});
+    result.accepted=result.lbt.accepted;
+    if(!result.accepted) return result;
     this_thread::sleep_for(milliseconds((int)(t_s*1000)));
-    return true;
+    return result;
   }
+  bool tx_simulation(const uint8_t* data, size_t len){ return tx_simulation_trace(data,len).accepted; }
   bool tx_cw(double secs){
     if(!duty.allow(min(1.0,secs))) return false;
     this_thread::sleep_for(milliseconds((int)(secs*1000)));
@@ -147,6 +180,7 @@ inline bool RADIO_INIT(){ radio().init(); return true; }
 inline bool LORA_CFG(double f,int bw_khz,int sf,int cr,int preamble_sym){ (void)f;(void)bw_khz;(void)sf;(void)cr;(void)preamble_sym; return radio().cfg(f,bw_khz,sf,cr,preamble_sym); }
 inline bool LORA_TX(const uint8_t* b,size_t n){ return radio().tx(b,n); }
 inline bool LORA_TX_SIMULATION(const uint8_t* b,size_t n){ return radio().tx_simulation(b,n); }
+inline SimulationTransmitTrace LORA_TX_SIMULATION_TRACE(const uint8_t* b,size_t n){ return radio().tx_simulation_trace(b,n); }
 inline int  LORA_RSSI(){ return radio().rssi(); }
 inline bool CW_ON(double s){ return radio().tx_cw(s); }
 inline bool CW_OFF(){ return true; }

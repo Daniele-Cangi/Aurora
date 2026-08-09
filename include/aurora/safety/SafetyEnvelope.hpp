@@ -18,6 +18,23 @@ enum class LinkMode : std::uint8_t {
     BACKSCATTER
 };
 
+enum class AttemptRefusal : std::uint8_t {
+    NONE,
+    EMPTY_BUFFER,
+    NO_ELIGIBLE_PACKET,
+    ENERGY,
+    DUTY,
+    HAL
+};
+
+struct SegmentTransportState {
+    std::uint32_t segment_id = 0;
+    std::uint64_t emitted_symbols = 0;
+    std::uint32_t decoder_rank = 0;
+    bool complete = false;
+    bool expired = false;
+};
+
 struct TransportState {
     std::uint64_t observed_at_ms = 0;
     std::uint64_t now_ms = 0;
@@ -35,6 +52,7 @@ struct TransportState {
     std::uint64_t critical_emitted_symbols = 0;
     std::uint32_t decoder_rank = 0;
     std::uint32_t required_rank = 0;
+    std::vector<SegmentTransportState> segments;
 };
 
 struct TransportDecision {
@@ -45,6 +63,39 @@ struct TransportDecision {
     bool permitted = true;
 };
 
+// Canonical action-level transition. HAL/channel samples are recorded inputs;
+// replay deterministically recomputes their decisions and every resource delta.
+struct TransportAttemptTrace {
+    std::uint64_t simulated_now_ms = 0;
+    std::uint32_t packet_sequence = 0;
+    std::uint32_t symbol_seed = 0;
+    std::uint32_t segment_id = 0;
+    bool critical = false;
+    bool attempted = false;
+    bool hal_evaluated = false;
+    bool hal_replayable = false;
+    bool hal_accepted = false;
+    bool transmitted = false;
+    bool delivered = false;
+    AttemptRefusal refusal = AttemptRefusal::NONE;
+    double energy_before_j = 0.0;
+    double energy_after_j = 0.0;
+    double energy_cost_j = 0.0;
+    double duty_before_s = 0.0;
+    double duty_after_s = 0.0;
+    double rf_airtime_s = 0.0;
+    bool lbt_evaluated = false;
+    int lbt_threshold_dbm = -95;
+    int lbt_first_rssi_dbm = 0;
+    bool lbt_second_valid = false;
+    int lbt_second_rssi_dbm = 0;
+    bool channel_evaluated = false;
+    double channel_snr_db = 0.0;
+    double channel_coding_gain_db = 0.0;
+    double channel_fading_db = 0.0;
+    double channel_threshold_db = 0.0;
+};
+
 struct TransportExecution {
     bool recorded = false;
     LinkMode link = LinkMode::RF;
@@ -53,6 +104,7 @@ struct TransportExecution {
     std::uint32_t delivered_attempts = 0;
     std::uint32_t repair_symbols_emitted = 0;
     bool critical_only = false;
+    std::vector<TransportAttemptTrace> attempts;
 };
 
 struct TransportDecisionTrace {
@@ -82,7 +134,157 @@ struct TransportDecisionTrace {
              execution.repair_symbols_emitted != 0)) {
             return "rejected decision was executed";
         }
+        if (execution.attempts.size() != execution.transmission_attempts) {
+            return "execution attempt trace count does not match the decision";
+        }
+        std::uint32_t hal_accepted = 0;
+        std::uint32_t delivered = 0;
+        for (std::size_t index = 0; index < execution.attempts.size(); ++index) {
+            const auto& attempt = execution.attempts[index];
+            if (!attempt.attempted) {
+                return "execution contains a non-attempt event";
+            }
+            if (attempt.simulated_now_ms != observed.now_ms) {
+                return "attempt time does not match the admitted state";
+            }
+            if (execution.critical_only && !attempt.critical) {
+                return "critical-only execution contains a non-critical packet";
+            }
+            if (!observed.segments.empty()) {
+                if (attempt.segment_id >= observed.segments.size() ||
+                    observed.segments[attempt.segment_id].segment_id != attempt.segment_id ||
+                    observed.segments[attempt.segment_id].complete ||
+                    observed.segments[attempt.segment_id].expired) {
+                    return "attempt selected an unavailable segment";
+                }
+            }
+            if (!valid_attempt_number(attempt.energy_before_j) ||
+                !valid_attempt_number(attempt.energy_after_j) ||
+                !valid_attempt_number(attempt.energy_cost_j) ||
+                !valid_attempt_number(attempt.duty_before_s) ||
+                !valid_attempt_number(attempt.duty_after_s) ||
+                !valid_attempt_number(attempt.rf_airtime_s)) {
+                return "execution contains an invalid resource state";
+            }
+            if (attempt.hal_accepted) ++hal_accepted;
+            if (attempt.delivered) ++delivered;
+            if (attempt.delivered && !attempt.transmitted) {
+                return "channel delivered a transmission that was not emitted";
+            }
+            if (attempt.transmitted && !attempt.hal_accepted) {
+                return "transmission bypassed HAL acceptance";
+            }
+            if (attempt.transmitted) {
+                if (attempt.refusal != AttemptRefusal::NONE ||
+                    !attempt.channel_evaluated) {
+                    return "transmitted attempt has inconsistent refusal/channel state";
+                }
+                if (!near(attempt.energy_after_j,
+                          attempt.energy_before_j - attempt.energy_cost_j)) {
+                    return "transmitted attempt has an invalid energy transition";
+                }
+                const double admitted_energy_cost = execution.link == LinkMode::RF
+                    ? observed.rf_energy_cost_per_attempt_j
+                    : execution.link == LinkMode::OPTICAL
+                        ? observed.optical_energy_cost_per_attempt_j
+                        : observed.backscatter_energy_cost_per_attempt_j;
+                if (admitted_energy_cost > 0.0 &&
+                    !near(attempt.energy_cost_j, admitted_energy_cost)) {
+                    return "attempt energy cost differs from the admitted estimate";
+                }
+                if (execution.link == LinkMode::RF &&
+                    observed.rf_airtime_per_attempt_s > 0.0 &&
+                    !near(attempt.rf_airtime_s,
+                          observed.rf_airtime_per_attempt_s)) {
+                    return "attempt airtime differs from the admitted estimate";
+                }
+                const double expected_duty = execution.link == LinkMode::RF
+                    ? attempt.duty_before_s - attempt.rf_airtime_s
+                    : attempt.duty_before_s;
+                if (!near(attempt.duty_after_s, expected_duty)) {
+                    return "transmitted attempt has an invalid duty transition";
+                }
+                if (!valid_channel_number(attempt.channel_snr_db) ||
+                    !valid_channel_number(attempt.channel_coding_gain_db) ||
+                    !valid_channel_number(attempt.channel_fading_db) ||
+                    !valid_channel_number(attempt.channel_threshold_db)) {
+                    return "transmitted attempt has invalid channel evidence";
+                }
+                const bool replayed_delivery =
+                    attempt.channel_snr_db + attempt.channel_coding_gain_db +
+                        attempt.channel_fading_db > attempt.channel_threshold_db;
+                if (replayed_delivery != attempt.delivered) {
+                    return "channel outcome does not replay from recorded evidence";
+                }
+            } else {
+                if (attempt.delivered || attempt.channel_evaluated ||
+                    attempt.refusal == AttemptRefusal::NONE ||
+                    !near(attempt.energy_after_j, attempt.energy_before_j) ||
+                    !near(attempt.duty_after_s, attempt.duty_before_s)) {
+                    return "refused attempt changed resources or reached the channel";
+                }
+            }
+            if (attempt.hal_replayable && attempt.hal_evaluated) {
+                bool replayed_hal = true;
+                if (execution.link == LinkMode::RF) {
+                    if (!attempt.lbt_evaluated) {
+                        return "RF HAL trace is missing LBT evidence";
+                    }
+                    if (attempt.lbt_first_rssi_dbm < attempt.lbt_threshold_dbm) {
+                        if (!attempt.lbt_second_valid) {
+                            return "RF LBT trace is missing its second sample";
+                        }
+                        replayed_hal =
+                            attempt.lbt_second_rssi_dbm < attempt.lbt_threshold_dbm;
+                    } else {
+                        if (attempt.lbt_second_valid) {
+                            return "RF LBT trace has an unexpected second sample";
+                        }
+                        replayed_hal = false;
+                    }
+                }
+                if (replayed_hal != attempt.hal_accepted) {
+                    return "HAL outcome does not replay from recorded evidence";
+                }
+            }
+            if (index > 0) {
+                const auto& previous = execution.attempts[index - 1];
+                if (!near(previous.energy_after_j, attempt.energy_before_j) ||
+                    !near(previous.duty_after_s, attempt.duty_before_s)) {
+                    return "attempt resource states are not contiguous";
+                }
+            } else {
+                if (observed.source_energy_capacity_j > 0.0 &&
+                    !near(attempt.energy_before_j,
+                          observed.source_energy_reserve *
+                              observed.source_energy_capacity_j)) {
+                    return "execution energy does not start from the admitted state";
+                }
+                if (!near(attempt.duty_before_s,
+                          observed.rf_duty_remaining_s)) {
+                    return "execution duty does not start from the admitted state";
+                }
+            }
+        }
+        if (hal_accepted != execution.hal_accepted_attempts ||
+            delivered != execution.delivered_attempts) {
+            return "execution aggregates do not match attempt traces";
+        }
         return std::nullopt;
+    }
+
+private:
+    static bool near(double left, double right) {
+        return std::abs(left - right) <=
+               1e-12 * std::max({1.0, std::abs(left), std::abs(right)});
+    }
+
+    static bool valid_attempt_number(double value) {
+        return std::isfinite(value) && value >= -1e-12;
+    }
+
+    static bool valid_channel_number(double value) {
+        return std::isfinite(value);
     }
 };
 
@@ -137,6 +339,19 @@ public:
             return trace;
         }
 
+        if (!state.segments.empty()) {
+            if (state.segments.size() != descriptor.segments.size()) {
+                reject(trace, "segment runtime state does not match the descriptor");
+                return trace;
+            }
+            for (std::size_t index = 0; index < state.segments.size(); ++index) {
+                if (state.segments[index].segment_id != index) {
+                    reject(trace, "segment runtime state is not contiguous and ordered");
+                    return trace;
+                }
+            }
+        }
+
         trace.decision.transmission_attempts = std::max(
             1U, trace.decision.transmission_attempts);
 
@@ -163,29 +378,66 @@ public:
                                   state.emitted_symbols;
 
         std::uint32_t critical_sources = 0;
-        for (const auto& segment : descriptor.segments) {
+        std::uint64_t active_capacity = 0;
+        std::uint64_t active_critical_capacity = 0;
+        std::uint64_t active_critical_emitted = 0;
+        std::uint64_t active_critical_floor = 0;
+        std::size_t active_segments = 0;
+        for (std::size_t index = 0; index < descriptor.segments.size(); ++index) {
+            const auto& segment = descriptor.segments[index];
+            const auto* runtime = state.segments.empty() ? nullptr : &state.segments[index];
+            const bool complete = runtime && runtime->complete;
+            const bool expired = (runtime && runtime->expired) ||
+                                 state.now_ms > segment.expires_at_ms;
+            if (complete || expired) continue;
+            ++active_segments;
+            const auto maximum = maximum_segment_emission(segment, contract);
+            const auto emitted = runtime
+                ? runtime->emitted_symbols
+                : static_cast<std::uint64_t>(segment.coding.emitted_symbols);
+            if (emitted > maximum) {
+                reject(trace, "segment emissions already exceed repair amplification");
+                return trace;
+            }
+            active_capacity += maximum - emitted;
             if (segment.importance == transport::TransportImportance::CRITICAL) {
                 critical_sources += segment.source_symbol_count;
+                active_critical_capacity += maximum - emitted;
+                active_critical_emitted += emitted;
+                active_critical_floor += static_cast<std::uint64_t>(
+                    std::min<long double>(
+                        std::ceil(static_cast<long double>(segment.source_symbol_count) *
+                                  static_cast<long double>(contract.minimum_critical_overhead)),
+                        std::numeric_limits<std::uint32_t>::max()));
             }
         }
+        if (state.segments.empty()) {
+            active_capacity = remaining_emission;
+            const auto active_critical_maximum = static_cast<std::uint64_t>(
+                std::min<long double>(
+                    std::ceil(static_cast<long double>(critical_sources) *
+                              static_cast<long double>(contract.maximum_repair_amplification)),
+                    std::numeric_limits<std::uint32_t>::max()));
+            if (state.critical_emitted_symbols > active_critical_maximum) {
+                reject(trace, "critical symbols already exceed repair amplification");
+                return trace;
+            }
+            active_critical_capacity =
+                active_critical_maximum - state.critical_emitted_symbols;
+            active_critical_emitted = state.critical_emitted_symbols;
+        }
+        if (active_segments == 0) {
+            reject(trace, "no unexpired incomplete segment remains");
+            return trace;
+        }
+        remaining_emission = std::min(remaining_emission, active_capacity);
         if (trace.decision.critical_only && critical_sources == 0) {
             trace.decision.critical_only = false;
             trace.constraints_applied.push_back(
                 "critical-only cleared because generation has no critical segment");
         }
         if (trace.decision.critical_only) {
-            const auto critical_maximum = static_cast<std::uint64_t>(
-                std::min<long double>(
-                    std::ceil(static_cast<long double>(critical_sources) *
-                              static_cast<long double>(contract.maximum_repair_amplification)),
-                    std::numeric_limits<std::uint32_t>::max()));
-            if (state.critical_emitted_symbols > critical_maximum) {
-                reject(trace, "critical symbols already exceed repair amplification");
-                return trace;
-            }
-            remaining_emission = std::min(
-                remaining_emission,
-                critical_maximum - state.critical_emitted_symbols);
+            remaining_emission = std::min(remaining_emission, active_critical_capacity);
         }
         const auto remaining_repairs = static_cast<std::uint32_t>(
             std::min<std::uint64_t>(
@@ -196,14 +448,8 @@ public:
         }
 
         if (critical_sources > 0 && trace.decision.critical_only) {
-            const auto bounded_protected_total = std::min<long double>(
-                std::ceil(static_cast<long double>(critical_sources) *
-                          static_cast<long double>(contract.minimum_critical_overhead)),
-                std::numeric_limits<std::uint32_t>::max());
-            const auto protected_total = static_cast<std::uint32_t>(
-                bounded_protected_total);
-            const auto minimum_repairs = protected_total > state.critical_emitted_symbols
-                ? protected_total - state.critical_emitted_symbols
+            const auto minimum_repairs = active_critical_floor > active_critical_emitted
+                ? active_critical_floor - active_critical_emitted
                 : 0U;
             if (trace.decision.repair_symbols < minimum_repairs) {
                 trace.decision.repair_symbols = static_cast<std::uint32_t>(std::min<std::uint64_t>(
@@ -238,6 +484,15 @@ private:
 
     static bool valid_nonnegative(double value) {
         return std::isfinite(value) && value >= 0.0;
+    }
+
+    static std::uint64_t maximum_segment_emission(
+        const transport::GenerationSegmentDescriptor& segment,
+        const transport::TransportContract& contract) {
+        return static_cast<std::uint64_t>(std::min<long double>(
+            std::ceil(static_cast<long double>(segment.source_symbol_count) *
+                      static_cast<long double>(contract.maximum_repair_amplification)),
+            std::numeric_limits<std::uint32_t>::max()));
     }
 
     static double energy_cost(const TransportState& state, LinkMode link) {

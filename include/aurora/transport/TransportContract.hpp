@@ -25,9 +25,8 @@ struct SegmentRequirement {
     std::size_t offset = 0;
     std::size_t length = 0;
     TransportImportance importance = TransportImportance::IMPORTANT;
-    // These two values are currently retained as declared metadata. Global
-    // generation expiry and policy selection are operational; independent
-    // segment expiry/reliability enforcement is intentionally not claimed.
+    // Deadline is enforced independently. Reliability is an explicit planning
+    // priority and observed outcome threshold; it is not an achieved SLA.
     std::uint64_t deadline_ms = 0;
     double target_reliability = 0.99;
 };
@@ -66,8 +65,8 @@ inline constexpr std::array<ContractFieldAudit, 21> transport_contract_semantic_
     {"experiment_seed", ContractFieldSemantics::ENFORCED, "deterministic generation and simulator randomness"},
     {"segments.range", ContractFieldSemantics::ENFORCED, "explicit byte segmentation"},
     {"segments.importance", ContractFieldSemantics::ENFORCED, "segment protection and critical scheduling"},
-    {"segments.deadline_ms", ContractFieldSemantics::METADATA_ONLY, "recorded in descriptor; no independent expiry"},
-    {"segments.target_reliability", ContractFieldSemantics::METADATA_ONLY, "recorded in descriptor; no independent guarantee"},
+    {"segments.deadline_ms", ContractFieldSemantics::ENFORCED, "independent absolute segment expiry and late-symbol rejection"},
+    {"segments.target_reliability", ContractFieldSemantics::POLICY_INPUT, "repair priority and per-segment observed outcome threshold; not an SLA"},
     {"payload_semantics", ContractFieldSemantics::UNSUPPORTED, "opaque bytes only"},
 }};
 
@@ -159,6 +158,10 @@ struct TransportContract {
             if (segment.target_reliability <= 0.0 || segment.target_reliability > 1.0 ||
                 !std::isfinite(segment.target_reliability)) {
                 throw std::invalid_argument("transport contract: segment reliability must be in (0, 1]");
+            }
+            if (segment.deadline_ms > deadline_ms()) {
+                throw std::invalid_argument(
+                    "transport contract: segment deadline exceeds generation deadline");
             }
             previous_end = segment.offset + segment.length;
             first = false;

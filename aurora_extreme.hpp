@@ -90,9 +90,24 @@ namespace channel {
     }
     return 0.5;
   }
+  struct OutcomeTrace {
+    double snr_db=0.0;
+    double coding_gain_db=0.0;
+    double fading_db=0.0;
+    double threshold_db=0.0;
+    bool delivered=false;
+  };
+  static inline OutcomeTrace pass_realistic_trace(double snr_db, phy::Mode m, double coding_gain_db, bool rician=false){
+    OutcomeTrace result;
+    result.snr_db=snr_db;
+    result.coding_gain_db=coding_gain_db;
+    result.fading_db=fading_db(rician);
+    result.threshold_db=threshold(m);
+    result.delivered=result.snr_db + result.coding_gain_db + result.fading_db > result.threshold_db;
+    return result;
+  }
   static inline bool pass_realistic(double snr_db, phy::Mode m, double coding_gain_db, bool rician=false){
-    double eff = snr_db + coding_gain_db + fading_db(rician);
-    return eff > threshold(m);
+    return pass_realistic_trace(snr_db,m,coding_gain_db,rician).delivered;
   }
 }
 

@@ -45,6 +45,7 @@ struct GenerationSegmentDescriptor {
     TransportImportance importance = TransportImportance::IMPORTANT;
     double target_reliability = 0.99;
     std::uint64_t deadline_ms = 0;
+    std::uint64_t expires_at_ms = 0;
     CodingParameters coding;
 };
 
@@ -110,6 +111,11 @@ struct GenerationDescriptor {
             if (segment.coding.emitted_symbols < segment.source_symbol_count) {
                 return "segment emits fewer symbols than its source count";
             }
+            if (segment.expires_at_ms < created_at_ms ||
+                segment.expires_at_ms > expires_at_ms ||
+                segment.expires_at_ms - created_at_ms != segment.deadline_ms) {
+                return "segment expiry is inconsistent with its declared deadline";
+            }
             previous_end = segment.offset + segment.length;
             source_total += segment.source_symbol_count;
         }
@@ -152,6 +158,7 @@ inline std::uint64_t compute_descriptor_fingerprint(const GenerationDescriptor& 
                 << static_cast<int>(segment.importance) << ','
                 << segment.target_reliability << ','
                 << segment.deadline_ms << ','
+                << segment.expires_at_ms << ','
                 << segment.coding.seed << ','
                 << segment.coding.overhead_factor << ','
                 << segment.coding.emitted_symbols;
@@ -164,10 +171,31 @@ enum class DecodeStatus : std::uint8_t {
     PARTIAL_PROGRESS,
     CRITICAL_SEGMENT_COMPLETE,
     COMPLETE,
+    SEGMENT_EXPIRED,
     EXPIRED,
     INTEGRITY_FAILURE,
     MALFORMED_INPUT,
     INSUFFICIENT_RANK
+};
+
+enum class SegmentDecodeStatus : std::uint8_t {
+    PENDING,
+    COMPLETE,
+    EXPIRED
+};
+
+struct SegmentDecodeReport {
+    std::uint32_t segment_id = 0;
+    TransportImportance importance = TransportImportance::IMPORTANT;
+    SegmentDecodeStatus status = SegmentDecodeStatus::PENDING;
+    std::uint32_t decoder_rank = 0;
+    std::uint32_t required_rank = 0;
+    std::size_t recovered_bytes = 0;
+    std::uint64_t expires_at_ms = 0;
+    double target_reliability = 0.99;
+    // A completed exact decode is an observed success for this trial. This
+    // flag deliberately does not claim an ensemble reliability guarantee.
+    bool observed_target_met = false;
 };
 
 struct RecoveredSegment {
@@ -186,6 +214,8 @@ struct DecodeReport {
     std::uint32_t dependent_symbols = 0;
     std::uint32_t duplicate_symbols = 0;
     std::uint32_t malformed_symbols = 0;
+    std::uint32_t late_symbols = 0;
+    std::uint32_t expired_segments = 0;
     std::uint32_t decoder_rank = 0;
     std::uint32_t required_rank = 0;
     double coverage = 0.0;
@@ -195,6 +225,7 @@ struct DecodeReport {
     bool integrity_ok = false;
     std::uint64_t decode_time_us = 0;
     std::string failure_reason;
+    std::vector<SegmentDecodeReport> segment_reports;
     std::vector<RecoveredSegment> recovered_segments;
     std::vector<std::uint8_t> payload;
 
@@ -204,7 +235,9 @@ struct DecodeReport {
     }
 
     [[nodiscard]] bool terminal_failure() const {
-        return status == DecodeStatus::EXPIRED || status == DecodeStatus::INTEGRITY_FAILURE;
+        return status == DecodeStatus::SEGMENT_EXPIRED ||
+               status == DecodeStatus::EXPIRED ||
+               status == DecodeStatus::INTEGRITY_FAILURE;
     }
 };
 

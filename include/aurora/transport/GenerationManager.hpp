@@ -46,6 +46,14 @@ struct GenerationRepairResult {
 struct GenerationRuntimeState {
     std::uint64_t emitted_symbols = 0;
     std::uint64_t critical_emitted_symbols = 0;
+    struct SegmentState {
+        std::uint32_t segment_id = 0;
+        std::uint64_t emitted_symbols = 0;
+        std::uint32_t decoder_rank = 0;
+        bool complete = false;
+        bool expired = false;
+    };
+    std::vector<SegmentState> segments;
 };
 
 // Owns protocol/generation state only. Coding and adaptation are injected strategies.
@@ -114,9 +122,8 @@ public:
                 (requirement.length + symbol_size - 1) / symbol_size);
             segment.importance = requirement.importance;
             segment.target_reliability = requirement.target_reliability;
-            segment.deadline_ms = requirement.deadline_ms == 0
-                ? contract.deadline_ms()
-                : requirement.deadline_ms;
+            segment.deadline_ms = requirement.deadline_ms;
+            segment.expires_at_ms = saturating_add(now_ms, segment.deadline_ms);
             segment.coding.seed = segment_seed(
                 contract.experiment_seed, descriptor.generation_id, index);
             segment.coding.overhead_factor = std::clamp(
@@ -205,6 +212,8 @@ public:
             return *generation.terminal_report;
         }
 
+        expire_segments(generation, now_ms);
+
         bool saw_matching_packet = false;
         bool rank_increased = false;
         for (const auto& packet : received_packets) {
@@ -218,13 +227,6 @@ public:
                 ++generation.malformed_symbols;
                 continue;
             }
-            const PacketKey key{packet.segment_id, packet.fp.seed};
-            if (!generation.seen_packets.insert(key).second) {
-                ++generation.duplicate_symbols;
-                continue;
-            }
-            ++generation.symbols_observed;
-
             auto& segment = generation.segments[packet.segment_id];
             const auto expected_kind = segment.descriptor.importance == TransportImportance::CRITICAL
                 ? ::fec::SegmentKind::CRITICAL
@@ -233,6 +235,16 @@ public:
                 ++generation.malformed_symbols;
                 continue;
             }
+            if (segment.expired) {
+                ++generation.late_symbols;
+                continue;
+            }
+            const PacketKey key{packet.segment_id, packet.fp.seed};
+            if (!generation.seen_packets.insert(key).second) {
+                ++generation.duplicate_symbols;
+                continue;
+            }
+            ++generation.symbols_observed;
             switch (segment.decoder->push(packet.fp)) {
                 case ::fec::PushResult::INNOVATIVE:
                     ++generation.innovative_symbols;
@@ -278,6 +290,14 @@ public:
         if (generation.malformed_symbols > 0) {
             report.status = DecodeStatus::MALFORMED_INPUT;
             report.failure_reason = "one or more symbols did not match the generation descriptor";
+        } else if (report.expired_segments > 0) {
+            report.status = DecodeStatus::SEGMENT_EXPIRED;
+            report.failure_reason =
+                "one or more segments expired before exact recovery";
+            // Full-payload delivery is now impossible, so adaptation receives
+            // one failure signal even though remaining segments may continue
+            // to yield useful partial recovery reports.
+            apply_terminal_feedback(generation, report);
         } else if (report.critical_complete) {
             report.status = DecodeStatus::CRITICAL_SEGMENT_COMPLETE;
         } else if (rank_increased) {
@@ -302,7 +322,8 @@ public:
 
     GenerationRepairResult emit_repairs(const std::string& generation_id,
                                         std::uint32_t requested_symbols,
-                                        bool critical_only) {
+                                        bool critical_only,
+                                        std::uint64_t now_ms = 0) {
         auto found = generations_.find(generation_id);
         if (found == generations_.end()) {
             throw std::invalid_argument("repair emission: unknown generation id");
@@ -311,6 +332,7 @@ public:
         if (generation.terminal_report.has_value()) {
             throw std::logic_error("repair emission: generation is terminal");
         }
+        expire_segments(generation, now_ms);
 
         GenerationRepairResult result;
         result.generation_id = generation_id;
@@ -321,11 +343,14 @@ public:
                     generation.descriptor, generation.contract)) {
                 break;
             }
-            bool emitted = false;
+            std::optional<std::size_t> selected;
             for (std::size_t checked = 0; checked < generation.segments.size(); ++checked) {
                 const auto index = (generation.repair_segment_cursor + checked) %
                                    generation.segments.size();
                 auto& segment = generation.segments[index];
+                if (segment.expired || segment.recovered.has_value()) {
+                    continue;
+                }
                 if (critical_only &&
                     segment.descriptor.importance != TransportImportance::CRITICAL) {
                     continue;
@@ -340,25 +365,49 @@ public:
                         segment.descriptor, generation.contract)) {
                     continue;
                 }
-                result.packets.push_back(emit_next_packet(generation, segment));
-                ++result.emitted_symbols;
-                generation.repair_segment_cursor =
-                    (index + 1) % generation.segments.size();
-                emitted = true;
-                break;
+                if (!selected.has_value()) {
+                    selected = index;
+                    continue;
+                }
+                const auto& current = generation.segments[*selected].descriptor;
+                const auto& candidate = segment.descriptor;
+                if (candidate.importance < current.importance ||
+                    (candidate.importance == current.importance &&
+                     (candidate.target_reliability > current.target_reliability ||
+                      (candidate.target_reliability == current.target_reliability &&
+                       candidate.expires_at_ms < current.expires_at_ms)))) {
+                    selected = index;
+                }
             }
-            if (!emitted) break;
+            if (!selected.has_value()) break;
+            auto& segment = generation.segments[*selected];
+            result.packets.push_back(emit_next_packet(generation, segment));
+            ++result.emitted_symbols;
+            generation.repair_segment_cursor =
+                (*selected + 1) % generation.segments.size();
         }
         return result;
     }
 
     [[nodiscard]] std::optional<GenerationRuntimeState> runtime_state(
-        const std::string& generation_id) const {
+        const std::string& generation_id,
+        std::uint64_t now_ms = 0) const {
         const auto found = generations_.find(generation_id);
         if (found == generations_.end()) return std::nullopt;
-        return GenerationRuntimeState{
-            found->second.emitted_symbols,
-            found->second.critical_emitted_symbols};
+        GenerationRuntimeState state;
+        state.emitted_symbols = found->second.emitted_symbols;
+        state.critical_emitted_symbols = found->second.critical_emitted_symbols;
+        for (const auto& segment : found->second.segments) {
+            state.segments.push_back({
+                segment.descriptor.segment_id,
+                segment.emitted_symbols,
+                static_cast<std::uint32_t>(segment.decoder->rank()),
+                segment.recovered.has_value(),
+                segment.expired ||
+                    (!segment.recovered.has_value() &&
+                     now_ms > segment.descriptor.expires_at_ms)});
+        }
+        return state;
     }
 
     [[nodiscard]] std::size_t generation_count() const { return generations_.size(); }
@@ -373,6 +422,7 @@ private:
         std::unique_ptr<aurora::fec::SymbolDecoder> decoder;
         std::optional<std::vector<std::uint8_t>> recovered;
         std::uint64_t emitted_symbols = 0;
+        bool expired = false;
 
         SegmentDecoderState(const GenerationSegmentDescriptor& value,
                             const aurora::fec::GenerationCodec& codec,
@@ -420,6 +470,7 @@ private:
         std::uint32_t dependent_symbols = 0;
         std::uint32_t duplicate_symbols = 0;
         std::uint32_t malformed_symbols = 0;
+        std::uint32_t late_symbols = 0;
         bool policy_feedback_applied = false;
         std::optional<DecodeReport> terminal_report;
     };
@@ -609,7 +660,7 @@ private:
 
     static void recover_complete_segments(GenerationState& generation) {
         for (auto& segment : generation.segments) {
-            if (segment.recovered.has_value() ||
+            if (segment.expired || segment.recovered.has_value() ||
                 segment.decoder->rank() != static_cast<int>(segment.descriptor.source_symbol_count)) {
                 continue;
             }
@@ -630,14 +681,32 @@ private:
         report.dependent_symbols = generation.dependent_symbols;
         report.duplicate_symbols = generation.duplicate_symbols;
         report.malformed_symbols = generation.malformed_symbols;
+        report.late_symbols = generation.late_symbols;
 
         bool has_critical = false;
         bool all_critical = true;
         for (const auto& segment : generation.segments) {
-            report.decoder_rank += static_cast<std::uint32_t>(segment.decoder->rank());
+            const auto rank = static_cast<std::uint32_t>(segment.decoder->rank());
+            report.decoder_rank += rank;
+            const auto segment_status = segment.recovered.has_value()
+                ? SegmentDecodeStatus::COMPLETE
+                : segment.expired
+                    ? SegmentDecodeStatus::EXPIRED
+                    : SegmentDecodeStatus::PENDING;
+            report.segment_reports.push_back({
+                segment.descriptor.segment_id,
+                segment.descriptor.importance,
+                segment_status,
+                rank,
+                segment.descriptor.source_symbol_count,
+                segment.recovered.has_value() ? segment.descriptor.length : 0,
+                segment.descriptor.expires_at_ms,
+                segment.descriptor.target_reliability,
+                segment.recovered.has_value()});
+            if (segment.expired) ++report.expired_segments;
             if (segment.descriptor.importance == TransportImportance::CRITICAL) {
                 has_critical = true;
-                all_critical = all_critical && segment.recovered.has_value();
+                all_critical = all_critical && segment.recovered.has_value() && !segment.expired;
             }
             if (segment.recovered.has_value()) {
                 report.recovered_bytes += segment.descriptor.length;
@@ -653,6 +722,15 @@ private:
             : static_cast<double>(report.recovered_bytes) /
               static_cast<double>(report.source_bytes);
         return report;
+    }
+
+    static void expire_segments(GenerationState& generation, std::uint64_t now_ms) {
+        for (auto& segment : generation.segments) {
+            if (!segment.recovered.has_value() &&
+                now_ms > segment.descriptor.expires_at_ms) {
+                segment.expired = true;
+            }
+        }
     }
 
     static DecodeReport finish_timing(
