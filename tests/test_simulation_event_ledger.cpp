@@ -73,13 +73,17 @@ aurora::telemetry::SimulationStepEvent first_event(
 
 aurora::telemetry::SimulationStepEvent next_event(
     const aurora::telemetry::SimulationEventSession& session,
-    const aurora::telemetry::SimulationStepEvent& previous) {
+    const aurora::telemetry::SimulationStepEvent& previous,
+    std::uint64_t step = 1,
+    std::uint32_t active_generation_index = 1,
+    std::uint32_t arrived_generation_index = 1,
+    std::uint64_t arrived_source_packets = 3) {
     aurora::telemetry::SimulationStepEvent event;
-    event.step = 1;
-    event.simulated_now_ms = 1'000;
-    event.active_generation_index = 1;
-    event.arrived_generation_index = 1;
-    event.arrived_source_packets = 3;
+    event.step = step;
+    event.simulated_now_ms = step * 1'000;
+    event.active_generation_index = active_generation_index;
+    event.arrived_generation_index = arrived_generation_index;
+    event.arrived_source_packets = arrived_source_packets;
     event.random_before = previous.random_after_action;
     event.source_energy_before_tick_j = previous.source_energy_after_action_j;
     event.source_energy_after_tick_j = event.source_energy_before_tick_j + 0.08;
@@ -90,7 +94,8 @@ aurora::telemetry::SimulationStepEvent next_event(
         event.destination_energy_before_tick_j + 0.08;
     event.destination_energy_after_action_j =
         event.destination_energy_after_tick_j;
-    event.source_buffer_before = previous.source_buffer_after_action + 3;
+    event.source_buffer_before = previous.source_buffer_after_action +
+        arrived_source_packets;
     event.source_buffer_after_action = event.source_buffer_before;
     event.destination_buffer_before = previous.destination_buffer_after_action;
     event.destination_inbox_before = previous.destination_inbox_after_action;
@@ -109,7 +114,8 @@ aurora::telemetry::SimulationStepEvent next_event(
     event.snr_optical_db = environment.snr_optical_db;
     event.snr_backscatter_db = environment.snr_backscatter_db;
     event.ris_phases = environment.ris_phases;
-    event.contact_available = session.contact_schedule.availability_at(1'000);
+    event.contact_available = session.contact_schedule.availability_at(
+        event.simulated_now_ms);
     return event;
 }
 
@@ -125,23 +131,25 @@ int main() {
     ledger.record(event);
 
     const auto encoded = ledger.serialize();
-    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V4\n"));
+    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V5\n"));
     assert(encoded == ledger.serialize());
     const auto restored = SimulationEventLedger::deserialize(encoded);
     assert(restored.serialize() == encoded);
+    assert(restored.session().generation_scheduling_policy ==
+           metadata.generation_scheduling_policy);
     assert(restored.records().size() == 1);
     const auto structure = restored.verify_structure();
     assert(structure.ok);
     assert(structure.records_verified == 1);
 
-    auto legacy_v3 = encoded;
-    legacy_v3.replace(
+    auto legacy_v4 = encoded;
+    legacy_v4.replace(
         0,
-        std::string("AURORA_SIMULATION_EVENT_LEDGER_V4").size(),
-        "AURORA_SIMULATION_EVENT_LEDGER_V3");
+        std::string("AURORA_SIMULATION_EVENT_LEDGER_V5").size(),
+        "AURORA_SIMULATION_EVENT_LEDGER_V4");
     bool legacy_rejected = false;
     try {
-        (void)SimulationEventLedger::deserialize(legacy_v3);
+        (void)SimulationEventLedger::deserialize(legacy_v4);
     } catch (const std::invalid_argument&) {
         legacy_rejected = true;
     }
@@ -210,7 +218,70 @@ int main() {
     fifo_tamper.record(wrong_active);
     const auto fifo_result = fifo_tamper.verify_structure();
     assert(!fifo_result.ok);
-    assert(fifo_result.failure_reason.find("priority/deadline schedule") !=
+    assert(fifo_result.failure_reason.find("aging/fairness schedule") !=
+           std::string::npos);
+
+    auto fairness_metadata = metadata;
+    fairness_metadata.initial_random_state =
+        concurrent_metadata.initial_random_state;
+    fairness_metadata.generation_scheduling_policy = {1'000, 2'000, 3'000};
+    fairness_metadata.generation_arrival_schedule =
+        aurora::simulation::GenerationArrivalSchedule({
+            {0, "alpha", aurora::simulation::GenerationServiceClass::ELASTIC,
+             50'000},
+            {1'000, "beta",
+             aurora::simulation::GenerationServiceClass::CRITICAL, 50'000}});
+    fairness_metadata.generations = {
+        {0, "alpha", "fairness-generation-alpha", 0xA123ULL, 2, 3,
+         aurora::transport::TransportImportance::ELASTIC, 50'000},
+        {1'000, "beta", "fairness-generation-beta", 0xB123ULL, 2, 3,
+         aurora::transport::TransportImportance::CRITICAL, 51'000}};
+    auto fairness_first = first_event(fairness_metadata);
+    fairness_first.random_before = fairness_metadata.initial_random_state;
+    const auto fairness_environment =
+        aurora::telemetry::derive_simulation_environment(
+            fairness_metadata, fairness_first.random_before,
+            fairness_first.entropy_residual);
+    fairness_first.random_after_ris = fairness_environment.random_after_ris;
+    fairness_first.random_after_action = fairness_environment.random_after_ris;
+    fairness_first.illumination = fairness_environment.illumination;
+    fairness_first.world_gain = fairness_environment.world_gain;
+    fairness_first.snr_rf_db = fairness_environment.snr_rf_db;
+    fairness_first.snr_optical_db = fairness_environment.snr_optical_db;
+    fairness_first.snr_backscatter_db = fairness_environment.snr_backscatter_db;
+    fairness_first.ris_phases = fairness_environment.ris_phases;
+    auto fairness_second = next_event(
+        fairness_metadata, fairness_first, 1, 1, 1, 3);
+    auto fairness_third = next_event(
+        fairness_metadata, fairness_second, 2, 1,
+        aurora::telemetry::SimulationStepEvent::no_generation_arrival, 0);
+    auto fairness_fourth = next_event(
+        fairness_metadata, fairness_third, 3, 0,
+        aurora::telemetry::SimulationStepEvent::no_generation_arrival, 0);
+    SimulationEventLedger fairness_ledger;
+    fairness_ledger.begin(fairness_metadata);
+    fairness_ledger.record(fairness_first);
+    fairness_ledger.record(fairness_second);
+    fairness_ledger.record(fairness_third);
+    fairness_ledger.record(fairness_fourth);
+    const auto fairness_result = fairness_ledger.verify_structure();
+    if (!fairness_result.ok) {
+        std::cerr << "fairness verification failed: "
+                  << fairness_result.failure_reason << '\n';
+    }
+    assert(fairness_result.ok);
+    assert(fairness_result.records_verified == 4);
+
+    fairness_fourth.active_generation_index = 1;
+    SimulationEventLedger starvation_tamper;
+    starvation_tamper.begin(fairness_metadata);
+    starvation_tamper.record(fairness_first);
+    starvation_tamper.record(fairness_second);
+    starvation_tamper.record(fairness_third);
+    starvation_tamper.record(fairness_fourth);
+    const auto starvation_result = starvation_tamper.verify_structure();
+    assert(!starvation_result.ok);
+    assert(starvation_result.failure_reason.find("aging/fairness schedule") !=
            std::string::npos);
 
     auto corrupted = encoded;

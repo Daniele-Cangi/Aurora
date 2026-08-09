@@ -23,8 +23,9 @@ All notable changes to Aurora-X will be documented in this file.
 - Canonical checksum-chained `ContactSchedule` files with half-open, non-overlapping windows and per-link RF/optical/backscatter availability.
 - `aurora_contact_schedule` creates validated schedules from explicit time/link specifications for repeatable simulator and CI runs.
 - Canonical checksum-chained `GenerationArrivalSchedule` files plus `aurora_generation_arrivals` for deterministic external generation releases.
-- Deterministic priority-then-EDF simulation of multiple arrived generations with stable arrival/index tie-breaks, preemption, generation-qualified packet replay, per-generation rank continuity and exact schedule round-tripping.
+- Deterministic aging/fair priority-then-EDF simulation of multiple arrived generations with stable fairness-deadline/arrival/index tie-breaks, preemption, generation-qualified packet replay, per-generation rank continuity and exact schedule round-tripping.
 - Shared `GenerationScheduler` selection logic and tests for priority, earliest-deadline, stable tie-break and invalid-candidate rejection.
+- Bounded starvation prevention: one-class promotion every 2000 ms, a 3000 ms fairness deadline and a replayable maximum service gap of `3000 + (N - 1) * 1000` ms.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
 - Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
@@ -44,6 +45,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Upgraded decision provenance to V6 and simulator ledgers to V2 so contact availability is serialized, safety-constrained and cross-checked against the embedded schedule; V5/V1 artifacts must be regenerated.
 - Upgraded simulator ledgers to V3 so the canonical arrival schedule, every generation identity, timed packet release, active generation and per-generation rank are replayed; V1/V2 artifacts must be regenerated.
 - Upgraded generation-arrival schedules to V2 and simulator ledgers to V4 so resolved service class, descriptor expiry and priority/deadline selection are independently replayed; V1 schedules and V1–V3 ledgers must be regenerated.
+- Upgraded simulator ledgers to V5 so scheduling intervals and per-generation last-service state independently reconstruct aging, fairness-lane entry and the starvation bound; V1–V4 ledgers must be regenerated.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.

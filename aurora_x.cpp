@@ -401,6 +401,7 @@ struct Engine {
     aurora::simulation::ContactSchedule::always_available();
   aurora::simulation::GenerationArrivalSchedule generation_arrival_schedule =
     aurora::simulation::GenerationArrivalSchedule::single_immediate();
+  aurora::simulation::GenerationSchedulingPolicy generation_scheduling_policy;
 
   struct ScheduledGeneration {
     aurora::simulation::GenerationArrival arrival;
@@ -417,6 +418,7 @@ struct Engine {
     bool arrived = false;
     bool terminal = false;
     bool delivered = false;
+    optional<uint64_t> last_served_at_ms;
   };
   vector<ScheduledGeneration> scheduled_generations;
   size_t active_generation_index = 0;
@@ -503,7 +505,16 @@ struct Engine {
     activate_generation(0);
     begin_simulation_event_session(source, *net.get("DST"));
     cout << "[GENERATION_SCHEDULE] arrivals=" << scheduled_generations.size()
-         << " fingerprint=" << generation_arrival_schedule.fingerprint() << endl;
+         << " fingerprint=" << generation_arrival_schedule.fingerprint()
+         << " quantum_ms="
+         << generation_scheduling_policy.service_quantum_ms
+         << " aging_ms=" << generation_scheduling_policy.aging_interval_ms
+         << " starvation_ms="
+         << generation_scheduling_policy.starvation_limit_ms
+         << " maximum_gap_ms="
+         << aurora::simulation::maximum_service_gap_ms(
+              generation_scheduling_policy, scheduled_generations.size())
+         << endl;
   }
 
   void activate_generation(size_t index) {
@@ -556,12 +567,14 @@ struct Engine {
         generation.descriptor.expires_at_ms,
         generation.scheduling_importance,
         generation.arrived,
-        generation.terminal});
+        generation.terminal,
+        generation.last_served_at_ms});
     }
     if (const auto selected =
           aurora::simulation::select_scheduled_generation(
-            candidates, simulated_now_ms)) {
+            candidates, simulated_now_ms, generation_scheduling_policy)) {
       activate_generation(*selected);
+      scheduled_generations[*selected].last_served_at_ms = simulated_now_ms;
       return;
     }
     for (size_t index = scheduled_generations.size(); index-- > 0;) {
@@ -606,6 +619,7 @@ struct Engine {
     }
     session.contact_schedule = contact_schedule;
     session.generation_arrival_schedule = generation_arrival_schedule;
+    session.generation_scheduling_policy = generation_scheduling_policy;
     session.generations.reserve(scheduled_generations.size());
     for (const auto& generation : scheduled_generations) {
       session.generations.push_back({
