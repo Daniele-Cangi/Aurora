@@ -18,6 +18,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Independent segment expiry, late-symbol accounting, per-segment decode reports, and reliability-prioritized runtime repair selection.
 - V5 decision traces with replayable proposal inputs/state, per-attempt LBT, channel, energy and simulation-duty transitions, plus complete bounded supervisory-controller snapshots.
 - Deterministic cross-layer proposal derivation from selector memory, UCB statistics, epoch and an isolated RNG state, including replayable post-execution UCB feedback.
+- Checksum-chained `SimulationEventLedger` records the current simulator's fixed topology, initial generation arrival, harvesting/ingest transitions, RIS phases, channel summaries, buffer/inbox movement, decoder rank and global RNG checkpoints.
+- Cross-ledger replay reconstructs RIS jitter, world gain, channel history, LBT samples, fading and pacing randomness, and rejects semantic tampering even when the event file is structurally valid.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
 - Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
@@ -28,6 +30,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
 - Made simulation and coding randomness reproducible from the contract seed.
 - Added `--decision-trace <path>` to the main simulator.
+- Added `--event-ledger <path>` and optional paired event-ledger verification to `aurora_replay`.
 - Upgraded decision provenance to V5: proposal derivation, selector/RNG advancement, UCB feedback, per-attempt HAL/channel/resource transitions, and safety-window/operating-mode transitions are independently reconstructed and checked for cross-record continuity.
 - V2 through V4 decision traces are no longer accepted because they cannot provide the complete V5 proposal, action and supervisory evidence and must be regenerated.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.

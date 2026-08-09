@@ -57,10 +57,10 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
-| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V5 decision traces that reconstruct proposal derivation, UCB feedback, action execution and supervisory state, plus checksum-chained benchmark channel traces | Per-action controller replay is deterministic from recorded simulation evidence; contact generation, inter-step harvesting/RIS evolution and physical hardware remain outside the trace |
+| Telemetry and replay | Implemented prototype | JSONL engine telemetry, V5 decision traces, checksum-chained simulator event ledgers and benchmark channel traces; paired replay reconstructs the current fixed-topology, single-generation timeline from harvesting and RIS through proposal, action, arrival and supervision | Scheduled contact changes, multiple external generation arrivals and physical hardware remain outside the current event model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty refusal, critical scheduling, proposal/RNG/UCB replay, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
-| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, replayable channel/action traces, Wilson confidence intervals, per-trial records, safety-decision replay, and configure-time commit/compiler/build/profile fingerprints in benchmark output | Provenance records the producing build but does not authenticate it; complete inter-step simulator event replay is not implemented |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty refusal, critical scheduling, proposal/RNG/UCB replay, simulator event replay, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
+| Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, paired simulator-event/decision replay, replayable benchmark channel traces, Wilson confidence intervals, per-trial records and configure-time build/profile fingerprints | Provenance and checksum chains detect reproducibility failures and corruption but do not authenticate the producing build |
 
 ---
 
@@ -245,6 +245,7 @@ include/aurora/
   transport/                 Contract, descriptor, manager, report and health
   safety/SafetyEnvelope.hpp  Hard transport-decision constraints and trace
   telemetry/DecisionReplayLog.hpp  Canonical decision log and verifier
+  telemetry/SimulationEventLedger.hpp  Inter-step simulator event ledger
   simulation/ChannelTrace.hpp      Canonical channel traces and generators
   simulation/BaselineBenchmark.hpp Replayable statistical comparison harness
 apps/
@@ -260,6 +261,7 @@ tests/
   test_modular_transport.cpp
   test_baseline_benchmark.cpp
   test_channel_trace.cpp
+  test_simulation_event_ledger.cpp
 aurora_batch_test.cpp        Experimental parameter sweep harness
 aurora_udp_*.cpp             UDP transport experiments
 aurora_dash_lab.py           Live monitoring dashboard
@@ -301,7 +303,18 @@ Record and independently replay safety decisions:
 ./build/bin/aurora_replay decision-trace.log
 ```
 
-The V5 replay first derives the exact transport proposal from recorded SNR/PER summaries, urgency inputs, operating mode, selector memory, UCB statistics, epoch and isolated RNG state. It then recomputes each `SafetyEnvelope` decision and validates every admitted attempt, including LBT from recorded RSSI samples, channel delivery from recorded SNR/coding/fading/threshold evidence, and exact energy/duty transitions. Finally it applies execution feedback to UCB and reconstructs the bounded supervisory transition, enforcing state continuity across records. Recorded samples remain simulation evidence rather than calibrated physical measurements; contact generation, inter-step harvesting, RIS evolution and real `FIELD_BUILD` hardware are not reconstructed.
+Record and replay the complete event stream implemented by the current simulator:
+
+```bash
+./build/bin/aurora_x \
+  --decision-trace decision-trace.log \
+  --event-ledger simulation-events.log
+./build/bin/aurora_replay decision-trace.log simulation-events.log
+```
+
+The paired verifier first reconstructs each harvesting/ingest transition, deterministic RIS perturbation, illumination, world gain and SNR summary from the session topology and global RNG checkpoints. It then derives the exact V5 proposal, recomputes the `SafetyEnvelope` decision, and validates LBT samples, fading, delivery, energy/duty, pacing randomness and destination inbox arrivals. Finally it applies UCB and supervisory feedback while enforcing RNG, energy, buffer, inbox and decoder-rank continuity across steps.
+
+This closes the inter-step replay gap for the current fixed-topology, single-generation simulator. The ledger records an initial generation arrival at simulation time zero; it does not invent scheduled contacts or multiple external arrivals that the simulator does not yet implement. All samples remain simulation evidence rather than calibrated measurements, and real `FIELD_BUILD` hardware is not reconstructed.
 
 V2 through V4 traces do not contain the complete V5 proposal, action and supervisory evidence and are intentionally rejected; regenerate them with the current simulator.
 
