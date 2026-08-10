@@ -369,6 +369,14 @@ if(BUILD_TESTING)
   set_tests_properties(
     aurora.impairment_trace PROPERTIES LABELS "emulation;regression")
 
+  add_executable(
+    test_process_authentication tests/test_process_authentication.cpp)
+  aurora_link_common(test_process_authentication)
+  add_test(
+    NAME aurora.process_authentication COMMAND test_process_authentication)
+  set_tests_properties(
+    aurora.process_authentication PROPERTIES LABELS "emulation;security;regression")
+
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(
@@ -377,7 +385,9 @@ if(BUILD_TESTING)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_emulation.py"
         "$<TARGET_FILE:aurora_process_emulation>"
         "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_timed_v2.trace"
-        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_feedback_v2.trace")
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_feedback_v2.trace"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_auth_test.key"
+        "0123456789abcdef")
     set_tests_properties(
       aurora.process_separated_emulation
       PROPERTIES

@@ -14,15 +14,17 @@ def free_port(excluded=None):
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) != 6:
         raise SystemExit(
             "usage: run_process_emulation.py <emulator> <forward-trace> "
-            "<reverse-trace>"
+            "<reverse-trace> <key-file> <session-id-hex>"
         )
 
     executable = sys.argv[1]
     trace = sys.argv[2]
     reverse_trace = sys.argv[3]
+    key_file = sys.argv[4]
+    session_id = sys.argv[5]
     forward_port = free_port()
     feedback_port = free_port(forward_port)
     receiver = subprocess.Popen(
@@ -35,6 +37,8 @@ def main():
             str(feedback_port),
             "2",
             reverse_trace,
+            key_file,
+            session_id,
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -51,6 +55,8 @@ def main():
                 "127.0.0.1",
                 str(feedback_port),
                 trace,
+                key_file,
+                session_id,
             ],
             capture_output=True,
             text=True,
@@ -79,6 +85,9 @@ def main():
             raise RuntimeError(
                 f"reordered feedback was not rejected monotonically: {sender.stdout}"
             )
+        sender_replay = re.search(r"replay_rejected=(\d+)", sender.stdout)
+        if not sender_replay or int(sender_replay.group(1)) == 0:
+            raise RuntimeError(f"reverse replay was not rejected: {sender.stdout}")
         delayed = re.search(r"impairment_delayed=(\d+)", sender.stdout)
         reordered = re.search(r"impairment_reordered=(\d+)", sender.stdout)
         if not delayed or not reordered or int(delayed.group(1)) == 0 or int(reordered.group(1)) == 0:
@@ -87,6 +96,15 @@ def main():
             raise RuntimeError(f"missing per-generation evidence: {receiver_stdout}")
         if "receiver_complete generations=2" not in receiver_stdout:
             raise RuntimeError(f"missing receiver evidence: {receiver_stdout}")
+        receiver_replay = re.search(
+            r"replay_rejected=(\d+)", receiver_stdout
+        )
+        if not receiver_replay or int(receiver_replay.group(1)) == 0:
+            raise RuntimeError(
+                f"forward replay was not rejected: {receiver_stdout}"
+            )
+        if "auth_profile=" not in sender.stdout or "auth_profile=" not in receiver_stdout:
+            raise RuntimeError("missing authentication profile evidence")
         reverse_delayed = re.search(r"reverse_delayed=(\d+)", receiver_stdout)
         reverse_reordered = re.search(r"reverse_reordered=(\d+)", receiver_stdout)
         reverse_dropped = re.search(r"reverse_dropped=(\d+)", receiver_stdout)
