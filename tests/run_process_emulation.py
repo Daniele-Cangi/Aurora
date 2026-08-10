@@ -46,6 +46,14 @@ def main():
     )
 
     try:
+        ready_line = receiver.stdout.readline()
+        if "receiver_ready" not in ready_line:
+            receiver_stdout, receiver_stderr = receiver.communicate(timeout=3)
+            raise RuntimeError(
+                "receiver did not publish readiness\n"
+                f"stdout:\n{ready_line}{receiver_stdout}\n"
+                f"stderr:\n{receiver_stderr}"
+            )
         sender = subprocess.run(
             [
                 executable,
@@ -68,7 +76,8 @@ def main():
                 f"sender failed ({sender.returncode})\n"
                 f"stdout:\n{sender.stdout}\nstderr:\n{sender.stderr}"
             )
-        receiver_stdout, receiver_stderr = receiver.communicate(timeout=10)
+        receiver_tail, receiver_stderr = receiver.communicate(timeout=10)
+        receiver_stdout = ready_line + receiver_tail
         if receiver.returncode != 0:
             raise RuntimeError(
                 f"receiver failed ({receiver.returncode})\n"
@@ -96,6 +105,10 @@ def main():
             raise RuntimeError(f"missing per-generation evidence: {receiver_stdout}")
         if "receiver_complete generations=2" not in receiver_stdout:
             raise RuntimeError(f"missing receiver evidence: {receiver_stdout}")
+        if "startup_timeout_ms=60000" not in receiver_stdout:
+            raise RuntimeError(f"missing startup timeout evidence: {receiver_stdout}")
+        if "service_timeout_ms=15000" not in receiver_stdout:
+            raise RuntimeError(f"missing service timeout evidence: {receiver_stdout}")
         receiver_replay = re.search(
             r"replay_rejected=(\d+)", receiver_stdout
         )

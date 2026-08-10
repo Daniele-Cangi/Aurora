@@ -385,11 +385,20 @@ snapshots. See [`benchmarks/raw_public_host_evidence_v1.txt`](benchmarks/raw_pub
 
 This record demonstrates one successful raw-routed emulation topology. It is
 not a latency, goodput, availability, cost, or field-performance claim. VM
-provisioning and SSH setup were outside the measurement, and the two roles had
-to be launched concurrently because descriptor establishment currently has a
-15-second process timeout.
+provisioning and SSH setup were outside the measurement. That historical run
+used concurrent launches because its receiver had one 15-second process
+timeout covering both startup and service.
 
-For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. The receiver must be listening before the sender starts, and remote launch/setup latency must not consume its current 15-second establishment window. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP record supplies one raw-routed VM result; neither is physical-host or calibrated timing evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
+Current receivers emit a flushed `receiver_ready` record after the socket,
+trace, and authenticator are ready. Startup and service use independent
+budgets: 60 seconds for the first valid authenticated descriptor and 15
+seconds from that descriptor to completion by default. Both can be overridden
+as the final two receiver arguments, in milliseconds. The regression test
+delays the sender longer than the configured service budget and proves that
+startup does not consume service time; it also verifies the distinct startup
+timeout failure.
+
+For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP record supplies one raw-routed VM result; neither is physical-host or calibrated timing evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:
 
@@ -644,4 +653,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; a retained manual GCP record adds one successful cross-region, non-peered-VPC public-IPv4 run. The next obligation is to automate that raw-routed topology, separate launch readiness from the fixed descriptor timeout, and collect calibrated end-to-end timing before hardware work.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; a retained manual GCP record adds one successful cross-region, non-peered-VPC public-IPv4 run. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. The next obligation is to automate the raw-routed topology and collect calibrated end-to-end timing before hardware work.

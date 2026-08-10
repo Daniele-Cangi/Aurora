@@ -163,6 +163,9 @@ jobs:
             echo "forward_port=47001"
             echo "reverse_port=47002"
             echo "authentication_profile=hmac-sha256-libsodium"
+            echo "receiver_ready=$(grep -c '^receiver_ready ' receiver.log)"
+            echo "startup_timeout_ms=60000"
+            echo "service_timeout_ms=15000"
             echo "source_commit=$(cat remote-bundle/source-commit.txt)"
             echo "binary_sha256=$(cut -d ' ' -f 1 remote-bundle/binary.sha256)"
             echo "exit_status=${status}"
@@ -235,6 +238,11 @@ jobs:
             receiver-manifest.txt
           grep -q '^authentication_profile=hmac-sha256-libsodium$' \
             sender-manifest.txt
+          grep -q '^receiver_ready=1$' receiver-manifest.txt
+          grep -q '^startup_timeout_ms=60000$' receiver-manifest.txt
+          grep -q '^service_timeout_ms=15000$' receiver-manifest.txt
+          grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=15000 ' \
+            receiver.log
           grep -q 'receiver_complete generations=2' receiver.log
           grep -q 'sender_complete generations=2' sender.log
           grep -q 'feedback_applied=2' sender.log

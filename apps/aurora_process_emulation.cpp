@@ -219,6 +219,16 @@ std::size_t parse_generation_count(const char* value) {
     return static_cast<std::size_t>(parsed);
 }
 
+std::uint64_t parse_timeout_ms(const char* value) {
+    std::size_t consumed = 0;
+    const auto parsed = std::stoull(value, &consumed, 10);
+    if (value[consumed] != '\0' || parsed == 0 || parsed > 600'000) {
+        throw std::invalid_argument(
+            "process emulation: timeout must be 1..600000 milliseconds");
+    }
+    return parsed;
+}
+
 std::uint64_t elapsed_ms(
     const std::chrono::steady_clock::time_point& started) {
     return static_cast<std::uint64_t>(
@@ -496,14 +506,17 @@ int run_receiver(std::string_view forward_bind_host,
                  std::size_t expected_generations,
                  const std::string& reverse_trace_path,
                  const std::string& key_path,
-                 std::uint64_t session_id) {
+                 std::uint64_t session_id,
+                 std::uint64_t startup_timeout_ms,
+                 std::uint64_t service_timeout_ms) {
     UdpSocket forward_socket(forward_bind_host, forward_port);
     UdpSocket feedback_socket("0.0.0.0", 0);
     aurora::fec::ExperimentalLtLikeCodec codec;
     std::unordered_map<std::string,
         std::unique_ptr<aurora::transport::GenerationReceiver>> receivers;
     std::unordered_set<std::string> completed;
-    const auto started = std::chrono::steady_clock::now();
+    const auto readiness_started = std::chrono::steady_clock::now();
+    std::optional<std::chrono::steady_clock::time_point> service_started;
     const auto reverse_trace =
         aurora::emulation::ImpairmentTrace::load(reverse_trace_path);
     const aurora::emulation::ProcessAuthenticator authenticator(
@@ -529,6 +542,14 @@ int run_receiver(std::string_view forward_bind_host,
     std::uint64_t reverse_auth_sequence = 0;
     std::uint32_t authentication_rejections = 0;
     std::uint32_t replay_rejections = 0;
+
+    std::cout << "receiver_ready forward_port=" << forward_port
+              << " feedback_port=" << feedback_port
+              << " startup_timeout_ms=" << startup_timeout_ms
+              << " service_timeout_ms=" << service_timeout_ms
+              << " auth_profile="
+              << aurora::emulation::ProcessAuthenticator::profile()
+              << std::endl;
 
     auto flush_feedback = [&](bool flush_all) {
         while (!pending_feedback.empty()) {
@@ -584,7 +605,17 @@ int run_receiver(std::string_view forward_bind_host,
         flush_feedback(false);
     };
 
-    while (elapsed_ms(started) < 15'000) {
+    while (true) {
+        if (!service_started &&
+            elapsed_ms(readiness_started) >= startup_timeout_ms) {
+            throw std::runtime_error(
+                "process emulation: receiver startup timed out");
+        }
+        if (service_started &&
+            elapsed_ms(*service_started) >= service_timeout_ms) {
+            throw std::runtime_error(
+                "process emulation: receiver service timed out");
+        }
         const auto wire_datagram = forward_socket.receive();
         if (!wire_datagram) {
             flush_feedback(false);
@@ -619,7 +650,11 @@ int run_receiver(std::string_view forward_bind_host,
                     throw std::invalid_argument(
                         "process emulation: conflicting descriptor");
                 }
-                const auto report = found->second->integrate({}, elapsed_ms(started));
+                if (!service_started) {
+                    service_started = std::chrono::steady_clock::now();
+                }
+                const auto report = found->second->integrate(
+                    {}, elapsed_ms(*service_started));
                 send_feedback(aurora::emulation::encode_feedback({
                     descriptor.descriptor_fingerprint, report}));
                 continue;
@@ -631,7 +666,8 @@ int run_receiver(std::string_view forward_bind_host,
             const auto found = receivers.find(packet.generation_id);
             if (found == receivers.end()) continue;
             const auto report =
-                found->second->integrate({packet}, elapsed_ms(started));
+                found->second->integrate({packet},
+                                         elapsed_ms(*service_started));
             const auto feedback = aurora::emulation::encode_feedback({
                 found->second->descriptor().descriptor_fingerprint, report});
             send_feedback(feedback);
@@ -674,7 +710,6 @@ int run_receiver(std::string_view forward_bind_host,
             // Malformed datagrams are isolated to the receiver boundary.
         }
     }
-    throw std::runtime_error("process emulation: receiver timed out");
 }
 
 } // namespace
@@ -683,7 +718,8 @@ int main(int argc, char* argv[]) {
     try {
         const auto role = argc > 1 ? std::string_view(argv[1]) : "";
         const bool sender_arguments = role == "sender" && argc == 9;
-        const bool receiver_arguments = role == "receiver" && argc == 10;
+        const bool receiver_arguments =
+            role == "receiver" && (argc == 10 || argc == 12);
         if (!sender_arguments && !receiver_arguments) {
             std::cerr << "usage: aurora_process_emulation "
                          "sender <forward-host> <forward-port> "
@@ -693,7 +729,8 @@ int main(int argc, char* argv[]) {
                          "<forward-bind-host> <forward-port> "
                          "<feedback-host> <feedback-port> <generation-count> "
                          "<reverse-trace-file> <key-file> "
-                         "<session-id-hex>\n";
+                         "<session-id-hex> [startup-timeout-ms "
+                         "service-timeout-ms]\n";
             return 2;
         }
         SocketRuntime runtime;
@@ -711,10 +748,15 @@ int main(int argc, char* argv[]) {
         }
         if (role == "receiver") {
             const auto count = parse_generation_count(argv[6]);
+            const auto startup_timeout_ms =
+                argc == 12 ? parse_timeout_ms(argv[10]) : 60'000;
+            const auto service_timeout_ms =
+                argc == 12 ? parse_timeout_ms(argv[11]) : 15'000;
             return run_receiver(argv[2], forward_port, argv[4],
                                 feedback_port, count, argv[7], argv[8],
                                 aurora::emulation::ProcessAuthenticator::
-                                    parse_session_id(argv[9]));
+                                    parse_session_id(argv[9]),
+                                startup_timeout_ms, service_timeout_ms);
         }
         throw std::invalid_argument("process emulation: unknown role");
     } catch (const std::exception& error) {
