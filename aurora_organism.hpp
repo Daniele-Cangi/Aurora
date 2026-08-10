@@ -17,6 +17,7 @@ namespace aurora {
 using transport::DecodeReport;
 using transport::DecodeStatus;
 using transport::GenerationDescriptor;
+using transport::GenerationIdentity;
 using transport::GenerationSegmentDescriptor;
 using transport::TransportContract;
 using transport::TransportImportance;
@@ -54,7 +55,20 @@ public:
     [[nodiscard]] virtual FlowProfile build_profile(
         const TransportContract& contract) const = 0;
 
+    virtual GenerationIdentity reserve_identity(
+        const TransportContract& contract,
+        const std::string& token_id,
+        const std::vector<std::uint8_t>& payload_bytes) = 0;
+
     virtual OrganismSpawnResult spawn(
+        const TransportContract& contract,
+        const std::string& token_id,
+        const std::vector<std::uint8_t>& payload_bytes,
+        std::size_t symbol_size = 128,
+        std::uint64_t now_ms = 0) = 0;
+
+    virtual OrganismSpawnResult spawn_reserved(
+        const GenerationIdentity& identity,
         const TransportContract& contract,
         const std::string& token_id,
         const std::vector<std::uint8_t>& payload_bytes,
@@ -101,6 +115,13 @@ public:
         return manager_.build_profile(contract);
     }
 
+    GenerationIdentity reserve_identity(
+        const TransportContract& contract,
+        const std::string& token_id,
+        const std::vector<std::uint8_t>& payload_bytes) override {
+        return manager_.reserve_identity(contract, token_id, payload_bytes);
+    }
+
     OrganismSpawnResult spawn(
         const TransportContract& contract,
         const std::string& token_id,
@@ -108,6 +129,17 @@ public:
         std::size_t symbol_size = 128,
         std::uint64_t now_ms = 0) override {
         return manager_.spawn(contract, token_id, payload_bytes, symbol_size, now_ms);
+    }
+
+    OrganismSpawnResult spawn_reserved(
+        const GenerationIdentity& identity,
+        const TransportContract& contract,
+        const std::string& token_id,
+        const std::vector<std::uint8_t>& payload_bytes,
+        std::size_t symbol_size = 128,
+        std::uint64_t now_ms = 0) override {
+        return manager_.spawn_reserved(
+            identity, contract, token_id, payload_bytes, symbol_size, now_ms);
     }
 
     DecodeReport integrate(

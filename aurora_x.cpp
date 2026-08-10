@@ -408,6 +408,7 @@ struct Engine {
     Token token;
     Bundle bundle;
     vector<uint8_t> payload;
+    aurora::transport::GenerationIdentity identity;
     aurora::transport::GenerationDescriptor descriptor;
     Intention contract;
     aurora::transport::DecodeReport report;
@@ -415,6 +416,7 @@ struct Engine {
     int required_rank = 0;
     aurora::transport::TransportImportance scheduling_importance =
       aurora::transport::TransportImportance::IMPORTANT;
+    bool planned = false;
     bool arrived = false;
     bool terminal = false;
     bool delivered = false;
@@ -431,6 +433,34 @@ struct Engine {
   Engine() : safety_monitor(aurora::safety::SafetyConfig::default_config()) {
     // FASE 4: Inizializza organismo
     organism = make_unique<aurora::AlienFountainOrganism>();
+  }
+
+  static uint64_t scheduled_expiry_ms(const ScheduledGeneration& generation) {
+    const auto deadline_ms = generation.contract.deadline_ms();
+    return deadline_ms > numeric_limits<uint64_t>::max() -
+        generation.arrival.arrives_at_ms
+      ? numeric_limits<uint64_t>::max()
+      : generation.arrival.arrives_at_ms + deadline_ms;
+  }
+
+  static aurora::transport::TransportImportance descriptor_importance(
+      const ScheduledGeneration& generation) {
+    if (generation.arrival.service_class !=
+        aurora::simulation::GenerationServiceClass::INHERIT) {
+      return aurora::simulation::resolve_service_class(
+        generation.arrival.service_class,
+        aurora::transport::TransportImportance::IMPORTANT);
+    }
+    if (generation.descriptor.segments.empty()) {
+      return generation.contract.importance;
+    }
+    return min_element(
+      generation.descriptor.segments.begin(),
+      generation.descriptor.segments.end(),
+      [](const auto& left, const auto& right) {
+        return static_cast<uint8_t>(left.importance) <
+          static_cast<uint8_t>(right.importance);
+      })->importance;
   }
 
   void init(const string& intention){
@@ -472,37 +502,25 @@ struct Engine {
         deterministic_epoch_s + arrival.arrives_at_ms / 1000ULL);
       Bundle bundle = Bundle::make(token);
       auto bytes = tok2bytes(token);
-      auto spawned = organism->spawn(
-        generation_contract, token.id, bytes, T, arrival.arrives_at_ms);
       ScheduledGeneration generation;
       generation.arrival = arrival;
       generation.token = std::move(token);
       generation.bundle = std::move(bundle);
       generation.payload = std::move(bytes);
-      generation.descriptor = std::move(spawned.descriptor);
       generation.contract = std::move(generation_contract);
-      generation.pending_packets = std::move(spawned.packets);
-      generation.required_rank = spawned.K;
+      generation.identity = organism->reserve_identity(
+        generation.contract, generation.token.id, generation.payload);
       if (arrival.service_class !=
           aurora::simulation::GenerationServiceClass::INHERIT) {
         generation.scheduling_importance =
           aurora::simulation::resolve_service_class(
             arrival.service_class,
             aurora::transport::TransportImportance::IMPORTANT);
-      } else if (!generation.descriptor.segments.empty()) {
-        generation.scheduling_importance = min_element(
-          generation.descriptor.segments.begin(),
-          generation.descriptor.segments.end(),
-          [](const auto& left, const auto& right) {
-            return static_cast<uint8_t>(left.importance) <
-              static_cast<uint8_t>(right.importance);
-          })->importance;
       } else {
         generation.scheduling_importance = generation.contract.importance;
       }
       scheduled_generations.push_back(std::move(generation));
     }
-    activate_generation(0);
     begin_simulation_event_session(source, *net.get("DST"));
     cout << "[GENERATION_SCHEDULE] arrivals=" << scheduled_generations.size()
          << " fingerprint=" << generation_arrival_schedule.fingerprint()
@@ -530,6 +548,10 @@ struct Engine {
     if (index >= scheduled_generations.size()) {
       throw logic_error("active generation index is out of range");
     }
+    if (!scheduled_generations[index].planned ||
+        !scheduled_generations[index].arrived) {
+      throw logic_error("active generation has not been planned at arrival");
+    }
     active_generation_index = index;
     const auto& generation = scheduled_generations[index];
     token_id = generation.token.id;
@@ -548,6 +570,24 @@ struct Engine {
       auto& generation = scheduled_generations[index];
       if (!generation.arrived &&
           generation.arrival.arrives_at_ms == simulated_now_ms) {
+        auto spawned = organism->spawn_reserved(
+          generation.identity, generation.contract, generation.token.id,
+          generation.payload, T, simulated_now_ms);
+        generation.descriptor = std::move(spawned.descriptor);
+        generation.pending_packets = std::move(spawned.packets);
+        generation.required_rank = spawned.K;
+        generation.scheduling_importance = descriptor_importance(generation);
+        simulation_event_log.plan_generation(index, {
+          generation.arrival.arrives_at_ms,
+          generation.arrival.tag,
+          generation.descriptor.generation_id,
+          aurora::telemetry::simulation_descriptor_identity(
+            generation.descriptor),
+          static_cast<uint32_t>(generation.required_rank),
+          generation.pending_packets.size(),
+          generation.scheduling_importance,
+          generation.descriptor.expires_at_ms});
+        generation.planned = true;
         const auto count = generation.pending_packets.size();
         for (auto& packet : generation.pending_packets) {
           source.buf.push_back(std::move(packet));
@@ -573,7 +613,9 @@ struct Engine {
       candidates.push_back({
         index,
         generation.arrival.arrives_at_ms,
-        generation.descriptor.expires_at_ms,
+        generation.planned
+          ? generation.descriptor.expires_at_ms
+          : scheduled_expiry_ms(generation),
         generation.scheduling_importance,
         generation.arrived,
         generation.terminal,
@@ -634,13 +676,12 @@ struct Engine {
       session.generations.push_back({
         generation.arrival.arrives_at_ms,
         generation.arrival.tag,
-        generation.descriptor.generation_id,
-        aurora::telemetry::simulation_descriptor_identity(
-          generation.descriptor),
-        static_cast<uint32_t>(generation.required_rank),
-        generation.pending_packets.size(),
+        generation.identity.generation_id,
+        0,
+        0,
+        0,
         generation.scheduling_importance,
-        generation.descriptor.expires_at_ms});
+        scheduled_expiry_ms(generation)});
     }
     simulation_event_log.begin(std::move(session));
   }

@@ -46,6 +46,16 @@ struct SimulationGenerationIdentity {
         transport::TransportImportance::IMPORTANT;
     std::uint64_t expires_at_ms = 0;
 
+    [[nodiscard]] bool planned() const {
+        return descriptor_fingerprint != 0 && required_rank != 0 &&
+            initial_source_packets != 0;
+    }
+
+    [[nodiscard]] bool reserved_only() const {
+        return descriptor_fingerprint == 0 && required_rank == 0 &&
+            initial_source_packets == 0;
+    }
+
     friend bool operator==(const SimulationGenerationIdentity&,
                            const SimulationGenerationIdentity&) = default;
 };
@@ -461,6 +471,36 @@ public:
         session_ = std::move(session);
     }
 
+    void plan_generation(std::size_t index,
+                         SimulationGenerationIdentity planned_identity) {
+        ensure_started();
+        if (index >= session_.generations.size()) {
+            throw std::invalid_argument(
+                "simulation event ledger: planned generation index is out of range");
+        }
+        const auto& reserved = session_.generations[index];
+        if (!reserved.reserved_only()) {
+            throw std::logic_error(
+                "simulation event ledger: generation is already planned");
+        }
+        if (reserved.arrives_at_ms != planned_identity.arrives_at_ms ||
+            reserved.tag != planned_identity.tag ||
+            reserved.generation_id != planned_identity.generation_id ||
+            reserved.expires_at_ms != planned_identity.expires_at_ms) {
+            throw std::invalid_argument(
+                "simulation event ledger: plan changed reserved identity");
+        }
+        if (!records_.empty() &&
+            records_.back().simulated_now_ms >= reserved.arrives_at_ms) {
+            throw std::invalid_argument(
+                "simulation event ledger: generation was planned after arrival");
+        }
+        auto candidate = session_;
+        candidate.generations[index] = std::move(planned_identity);
+        validate_session(candidate);
+        session_.generations[index] = std::move(candidate.generations[index]);
+    }
+
     void record(const SimulationStepEvent& event) {
         ensure_started();
         validate_event(event);
@@ -532,6 +572,7 @@ public:
         try {
             ensure_started();
             validate_session(session_);
+            validate_planning_horizon();
             std::vector<std::uint32_t> ranks(session_.generations.size(), 0);
             std::vector<bool> terminal(session_.generations.size(), false);
             std::vector<std::optional<std::uint64_t>> last_served_at_ms(
@@ -656,6 +697,8 @@ public:
 
     [[nodiscard]] std::string serialize() const {
         ensure_started();
+        validate_session(session_);
+        validate_planning_horizon();
         std::ostringstream output;
         output << format_header << '\n';
         const auto meta = encode_session(session_);
@@ -794,9 +837,7 @@ private:
             if (identity.arrives_at_ms != arrival.arrives_at_ms ||
                 identity.tag != arrival.tag || identity.generation_id.empty() ||
                 identity.generation_id.find('|') != std::string::npos ||
-                identity.descriptor_fingerprint == 0 ||
-                identity.required_rank == 0 ||
-                identity.initial_source_packets == 0 ||
+                (!identity.planned() && !identity.reserved_only()) ||
                 static_cast<std::uint8_t>(identity.scheduling_importance) >
                     static_cast<std::uint8_t>(
                         transport::TransportImportance::ELASTIC) ||
@@ -852,11 +893,24 @@ private:
         }
     }
 
+    void validate_planning_horizon() const {
+        if (records_.empty()) return;
+        const auto last_recorded_ms = records_.back().simulated_now_ms;
+        for (const auto& identity : session_.generations) {
+            if (!identity.planned() &&
+                identity.arrives_at_ms <= last_recorded_ms) {
+                throw std::invalid_argument(
+                    "simulation event ledger: arrived generation lacks a causal plan");
+            }
+        }
+    }
+
     void validate_event(const SimulationStepEvent& event) const {
         const auto valid_energy = [](double value) {
             return std::isfinite(value) && value >= 0.0;
         };
         if (event.active_generation_index >= session_.generations.size() ||
+            !session_.generations[event.active_generation_index].planned() ||
             event.random_before == 0 || event.random_after_ris == 0 ||
             event.random_after_action == 0 ||
             !valid_energy(event.source_energy_before_tick_j) ||
@@ -929,6 +983,10 @@ private:
         for (std::size_t index = 0; index < session_.generations.size(); ++index) {
             const auto& generation = session_.generations[index];
             if (generation.arrives_at_ms == event.simulated_now_ms) {
+                if (!generation.planned()) {
+                    throw std::invalid_argument(
+                        "generation arrival was recorded before causal planning");
+                }
                 expected_index = static_cast<std::uint32_t>(index);
                 expected_packets = generation.initial_source_packets;
                 break;

@@ -128,6 +128,33 @@ int main() {
     const auto event = first_event(metadata);
     SimulationEventLedger ledger;
     ledger.begin(metadata);
+
+    auto causal_metadata = metadata;
+    causal_metadata.initial_random_state = next_random(
+        causal_metadata.initial_random_state);
+    causal_metadata.generation_arrival_schedule =
+        aurora::simulation::GenerationArrivalSchedule({
+            {0, "alpha"}, {2'000, "beta"}});
+    causal_metadata.generations.push_back({
+        2'000, "beta", "reserved-beta", 0, 0, 0,
+        aurora::transport::TransportImportance::IMPORTANT, 602'000});
+    SimulationEventLedger causal_ledger;
+    causal_ledger.begin(causal_metadata);
+    assert(causal_ledger.session().generations[1].reserved_only());
+    causal_ledger.record(first_event(causal_metadata));
+    causal_ledger.plan_generation(1, {
+        2'000, "beta", "reserved-beta", 0x5678ULL, 3, 4,
+        aurora::transport::TransportImportance::CRITICAL, 602'000});
+    assert(causal_ledger.session().generations[1].planned());
+    bool duplicate_plan_rejected = false;
+    try {
+        causal_ledger.plan_generation(1, {
+            2'000, "beta", "reserved-beta", 0x5678ULL, 3, 4,
+            aurora::transport::TransportImportance::CRITICAL, 602'000});
+    } catch (const std::logic_error&) {
+        duplicate_plan_rejected = true;
+    }
+    assert(duplicate_plan_rejected);
     ledger.record(event);
 
     const auto encoded = ledger.serialize();

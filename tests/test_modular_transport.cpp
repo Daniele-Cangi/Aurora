@@ -46,6 +46,7 @@ public:
 
     aurora::control::ProtectionPlan plan(
         const aurora::transport::TransportContract& contract) override {
+        ++plans;
         aurora::control::ProtectionPlan result;
         result.policy_id = id();
         result.policy_version = version();
@@ -63,6 +64,7 @@ public:
     }
 
     int observations = 0;
+    int plans = 0;
     aurora::transport::DecodeStatus last_status =
         aurora::transport::DecodeStatus::NO_PROGRESS;
 };
@@ -76,6 +78,38 @@ int main() {
     const auto contract = aurora::transport::TransportContract::parse(
         "deadline:100ms;importance:important;seed:92");
     const std::vector<std::uint8_t> bytes(129, 0xA4);
+
+    auto causal_policy = std::make_shared<RecordingPolicy>();
+    aurora::transport::GenerationManager causal_manager(
+        codec, causal_policy, 1);
+    bool invalid_symbol_size_rejected = false;
+    try {
+        (void)causal_manager.spawn(
+            contract, "invalid-symbol-size", bytes, 0, 0);
+    } catch (const std::invalid_argument&) {
+        invalid_symbol_size_rejected = true;
+    }
+    assert(invalid_symbol_size_rejected);
+    const auto reserved = causal_manager.reserve_identity(
+        contract, "reserved", bytes);
+    assert(!reserved.validation_error().has_value());
+    assert(reserved.sequence == 0);
+    assert(causal_policy->plans == 0);
+    assert(causal_manager.generation_count() == 0);
+    const auto planned = causal_manager.spawn_reserved(
+        reserved, contract, "reserved", bytes, 32, 25);
+    assert(causal_policy->plans == 1);
+    assert(causal_manager.generation_count() == 1);
+    assert(planned.descriptor.generation_id == reserved.generation_id);
+    assert(planned.descriptor.created_at_ms == 25);
+    bool reused_identity_rejected = false;
+    try {
+        (void)causal_manager.spawn_reserved(
+            reserved, contract, "reserved", bytes, 32, 26);
+    } catch (const std::logic_error&) {
+        reused_identity_rejected = true;
+    }
+    assert(reused_identity_rejected);
 
     const auto generated = manager.spawn(contract, "modular", bytes, 32, 0);
     assert(generated.descriptor.codec_id == "test-codec");
