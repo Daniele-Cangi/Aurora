@@ -362,6 +362,15 @@ bash tests/run_container_host_emulation.sh aurora-process-emulation:local proces
 
 This produces `sender.log`, `receiver.log`, and `manifest.txt`. The manifest declares the distinct container addresses, ports, session, real HMAC profile, and exit status. The checked-in key and session are public deterministic test fixtures, not deployment secrets. This is stronger than loopback process evidence but remains a single-machine Docker experiment.
 
+The manually dispatchable `authenticated-remote-host-emulation` workflow also
+builds one libsodium-enabled binary and runs it on two fresh GitHub-hosted
+Ubuntu VMs connected as ephemeral, least-privilege Tailscale nodes. Sender and
+receiver derive a unique per-run process key, retain independent manifests and
+connection-path logs, and feed a paired evidence verifier. Same-repository pull
+requests may exercise this profile; fork pull requests cannot receive its
+secrets. A successful artifact proves execution on distinct VMs over the
+declared encrypted overlay, not raw public-Internet routing or field hardware.
+
 For two independent hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. The receiver must start first, UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. This interface is remote-capable, but the repository does not yet contain an independent physical/VM-host execution artifact. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:

@@ -1,0 +1,259 @@
+name: authenticated-remote-host-emulation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/remote-host-emulation.yml"
+      - "apps/aurora_process_emulation.cpp"
+      - "include/aurora/emulation/**"
+      - "include/aurora/transport/**"
+      - "benchmarks/process_*.trace"
+      - "CMakeLists.txt"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install authenticated build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsodium-dev
+      - name: Build one process-emulation binary for both hosts
+        run: >-
+          cmake -S . -B build-remote
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DBUILD_NET_TOOLS=OFF
+          -DUSE_SODIUM=ON
+          -DUSE_RAPTORQ=OFF
+          -DUSE_WIREHAIR=OFF
+      - run: >-
+          cmake --build build-remote
+          --target aurora_process_emulation --parallel 2
+      - name: Assemble immutable runtime bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir remote-bundle
+          cp build-remote/bin/aurora_process_emulation remote-bundle/
+          cp benchmarks/process_timed_v2.trace remote-bundle/
+          cp benchmarks/process_feedback_v2.trace remote-bundle/
+          git rev-parse HEAD > remote-bundle/source-commit.txt
+          sha256sum remote-bundle/aurora_process_emulation \
+            > remote-bundle/binary.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-remote-runtime
+          path: remote-bundle
+          if-no-files-found: error
+
+  host:
+    name: remote-${{ matrix.role }}
+    needs: build
+    if: needs.build.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: receiver
+            hostname_prefix: aurora-rx
+          - role: sender
+            hostname_prefix: aurora-tx
+    runs-on: ubuntu-24.04
+    env:
+      AURORA_CI_MASTER_KEY: ${{ secrets.AURORA_CI_MASTER_KEY }}
+      RECEIVER_HOST: aurora-rx-${{ github.run_id }}-${{ github.run_attempt }}
+      SENDER_HOST: aurora-tx-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Install runtime dependency
+        run: sudo apt-get update && sudo apt-get install -y libsodium23
+      - uses: actions/download-artifact@v4
+        with:
+          name: authenticated-remote-runtime
+          path: remote-bundle
+      - name: Connect ephemeral host to the private test network
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:aurora-ci
+          hostname: ${{ matrix.hostname_prefix }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Derive per-run Aurora authentication material
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import hmac
+          import os
+          from pathlib import Path
+
+          master = bytes.fromhex(os.environ["AURORA_CI_MASTER_KEY"])
+          context = (
+              os.environ["GITHUB_RUN_ID"] + ":" +
+              os.environ["GITHUB_RUN_ATTEMPT"]
+          ).encode("ascii")
+          key = hmac.new(master, b"aurora-process:" + context,
+                         hashlib.sha256).hexdigest()
+          session = hashlib.sha256(b"aurora-session:" + context).hexdigest()[:16]
+          Path("process-auth.key").write_text(key + "\n", encoding="ascii")
+          Path("process-session.id").write_text(session + "\n", encoding="ascii")
+          PY
+          chmod 600 process-auth.key process-session.id
+          chmod +x remote-bundle/aurora_process_emulation
+      - name: Discover and verify the independent peer VM
+        id: peer
+        shell: bash
+        run: |
+          set -euo pipefail
+          own_ip="$(tailscale ip -4 | head -n 1)"
+          if [ "${{ matrix.role }}" = receiver ]; then
+            peer_host="${SENDER_HOST}"
+          else
+            peer_host="${RECEIVER_HOST}"
+          fi
+
+          peer_ip=""
+          for _ in $(seq 1 120); do
+            peer_ip="$(getent ahostsv4 "${peer_host}" |
+              awk 'NR == 1 {print $1}')"
+            if [ -n "${peer_ip}" ]; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "${peer_ip}"
+          test "${own_ip}" != "${peer_ip}"
+
+          tailscale ping --c 3 --timeout=10s "${peer_ip}" |
+            tee "${{ matrix.role }}-tailscale-ping.log"
+          {
+            echo "own_ip=${own_ip}"
+            echo "peer_ip=${peer_ip}"
+          } >> "${GITHUB_OUTPUT}"
+      - name: Run authenticated receiver
+        if: matrix.role == 'receiver'
+        shell: bash
+        run: |
+          set -euo pipefail
+          session="$(cat process-session.id)"
+          set +e
+          timeout 90s remote-bundle/aurora_process_emulation \
+            receiver 0.0.0.0 47001 "${{ steps.peer.outputs.peer_ip }}" \
+            47002 2 remote-bundle/process_feedback_v2.trace \
+            process-auth.key "${session}" > receiver.log 2>&1
+          status=$?
+          set -e
+          {
+            echo "evidence_version=1"
+            echo "role=receiver"
+            echo "topology=github-hosted-distinct-vms-over-tailscale"
+            echo "own_ip=${{ steps.peer.outputs.own_ip }}"
+            echo "peer_ip=${{ steps.peer.outputs.peer_ip }}"
+            echo "forward_port=47001"
+            echo "reverse_port=47002"
+            echo "authentication_profile=hmac-sha256-libsodium"
+            echo "source_commit=$(cat remote-bundle/source-commit.txt)"
+            echo "binary_sha256=$(cut -d ' ' -f 1 remote-bundle/binary.sha256)"
+            echo "exit_status=${status}"
+          } > receiver-manifest.txt
+          test "${status}" -eq 0
+      - name: Run authenticated sender
+        if: matrix.role == 'sender'
+        shell: bash
+        run: |
+          set -euo pipefail
+          session="$(cat process-session.id)"
+          sleep 8
+          set +e
+          timeout 70s remote-bundle/aurora_process_emulation \
+            sender "${{ steps.peer.outputs.peer_ip }}" 47001 0.0.0.0 \
+            47002 remote-bundle/process_timed_v2.trace \
+            process-auth.key "${session}" > sender.log 2>&1
+          status=$?
+          set -e
+          {
+            echo "evidence_version=1"
+            echo "role=sender"
+            echo "topology=github-hosted-distinct-vms-over-tailscale"
+            echo "own_ip=${{ steps.peer.outputs.own_ip }}"
+            echo "peer_ip=${{ steps.peer.outputs.peer_ip }}"
+            echo "forward_port=47001"
+            echo "reverse_port=47002"
+            echo "authentication_profile=hmac-sha256-libsodium"
+            echo "source_commit=$(cat remote-bundle/source-commit.txt)"
+            echo "binary_sha256=$(cut -d ' ' -f 1 remote-bundle/binary.sha256)"
+            echo "exit_status=${status}"
+          } > sender-manifest.txt
+          test "${status}" -eq 0
+      - name: Upload host evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurora-${{ matrix.role }}-evidence
+          path: |
+            ${{ matrix.role }}.log
+            ${{ matrix.role }}-manifest.txt
+            ${{ matrix.role }}-tailscale-ping.log
+          if-no-files-found: error
+
+  verify:
+    needs: [build, host]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: aurora-*-evidence
+          path: remote-evidence
+          merge-multiple: true
+      - name: Verify paired authenticated VM evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd remote-evidence
+          test -f receiver.log
+          test -f sender.log
+          test -f receiver-manifest.txt
+          test -f sender-manifest.txt
+          test -f receiver-tailscale-ping.log
+          test -f sender-tailscale-ping.log
+
+          grep -q '^exit_status=0$' receiver-manifest.txt
+          grep -q '^exit_status=0$' sender-manifest.txt
+          grep -q '^authentication_profile=hmac-sha256-libsodium$' \
+            receiver-manifest.txt
+          grep -q '^authentication_profile=hmac-sha256-libsodium$' \
+            sender-manifest.txt
+          grep -q 'receiver_complete generations=2' receiver.log
+          grep -q 'sender_complete generations=2' sender.log
+          grep -q 'feedback_applied=2' sender.log
+          grep -q 'auth_profile=hmac-sha256-libsodium' receiver.log
+          grep -q 'auth_profile=hmac-sha256-libsodium' sender.log
+          grep -Eq 'replay_rejected=[1-9][0-9]*' receiver.log
+          grep -Eq 'replay_rejected=[1-9][0-9]*' sender.log
+
+          receiver_ip="$(sed -n 's/^own_ip=//p' receiver-manifest.txt)"
+          sender_ip="$(sed -n 's/^own_ip=//p' sender-manifest.txt)"
+          test -n "${receiver_ip}"
+          test -n "${sender_ip}"
+          test "${receiver_ip}" != "${sender_ip}"
+
+          receiver_sha="$(sed -n 's/^binary_sha256=//p' \
+            receiver-manifest.txt)"
+          sender_sha="$(sed -n 's/^binary_sha256=//p' sender-manifest.txt)"
+          test -n "${receiver_sha}"
+          test "${receiver_sha}" = "${sender_sha}"
+
+          tar -czf ../authenticated-remote-host-evidence.tar.gz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-remote-host-evidence
+          path: authenticated-remote-host-evidence.tar.gz
+          if-no-files-found: error
