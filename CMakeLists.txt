@@ -393,6 +393,19 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "emulation;regression"
         TIMEOUT 45)
+    add_test(
+      NAME aurora.process_receiver_readiness
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_readiness.py"
+        "$<TARGET_FILE:aurora_process_emulation>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_loopback_v1.trace"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_auth_test.key"
+        "0123456789abcdef")
+    set_tests_properties(
+      aurora.process_receiver_readiness
+      PROPERTIES
+        LABELS "emulation;regression"
+        TIMEOUT 20)
   else()
     message(WARNING
       "Python3 was not found; the process-separated emulation test is disabled")

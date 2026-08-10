@@ -28,8 +28,22 @@ docker run --detach --name "${receiver}" \
   process_feedback_v2.trace process_auth_test.key "${session_id}" \
   >/dev/null
 
-# Docker reports the container before the receiver has necessarily bound UDP.
-sleep 1
+receiver_ready=false
+for _ in $(seq 1 50); do
+  if docker logs "${receiver}" 2>&1 | grep -q '^receiver_ready '; then
+    receiver_ready=true
+    break
+  fi
+  if [ "$(docker inspect -f '{{.State.Running}}' "${receiver}")" != true ]; then
+    break
+  fi
+  sleep 0.1
+done
+if [ "${receiver_ready}" != true ]; then
+  docker logs "${receiver}" >&2
+  echo "receiver did not publish readiness" >&2
+  exit 1
+fi
 
 set +e
 timeout 45s docker run --name "${sender}" \
@@ -58,12 +72,17 @@ forward_port=47001
 reverse_port=47002
 session_id=${session_id}
 authentication_profile=hmac-sha256-libsodium
+receiver_ready=${receiver_ready}
+startup_timeout_ms=60000
+service_timeout_ms=15000
 sender_exit=${sender_status}
 receiver_exit=${receiver_status}
 EOF
 
 test "${sender_status}" -eq 0
 test "${receiver_status}" -eq 0
+grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=15000 ' \
+  "${evidence_dir}/receiver.log"
 grep -q "sender_complete generations=2" "${evidence_dir}/sender.log"
 grep -q "feedback_applied=2" "${evidence_dir}/sender.log"
 grep -q "auth_profile=hmac-sha256-libsodium" \
