@@ -158,7 +158,7 @@ int main() {
     ledger.record(event);
 
     const auto encoded = ledger.serialize();
-    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V6\n"));
+    assert(encoded.starts_with("AURORA_SIMULATION_EVENT_LEDGER_V7\n"));
     assert(encoded == ledger.serialize());
     const auto restored = SimulationEventLedger::deserialize(encoded);
     assert(restored.serialize() == encoded);
@@ -181,14 +181,14 @@ int main() {
            aurora::simulation::GenerationSchedulingDiscipline::STRICT_PRIORITY_EDF);
     assert(strict_restored.verify_structure().ok);
 
-    auto legacy_v5 = encoded;
-    legacy_v5.replace(
+    auto legacy_v6 = encoded;
+    legacy_v6.replace(
         0,
-        std::string("AURORA_SIMULATION_EVENT_LEDGER_V6").size(),
-        "AURORA_SIMULATION_EVENT_LEDGER_V5");
+        std::string("AURORA_SIMULATION_EVENT_LEDGER_V7").size(),
+        "AURORA_SIMULATION_EVENT_LEDGER_V6");
     bool legacy_rejected = false;
     try {
-        (void)SimulationEventLedger::deserialize(legacy_v5);
+        (void)SimulationEventLedger::deserialize(legacy_v6);
     } catch (const std::invalid_argument&) {
         legacy_rejected = true;
     }

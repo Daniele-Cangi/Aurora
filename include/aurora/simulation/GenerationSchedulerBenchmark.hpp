@@ -20,11 +20,11 @@ struct GenerationSchedulerBenchmarkMetrics {
         GenerationSchedulingDiscipline::AGING_FAIR;
     std::uint64_t steps = 0;
     std::size_t candidates = 0;
-    std::uint64_t comparison_bound_ms = 0;
-    std::uint64_t maximum_observed_gap_ms = 0;
-    std::size_t bound_violations = 0;
-    std::vector<std::uint64_t> selections;
-    std::vector<std::uint64_t> maximum_gap_by_candidate_ms;
+    std::uint64_t comparison_turn_gap_bound_ms = 0;
+    std::uint64_t maximum_observed_turn_gap_ms = 0;
+    std::size_t turn_gap_bound_violations = 0;
+    std::vector<std::uint64_t> scheduled_turns;
+    std::vector<std::uint64_t> maximum_turn_gap_by_candidate_ms;
 
     friend bool operator==(const GenerationSchedulerBenchmarkMetrics&,
                            const GenerationSchedulerBenchmarkMetrics&) = default;
@@ -102,22 +102,22 @@ inline GenerationSchedulerBenchmarkMetrics run_adversarial_scheduler_benchmark(
     result.discipline = discipline;
     result.steps = steps;
     result.candidates = candidate_count;
-    result.selections.assign(candidate_count, 0);
-    result.maximum_gap_by_candidate_ms.assign(candidate_count, 0);
+    result.scheduled_turns.assign(candidate_count, 0);
+    result.maximum_turn_gap_by_candidate_ms.assign(candidate_count, 0);
     auto fair_policy = policy;
     fair_policy.discipline = GenerationSchedulingDiscipline::AGING_FAIR;
-    result.comparison_bound_ms = maximum_service_gap_ms(
+    result.comparison_turn_gap_bound_ms = maximum_scheduling_turn_gap_ms(
         fair_policy, candidate_count);
     policy.discipline = discipline;
 
     for (std::uint64_t step = 0; step < steps; ++step) {
         const auto now_ms = step * policy.service_quantum_ms;
         for (std::size_t index = 0; index < candidate_count; ++index) {
-            const auto last_service = candidates[index].last_served_at_ms
+            const auto last_turn = candidates[index].last_scheduled_at_ms
                 .value_or(candidates[index].arrives_at_ms);
-            result.maximum_gap_by_candidate_ms[index] = std::max(
-                result.maximum_gap_by_candidate_ms[index],
-                now_ms - last_service);
+            result.maximum_turn_gap_by_candidate_ms[index] = std::max(
+                result.maximum_turn_gap_by_candidate_ms[index],
+                now_ms - last_turn);
         }
         const auto selected = select_scheduled_generation(
             candidates, now_ms, policy);
@@ -125,22 +125,22 @@ inline GenerationSchedulerBenchmarkMetrics run_adversarial_scheduler_benchmark(
             throw std::logic_error(
                 "generation scheduler benchmark: no candidate selected");
         }
-        ++result.selections[*selected];
-        candidates[*selected].last_served_at_ms = now_ms;
+        ++result.scheduled_turns[*selected];
+        candidates[*selected].last_scheduled_at_ms = now_ms;
     }
 
     for (std::size_t index = 0; index < candidate_count; ++index) {
-        const auto last_service = candidates[index].last_served_at_ms
+        const auto last_turn = candidates[index].last_scheduled_at_ms
             .value_or(candidates[index].arrives_at_ms);
-        result.maximum_gap_by_candidate_ms[index] = std::max(
-            result.maximum_gap_by_candidate_ms[index],
-            horizon_ms - last_service);
-        result.maximum_observed_gap_ms = std::max(
-            result.maximum_observed_gap_ms,
-            result.maximum_gap_by_candidate_ms[index]);
-        if (result.maximum_gap_by_candidate_ms[index] >
-            result.comparison_bound_ms) {
-            ++result.bound_violations;
+        result.maximum_turn_gap_by_candidate_ms[index] = std::max(
+            result.maximum_turn_gap_by_candidate_ms[index],
+            horizon_ms - last_turn);
+        result.maximum_observed_turn_gap_ms = std::max(
+            result.maximum_observed_turn_gap_ms,
+            result.maximum_turn_gap_by_candidate_ms[index]);
+        if (result.maximum_turn_gap_by_candidate_ms[index] >
+            result.comparison_turn_gap_bound_ms) {
+            ++result.turn_gap_bound_violations;
         }
     }
     return result;
@@ -162,18 +162,20 @@ compare_adversarial_scheduler_policies(
 
 inline bool generation_scheduler_benchmark_gate_passes(
     const GenerationSchedulerBenchmarkMetrics& metrics) {
-    if (metrics.selections.empty()) return false;
+    if (metrics.scheduled_turns.empty()) return false;
     if (metrics.discipline ==
         GenerationSchedulingDiscipline::STRICT_PRIORITY_EDF) {
-        return metrics.bound_violations > 0 &&
-            metrics.maximum_observed_gap_ms > metrics.comparison_bound_ms &&
-            metrics.selections.front() == 0;
+        return metrics.turn_gap_bound_violations > 0 &&
+            metrics.maximum_observed_turn_gap_ms >
+                metrics.comparison_turn_gap_bound_ms &&
+            metrics.scheduled_turns.front() == 0;
     }
-    return metrics.bound_violations == 0 &&
-        metrics.maximum_observed_gap_ms <= metrics.comparison_bound_ms &&
+    return metrics.turn_gap_bound_violations == 0 &&
+        metrics.maximum_observed_turn_gap_ms <=
+            metrics.comparison_turn_gap_bound_ms &&
         std::all_of(
-            metrics.selections.begin(), metrics.selections.end(),
-            [](std::uint64_t selections) { return selections > 0; });
+            metrics.scheduled_turns.begin(), metrics.scheduled_turns.end(),
+            [](std::uint64_t turns) { return turns > 0; });
 }
 
 inline const std::array<GenerationSchedulerBenchmarkScenario, 7>&
@@ -201,9 +203,10 @@ inline void append_generation_scheduler_benchmark_sweep_row(
            << scenario.critical_contenders << ',' << metrics.candidates << ','
            << scenario.aging_interval_ms << ','
            << scenario.starvation_limit_ms << ','
-           << metrics.comparison_bound_ms << ','
-           << metrics.maximum_observed_gap_ms << ','
-           << metrics.bound_violations << ',' << metrics.selections.front()
+           << metrics.comparison_turn_gap_bound_ms << ','
+           << metrics.maximum_observed_turn_gap_ms << ','
+           << metrics.turn_gap_bound_violations << ','
+           << metrics.scheduled_turns.front()
            << ',' << (gate_passes ? "PASS" : "FAIL") << '\n';
 }
 
@@ -215,10 +218,10 @@ run_canonical_generation_scheduler_benchmark_sweep() {
     sweep.scenarios = scenarios.size();
 
     std::ostringstream output;
-    output << "AURORA_GENERATION_SCHEDULER_SWEEP_V1\n"
+    output << "AURORA_GENERATION_SCHEDULER_SWEEP_V2\n"
            << "scenario,mode,steps,critical_contenders,candidates,aging_ms,"
-              "starvation_ms,bound_ms,max_gap_ms,bound_violations,"
-              "elastic_selections,gate\n";
+              "starvation_ms,turn_gap_bound_ms,max_turn_gap_ms,"
+              "turn_gap_bound_violations,elastic_scheduled_turns,gate\n";
     for (const auto& scenario : scenarios) {
         GenerationSchedulingPolicy policy;
         policy.aging_interval_ms = scenario.aging_interval_ms;

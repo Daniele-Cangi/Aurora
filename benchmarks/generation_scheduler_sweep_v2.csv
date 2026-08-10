@@ -1,5 +1,5 @@
-AURORA_GENERATION_SCHEDULER_SWEEP_V1
-scenario,mode,steps,critical_contenders,candidates,aging_ms,starvation_ms,bound_ms,max_gap_ms,bound_violations,elastic_selections,gate
+AURORA_GENERATION_SCHEDULER_SWEEP_V2
+scenario,mode,steps,critical_contenders,candidates,aging_ms,starvation_ms,turn_gap_bound_ms,max_turn_gap_ms,turn_gap_bound_violations,elastic_scheduled_turns,gate
 baseline,strict,20,2,3,2000,3000,5000,20000,2,0,PASS
 baseline,fair,20,2,3,2000,3000,5000,4000,0,6,PASS
 fast-aging,strict,24,2,3,1000,3000,5000,24000,2,0,PASS

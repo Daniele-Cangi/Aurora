@@ -25,10 +25,12 @@ All notable changes to Aurora-X will be documented in this file.
 - Canonical checksum-chained `GenerationArrivalSchedule` files plus `aurora_generation_arrivals` for deterministic external generation releases.
 - Deterministic aging/fair priority-then-EDF simulation of multiple arrived generations with stable fairness-deadline/arrival/index tie-breaks, preemption, generation-qualified packet replay, per-generation rank continuity and exact schedule round-tripping.
 - Shared `GenerationScheduler` selection logic and tests for priority, earliest-deadline, stable tie-break and invalid-candidate rejection.
-- Bounded starvation prevention: one-class promotion every 2000 ms, a 3000 ms fairness deadline and a replayable maximum service gap of `3000 + (N - 1) * 1000` ms.
-- `aurora_scheduler_benchmark` compares strict priority-then-EDF against aging/fair scheduling under an identical deterministic adversarial workload and reports service-gap violations plus elastic selections.
-- Versioned `AURORA_GENERATION_SCHEDULER_SWEEP_V1` report covering seven canonical scheduler scenarios, including dense contention and tick-rounded starvation intervals.
-- CTest/GitHub Actions regression gates enforce strict starvation exposure, bounded fair service for every candidate and byte-exact agreement with the canonical scheduler report.
+- Bounded starvation prevention: one-class promotion every 2000 ms, a 3000 ms fairness deadline and a replayable maximum scheduling-turn gap of `3000 + (N - 1) * 1000` ms.
+- `aurora_scheduler_benchmark` compares strict priority-then-EDF against aging/fair scheduling under an identical deterministic adversarial workload and reports scheduling-turn-gap violations plus elastic turns.
+- Versioned `AURORA_GENERATION_SCHEDULER_SWEEP_V2` report covering seven canonical scheduler scenarios, including dense contention and tick-rounded starvation intervals.
+- CTest/GitHub Actions regression gates enforce strict starvation exposure, bounded fair scheduling turns for every candidate and byte-exact agreement with the canonical scheduler report.
+- Explicit per-generation accounting for scheduled turns versus effective transport service; effective service means one or more attempts accepted by the HAL, independent of channel delivery.
+- V7 simulator events record HAL-accepted effective-service attempts and paired replay binds them exactly to V6 execution traces.
 - Descriptor-independent generation identity reservations that do not invoke transport policy planning, allowing future arrival identities to remain deterministic without consuming adaptive state.
 - Causal A-to-B runtime coverage proving that feedback from an expired generation changes the later generation's arrival-time descriptor and initial symbol budget.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
@@ -55,6 +57,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Upgraded generation-arrival schedules to V2 and simulator ledgers to V4 so resolved service class, descriptor expiry and priority/deadline selection are independently replayed; V1 schedules and V1–V3 ledgers must be regenerated.
 - Upgraded simulator ledgers to V5 so scheduling intervals and per-generation last-service state independently reconstruct aging, fairness-lane entry and the starvation bound; V1–V4 ledgers must be regenerated.
 - Upgraded simulator ledgers to V6 so strict/fair discipline and configurable aging/starvation intervals are replayed exactly; V1–V5 ledgers must be regenerated.
+- Renamed the fairness invariant and scheduler benchmark metrics to scheduling-turn gaps, upgraded the canonical scheduler sweep to V2, and removed any implied finite effective-service guarantee without explicit serviceability assumptions.
+- Upgraded simulator ledgers to V7 for explicit effective-service accounting; V1–V6 simulator ledgers must be regenerated, while the decision trace remains V6.
 - Separated contract-configured simulation-time RF duty accounting from the realtime HAL limiter.
 - Extended `aurora_benchmark` with scenario parameters plus `--trace-in`, `--trace-out` and `--runs` reproducibility controls; the original positional IID invocation remains supported.
 - Benchmark fields that are not semantically applicable now emit `N/A` instead of misleading zero values.

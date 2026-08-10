@@ -26,7 +26,10 @@ struct GenerationSchedulingCandidate {
         transport::TransportImportance::IMPORTANT;
     bool arrived = false;
     bool terminal = false;
-    std::optional<std::uint64_t> last_served_at_ms;
+    // Scheduler state only: this timestamp advances whenever the candidate is
+    // granted a turn, even if contact, safety, duty or HAL later prevent an
+    // effective transport attempt.
+    std::optional<std::uint64_t> last_scheduled_at_ms;
 };
 
 struct GenerationSchedulingPolicy {
@@ -54,13 +57,13 @@ struct GenerationSchedulingPolicy {
                            const GenerationSchedulingPolicy&) = default;
 };
 
-inline std::uint64_t maximum_service_gap_ms(
+inline std::uint64_t maximum_scheduling_turn_gap_ms(
     const GenerationSchedulingPolicy& policy,
     std::size_t eligible_generations) {
     policy.validate();
     if (policy.discipline != GenerationSchedulingDiscipline::AGING_FAIR) {
         throw std::invalid_argument(
-            "generation scheduler: strict priority has no service-gap bound");
+            "generation scheduler: strict priority has no scheduling-turn-gap bound");
     }
     if (eligible_generations == 0) return 0;
     const auto remainder = policy.starvation_limit_ms %
@@ -80,7 +83,7 @@ inline std::uint64_t maximum_service_gap_ms(
         (std::numeric_limits<std::uint64_t>::max() -
          rounded_starvation_limit_ms) / policy.service_quantum_ms) {
         throw std::overflow_error(
-            "generation scheduler: service-gap bound overflows");
+            "generation scheduler: scheduling-turn-gap bound overflows");
     }
     return rounded_starvation_limit_ms +
         static_cast<std::uint64_t>(additional_quanta) *
@@ -114,13 +117,13 @@ inline std::optional<std::size_t> select_scheduled_generation(
             throw std::invalid_argument(
                 "generation scheduler: invalid importance");
         }
-        const auto last_service = candidate.last_served_at_ms.value_or(
+        const auto last_turn = candidate.last_scheduled_at_ms.value_or(
             candidate.arrives_at_ms);
-        if (last_service < candidate.arrives_at_ms || last_service > now_ms) {
+        if (last_turn < candidate.arrives_at_ms || last_turn > now_ms) {
             throw std::invalid_argument(
-                "generation scheduler: invalid last-service time");
+                "generation scheduler: invalid last-scheduled-turn time");
         }
-        const auto waiting_ms = now_ms - last_service;
+        const auto waiting_ms = now_ms - last_turn;
         const bool fairness_enabled = policy.discipline ==
             GenerationSchedulingDiscipline::AGING_FAIR;
         const auto promotions = fairness_enabled
@@ -132,10 +135,10 @@ inline std::optional<std::size_t> select_scheduled_generation(
         const bool starved = fairness_enabled &&
             waiting_ms >= policy.starvation_limit_ms;
         const auto fairness_deadline =
-            last_service > std::numeric_limits<std::uint64_t>::max() -
+            last_turn > std::numeric_limits<std::uint64_t>::max() -
                     policy.starvation_limit_ms
                 ? std::numeric_limits<std::uint64_t>::max()
-                : last_service + policy.starvation_limit_ms;
+                : last_turn + policy.starvation_limit_ms;
         const auto key = std::tuple{
             static_cast<std::uint8_t>(starved ? 0 : 1),
             starved ? fairness_deadline
