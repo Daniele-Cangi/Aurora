@@ -31,6 +31,9 @@ All notable changes to Aurora-X will be documented in this file.
 - CTest/GitHub Actions regression gates enforce strict starvation exposure, bounded fair scheduling turns for every candidate and byte-exact agreement with the canonical scheduler report.
 - Explicit per-generation accounting for scheduled turns versus effective transport service; effective service means one or more attempts accepted by the HAL, independent of channel delivery.
 - V7 simulator events record HAL-accepted effective-service attempts and paired replay binds them exactly to V6 execution traces.
+- Deterministic discrete-event kernel with total `(time, phase, sequence)` ordering, arrival-before-transport phase precedence and bounded pending-event storage.
+- Kernel regression coverage for out-of-order insertion, same-time phase/FIFO ordering, time-regression rejection and dynamically scheduled events.
+- Cross-platform V7/V6 SHA-256 regression oracle that locks the canonical simulator ledger and decision trace to the exact pre-kernel bytes.
 - Descriptor-independent generation identity reservations that do not invoke transport policy planning, allowing future arrival identities to remain deterministic without consuming adaptive state.
 - Causal A-to-B runtime coverage proving that feedback from an expired generation changes the later generation's arrival-time descriptor and initial symbol budget.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
@@ -38,6 +41,9 @@ All notable changes to Aurora-X will be documented in this file.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
 
 ### Changed
+- Replaced the main research run's `for(step)` time authority with explicit generation-arrival and recurring transport-quantum events; controller and ledger timestamps now come from the event kernel.
+- Removed wall-clock pacing waits from simulation research runs while preserving identical pacing RNG consumption; interactive and field-experimental paths retain realtime pacing.
+- Preserved the current 1000 ms transport quantum and aligned-arrival model while separating those model constraints from the event queue implementation.
 - Routed the dependency-light simulator through the organism's reserved-identity/spawn/integrate lifecycle exclusively; delivery and health consume the same report.
 - Deferred policy planning, descriptor construction and initial symbol emission from simulator initialization to each declared generation arrival; V6 ledger metadata now completes reserved future identities before their arrival event without changing the serialized format version.
 - Reduced `AlienFountainOrganism` to a compatibility facade over separately testable codec, policy and generation-state components.

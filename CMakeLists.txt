@@ -308,6 +308,14 @@ if(BUILD_TESTING)
   aurora_link_common(test_runtime_correctness)
   add_test(NAME aurora.runtime_correctness COMMAND test_runtime_correctness)
 
+  add_executable(
+    test_deterministic_event_kernel
+    tests/test_deterministic_event_kernel.cpp)
+  aurora_link_common(test_deterministic_event_kernel)
+  add_test(
+    NAME aurora.deterministic_event_kernel
+    COMMAND test_deterministic_event_kernel)
+
   add_executable(test_simulation_event_ledger tests/test_simulation_event_ledger.cpp)
   aurora_link_common(test_simulation_event_ledger)
   add_test(NAME aurora.simulation_event_ledger COMMAND test_simulation_event_ledger)
@@ -411,6 +419,17 @@ if(BUILD_TESTING)
     aurora.simulation_event_replay
     PROPERTIES FIXTURES_REQUIRED aurora_simulation_event_fixture)
   add_test(
+    NAME aurora.simulation_event_regression_oracle
+    COMMAND ${CMAKE_COMMAND}
+      "-DEVENT_LEDGER=${_AURORA_EVENT_LEDGER}"
+      "-DDECISION_TRACE=${_AURORA_EVENT_DECISION_TRACE}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/verify_simulation_event_oracle.cmake")
+  set_tests_properties(
+    aurora.simulation_event_regression_oracle
+    PROPERTIES
+      FIXTURES_REQUIRED aurora_simulation_event_fixture
+      LABELS "regression")
+  add_test(
     NAME aurora.contact_schedule_roundtrip
     COMMAND ${CMAKE_COMMAND} -E compare_files
       "${_AURORA_CONTACT_SCHEDULE}"
@@ -437,6 +456,7 @@ if(BUILD_TESTING)
     target_compile_options(test_baseline_benchmark PRIVATE /UNDEBUG)
     target_compile_options(test_channel_trace PRIVATE /UNDEBUG)
     target_compile_options(test_runtime_correctness PRIVATE /UNDEBUG)
+    target_compile_options(test_deterministic_event_kernel PRIVATE /UNDEBUG)
     target_compile_options(test_simulation_event_ledger PRIVATE /UNDEBUG)
     target_compile_options(test_contact_schedule PRIVATE /UNDEBUG)
     target_compile_options(test_generation_arrival_schedule PRIVATE /UNDEBUG)
@@ -451,6 +471,7 @@ if(BUILD_TESTING)
     target_compile_options(test_baseline_benchmark PRIVATE -UNDEBUG)
     target_compile_options(test_channel_trace PRIVATE -UNDEBUG)
     target_compile_options(test_runtime_correctness PRIVATE -UNDEBUG)
+    target_compile_options(test_deterministic_event_kernel PRIVATE -UNDEBUG)
     target_compile_options(test_simulation_event_ledger PRIVATE -UNDEBUG)
     target_compile_options(test_contact_schedule PRIVATE -UNDEBUG)
     target_compile_options(test_generation_arrival_schedule PRIVATE -UNDEBUG)
