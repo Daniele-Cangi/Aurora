@@ -270,6 +270,24 @@ void accumulate_trial(Metrics& metrics, const Scenario& scenario,
             ++metrics.turns_without_effective_service;
         }
     }
+    std::ostringstream structural_trace;
+    for (const auto& event : engine.simulation_event_log.records()) {
+        structural_trace << "E|" << event.step << '|'
+                         << event.simulated_now_ms << '|'
+                         << event.active_generation_index << '|'
+                         << event.arrived_generation_index << '|'
+                         << event.arrived_source_packets << '|'
+                         << static_cast<unsigned>(event.contact_available.mask())
+                         << '|' << event.effective_transport_service_attempts
+                         << '|' << event.random_before << '|'
+                         << event.random_after_ris << '|'
+                         << event.random_after_action << '|'
+                         << event.source_buffer_after_action << '|'
+                         << event.destination_buffer_after_action << '|'
+                         << event.decoder_rank_before << '|'
+                         << event.decoder_rank_after << '|'
+                         << static_cast<unsigned>(event.decode_status) << '\n';
+    }
     for (const auto& record : engine.decision_trace_log.records()) {
         const auto& execution = record.trace.execution;
         metrics.transmission_attempts += execution.transmission_attempts;
@@ -280,6 +298,34 @@ void accumulate_trial(Metrics& metrics, const Scenario& scenario,
                 metrics.energy_j +=
                     attempt.energy_before_j - attempt.energy_after_j;
             }
+        }
+        structural_trace << "D|" << record.descriptor.generation_id << '|'
+                         << record.descriptor.policy_id << '|'
+                         << record.descriptor.total_source_symbols << '|'
+                         << static_cast<unsigned>(execution.link) << '|'
+                         << execution.transmission_attempts << '|'
+                         << execution.hal_accepted_attempts << '|'
+                         << execution.delivered_attempts << '|'
+                         << execution.repair_symbols_emitted << '|'
+                         << execution.critical_only << '\n';
+        for (const auto& segment : record.descriptor.segments) {
+            structural_trace << "S|" << segment.segment_id << '|'
+                             << segment.source_symbol_count << '|'
+                             << segment.coding.emitted_symbols << '|'
+                             << segment.coding.seed << '|'
+                             << static_cast<unsigned>(segment.importance)
+                             << '|' << segment.expires_at_ms << '\n';
+        }
+        for (const auto& attempt : execution.attempts) {
+            structural_trace << "A|" << attempt.simulated_now_ms << '|'
+                             << attempt.packet_sequence << '|'
+                             << attempt.symbol_seed << '|'
+                             << attempt.segment_id << '|'
+                             << attempt.critical << '|'
+                             << static_cast<unsigned>(attempt.refusal) << '|'
+                             << attempt.hal_accepted << '|'
+                             << attempt.transmitted << '|'
+                             << attempt.delivered << '\n';
         }
     }
     const auto accepted_this_trial = std::accumulate(
@@ -292,10 +338,7 @@ void accumulate_trial(Metrics& metrics, const Scenario& scenario,
         (symbol_size + wire_overhead_bytes);
     metrics.decision_records += engine.decision_trace_log.records().size();
     metrics.event_records += engine.simulation_event_log.records().size();
-    metrics.trace_hash = fnv_append(
-        metrics.trace_hash, engine.decision_trace_log.serialize());
-    metrics.trace_hash = fnv_append(
-        metrics.trace_hash, engine.simulation_event_log.serialize());
+    metrics.trace_hash = fnv_append(metrics.trace_hash, structural_trace.str());
     metrics.replay_verified = metrics.replay_verified && verification.ok;
 }
 
@@ -348,7 +391,7 @@ SweepResult run_sweep() {
               "transmission_attempts,hal_accepted_attempts,delivered_attempts,"
               "accepted_wire_bytes,useful_payload_bytes,energy_j,"
               "mean_terminal_latency_ms,max_terminal_latency_ms,"
-              "decision_records,event_records,trace_fingerprint,"
+              "decision_records,event_records,structural_trace_fingerprint,"
               "paired_ledger_replay_verified\n";
 
     for (const auto& scenario : scenarios) {
