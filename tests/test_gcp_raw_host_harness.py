@@ -98,6 +98,26 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         self.assertIn("--no-service-account", command)
         self.assertIn("--no-scopes", command)
 
+    def test_ssh_and_scp_require_the_explicit_ephemeral_key(self):
+        with tempfile.TemporaryDirectory() as name:
+            cfg = config(Path(name))
+            fake = FakeRunner()
+            sut = harness.GcpRawHarness(cfg, fake, gcloud="gcloud")
+            with self.assertRaises(harness.HarnessError):
+                sut.ssh_args(sut.names.sender_instance, cfg.sender_zone, "true")
+            sut.ssh_key_file = Path(name) / "ephemeral-ssh-key"
+            ssh = sut.ssh_args(
+                sut.names.sender_instance, cfg.sender_zone, "true"
+            )
+            sut.scp(
+                "source",
+                f"{sut.names.sender_instance}:/tmp/destination",
+                zone=cfg.sender_zone,
+            )
+        expected = f"--ssh-key-file={sut.ssh_key_file}"
+        self.assertIn(expected, ssh)
+        self.assertIn(expected, fake.commands[0])
+
     def test_cleanup_is_exact_and_idempotent(self):
         with tempfile.TemporaryDirectory() as name:
             cfg = config(Path(name))

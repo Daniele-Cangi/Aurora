@@ -264,12 +264,15 @@ class GcpRawHarness:
         self.runner = runner
         self.gcloud = gcloud
         self.names = Names.from_run_id(config.run_id)
+        self.ssh_key_file: Path | None = None
 
     def gc(self, *args: str, check: bool = True, timeout: int | None = None):
         command = [self.gcloud, *args, f"--project={self.config.project}"]
         return self.runner.run(command, check=check, timeout=timeout)
 
     def ssh_args(self, instance: str, zone: str, command: str) -> list[str]:
+        if self.ssh_key_file is None:
+            raise HarnessError("ephemeral SSH key has not been prepared")
         return [
             self.gcloud,
             "compute",
@@ -279,6 +282,7 @@ class GcpRawHarness:
             f"--zone={zone}",
             "--tunnel-through-iap",
             "--quiet",
+            f"--ssh-key-file={self.ssh_key_file}",
             f"--command={command}",
         ]
 
@@ -295,6 +299,8 @@ class GcpRawHarness:
         zone: str,
         timeout: int = 180,
     ) -> None:
+        if self.ssh_key_file is None:
+            raise HarnessError("ephemeral SSH key has not been prepared")
         self.runner.run(
             [
                 self.gcloud,
@@ -304,6 +310,7 @@ class GcpRawHarness:
                 f"--zone={zone}",
                 "--tunnel-through-iap",
                 "--quiet",
+                f"--ssh-key-file={self.ssh_key_file}",
                 source,
                 destination,
             ],
@@ -395,6 +402,25 @@ class GcpRawHarness:
 
     def prepare_runtime(self, temp: Path) -> str:
         n = self.names
+        ssh_keygen = shutil.which("ssh-keygen")
+        if not ssh_keygen:
+            raise HarnessError("ssh-keygen was not found")
+        self.ssh_key_file = temp / "gcp-ssh-key"
+        self.runner.run(
+            [
+                ssh_keygen,
+                "-q",
+                "-t",
+                "rsa",
+                "-b",
+                "3072",
+                "-N",
+                "",
+                "-f",
+                str(self.ssh_key_file),
+            ],
+            timeout=30,
+        )
         tx_setup = (
             "set -euo pipefail; "
             "sudo DEBIAN_FRONTEND=noninteractive apt-get update; "
@@ -683,12 +709,12 @@ class GcpRawHarness:
                 sender_text, receiver_text, timing = self.run_transport(
                     sender_ip, receiver_ip
                 )
-            sender_meta = self.host_metadata(
-                self.names.sender_instance, self.config.sender_zone
-            )
-            receiver_meta = self.host_metadata(
-                self.names.receiver_instance, self.config.receiver_zone
-            )
+                sender_meta = self.host_metadata(
+                    self.names.sender_instance, self.config.sender_zone
+                )
+                receiver_meta = self.host_metadata(
+                    self.names.receiver_instance, self.config.receiver_zone
+                )
             if sender_meta["binary_sha256"] != binary_sha or \
                     receiver_meta["binary_sha256"] != binary_sha:
                 raise HarnessError("runtime binary identity mismatch")
