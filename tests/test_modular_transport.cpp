@@ -26,8 +26,9 @@ public:
 
     [[nodiscard]] std::unique_ptr<aurora::fec::SymbolDecoder> make_decoder(
         std::uint32_t source_symbol_count,
-        std::size_t symbol_size) const override {
-        return delegate_.make_decoder(source_symbol_count, symbol_size);
+        std::size_t symbol_size,
+        std::size_t source_bytes) const override {
+        return delegate_.make_decoder(source_symbol_count, symbol_size, source_bytes);
     }
 
 private:

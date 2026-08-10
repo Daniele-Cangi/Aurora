@@ -38,7 +38,8 @@ public:
         std::uint64_t generation_seed) const = 0;
     [[nodiscard]] virtual std::unique_ptr<SymbolDecoder> make_decoder(
         std::uint32_t source_symbol_count,
-        std::size_t symbol_size) const = 0;
+        std::size_t symbol_size,
+        std::size_t source_bytes) const = 0;
 };
 
 class LtLikeSymbolEncoder final : public SymbolEncoder {
@@ -85,7 +86,9 @@ public:
 
     [[nodiscard]] std::unique_ptr<SymbolDecoder> make_decoder(
         std::uint32_t source_symbol_count,
-        std::size_t symbol_size) const override {
+        std::size_t symbol_size,
+        std::size_t source_bytes) const override {
+        (void)source_bytes;
         return std::make_unique<LtLikeSymbolDecoder>(source_symbol_count, symbol_size);
     }
 };

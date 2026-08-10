@@ -1,5 +1,8 @@
 #define AURORA_NO_MAIN
 #include "../aurora_x.cpp"
+#ifdef AURORA_USE_WIREHAIR
+#include "aurora/fec/WirehairCodec.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -56,6 +59,8 @@ struct Scenario {
 struct Controller {
     std::string name;
     enum class Kind { FIXED_MINIMUM, FIXED_CLASS_AWARE, BIOLOGICAL } kind;
+    enum class Codec { EXPERIMENTAL_LT, WIREHAIR } codec =
+        Codec::EXPERIMENTAL_LT;
 };
 
 struct Metrics {
@@ -142,9 +147,22 @@ std::unique_ptr<aurora::AuroraOrganism> organism_for(
             policy = std::make_shared<aurora::control::BiologicalAdaptivePolicy>();
             break;
     }
+    std::shared_ptr<aurora::fec::GenerationCodec> codec;
+    switch (controller.codec) {
+        case Controller::Codec::EXPERIMENTAL_LT:
+            codec = std::make_shared<aurora::fec::ExperimentalLtLikeCodec>();
+            break;
+        case Controller::Codec::WIREHAIR:
+#ifdef AURORA_USE_WIREHAIR
+            codec = std::make_shared<aurora::fec::WirehairCodec>();
+            break;
+#else
+            throw std::logic_error(
+                "Wirehair controller requested without USE_WIREHAIR");
+#endif
+    }
     return std::make_unique<aurora::AlienFountainOrganism>(
-        std::make_shared<aurora::fec::ExperimentalLtLikeCodec>(),
-        std::move(policy));
+        std::move(codec), std::move(policy));
 }
 
 std::vector<Scenario> canonical_scenarios() {
@@ -206,6 +224,18 @@ std::vector<Controller> controllers() {
         {"fixed-class-aware", Controller::Kind::FIXED_CLASS_AWARE},
         {"biological-adaptive", Controller::Kind::BIOLOGICAL}};
 }
+
+#ifdef AURORA_USE_WIREHAIR
+std::vector<Controller> external_fec_controllers() {
+    return {
+        {"fixed-class-aware/experimental-lt-like",
+         Controller::Kind::FIXED_CLASS_AWARE,
+         Controller::Codec::EXPERIMENTAL_LT},
+        {"fixed-class-aware/wirehair-legacy-fixups-2026-07",
+         Controller::Kind::FIXED_CLASS_AWARE,
+         Controller::Codec::WIREHAIR}};
+}
+#endif
 
 void accumulate_trial(Metrics& metrics, const Scenario& scenario,
                       const Controller& controller, std::uint64_t seed) {
@@ -379,9 +409,8 @@ struct SweepResult {
     std::size_t controllers = 0;
 };
 
-SweepResult run_sweep() {
+SweepResult run_sweep(const std::vector<Controller>& compared_controllers) {
     const auto scenarios = canonical_scenarios();
-    const auto compared_controllers = controllers();
     std::ostringstream report;
     report << "schema,scenario,controller,evidence_level,world_fingerprint,"
               "seeds,trials,generations,delivered,deadline_misses,"
@@ -428,7 +457,10 @@ SweepResult run_sweep() {
     return {report.str(), scenarios.size(), compared_controllers.size()};
 }
 
-int verify_report(const char* path) {
+SweepResult run_sweep() { return run_sweep(controllers()); }
+
+int verify_report(const char* path,
+                  const std::vector<Controller>& compared_controllers) {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
         std::cerr << "transport benchmark: cannot open canonical report\n";
@@ -437,7 +469,7 @@ int verify_report(const char* path) {
     const std::string expected{
         std::istreambuf_iterator<char>(input),
         std::istreambuf_iterator<char>()};
-    const auto sweep = run_sweep();
+    const auto sweep = run_sweep(compared_controllers);
     if (expected != sweep.report) {
         const auto mismatch = std::mismatch(
             expected.begin(), expected.end(), sweep.report.begin(),
@@ -461,11 +493,27 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (argc == 3 && std::string_view(argv[1]) == "--verify-sweep") {
-            return verify_report(argv[2]);
+            return verify_report(argv[2], controllers());
         }
+#ifdef AURORA_USE_WIREHAIR
+        if (argc == 2 && std::string_view(argv[1]) == "--external-fec-sweep") {
+            std::cout << run_sweep(external_fec_controllers()).report;
+            return 0;
+        }
+        if (argc == 3 &&
+            std::string_view(argv[1]) == "--verify-external-fec-sweep") {
+            return verify_report(argv[2], external_fec_controllers());
+        }
+#endif
         std::cerr << "usage: aurora_transport_benchmark --sweep\n"
                      "       aurora_transport_benchmark --verify-sweep "
-                     "<canonical-report>\n";
+                     "<canonical-report>\n"
+#ifdef AURORA_USE_WIREHAIR
+                     "       aurora_transport_benchmark --external-fec-sweep\n"
+                     "       aurora_transport_benchmark "
+                     "--verify-external-fec-sweep <canonical-report>\n"
+#endif
+            ;
         return 2;
     } catch (const std::exception& error) {
         std::cerr << "transport benchmark: " << error.what() << '\n';

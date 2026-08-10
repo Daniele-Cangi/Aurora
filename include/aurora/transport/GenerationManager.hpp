@@ -480,7 +480,8 @@ private:
                             std::size_t symbol_size)
             : descriptor(value),
               encoder(codec.make_encoder(bytes, symbol_size, value.coding.seed)),
-              decoder(codec.make_decoder(value.source_symbol_count, symbol_size)) {}
+              decoder(codec.make_decoder(
+                  value.source_symbol_count, symbol_size, value.length)) {}
 
         SegmentDecoderState(SegmentDecoderState&&) noexcept = default;
         SegmentDecoderState& operator=(SegmentDecoderState&&) noexcept = default;

@@ -1,4 +1,4 @@
-name: dependency-light-ci
+name: transport-ci
 
 on:
   push:
@@ -17,12 +17,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Configure dependency-light profile
+      - name: Configure transport and external-FEC profile
         run: >-
           cmake -S . -B build
           -DBUILD_NET_TOOLS=OFF
           -DUSE_SODIUM=OFF
           -DUSE_RAPTORQ=OFF
+          -DUSE_WIREHAIR=ON
           -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build --config Release --parallel 2
