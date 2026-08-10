@@ -10,6 +10,7 @@ on:
       - "include/aurora/transport/**"
       - "benchmarks/process_*.trace"
       - "CMakeLists.txt"
+      - "README.md"
 
 permissions:
   contents: read
