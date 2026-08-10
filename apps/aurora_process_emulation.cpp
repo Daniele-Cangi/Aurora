@@ -5,6 +5,7 @@
 #include "aurora/transport/GenerationManager.hpp"
 #include "aurora/transport/GenerationReceiver.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -14,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -63,14 +65,20 @@ public:
 
 class UdpSocket {
 public:
-    explicit UdpSocket(std::uint16_t bind_port) {
+    UdpSocket(std::string_view bind_host, std::uint16_t bind_port) {
+        in_addr parsed_address{};
+        if (::inet_pton(AF_INET, std::string(bind_host).c_str(),
+                        &parsed_address) != 1) {
+            throw std::invalid_argument(
+                "process emulation: bind host must be an IPv4 literal");
+        }
         socket_ = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
         if (socket_ == invalid_socket) fail("socket creation");
 
         sockaddr_in address{};
         address.sin_family = AF_INET;
         address.sin_port = htons(bind_port);
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_addr = parsed_address;
         if (::bind(socket_, reinterpret_cast<const sockaddr*>(&address),
                    sizeof(address)) != 0) {
             fail("socket bind");
@@ -91,11 +99,16 @@ public:
     UdpSocket& operator=(const UdpSocket&) = delete;
 
     void send(const std::vector<std::uint8_t>& bytes,
+              std::string_view destination_host,
               std::uint16_t destination_port) const {
         sockaddr_in destination{};
         destination.sin_family = AF_INET;
         destination.sin_port = htons(destination_port);
-        destination.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (::inet_pton(AF_INET, std::string(destination_host).c_str(),
+                        &destination.sin_addr) != 1) {
+            throw std::invalid_argument(
+                "process emulation: destination host must be an IPv4 literal");
+        }
 #ifdef _WIN32
         const auto sent = ::sendto(
             socket_, reinterpret_cast<const char*>(bytes.data()),
@@ -187,6 +200,16 @@ std::uint16_t parse_port(const char* value) {
     return static_cast<std::uint16_t>(parsed);
 }
 
+std::size_t parse_generation_count(const char* value) {
+    std::size_t consumed = 0;
+    const auto parsed = std::stoul(value, &consumed, 10);
+    if (value[consumed] != '\0' || parsed == 0 || parsed > 1024) {
+        throw std::invalid_argument(
+            "process emulation: invalid generation count");
+    }
+    return static_cast<std::size_t>(parsed);
+}
+
 std::uint64_t elapsed_ms(
     const std::chrono::steady_clock::time_point& started) {
     return static_cast<std::uint64_t>(
@@ -206,10 +229,12 @@ std::optional<aurora::emulation::FeedbackFrame> receive_feedback(
     }
 }
 
-int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
+int run_sender(std::string_view forward_host, std::uint16_t forward_port,
+               std::string_view feedback_bind_host,
+               std::uint16_t feedback_port,
                const std::string& trace_path) {
     const auto started = std::chrono::steady_clock::now();
-    UdpSocket feedback_socket(feedback_port);
+    UdpSocket feedback_socket(feedback_bind_host, feedback_port);
     auto codec = std::make_shared<aurora::fec::ExperimentalLtLikeCodec>();
     auto policy =
         std::make_shared<aurora::control::BiologicalAdaptivePolicy>();
@@ -238,12 +263,14 @@ int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
         generations.push_back(std::move(state));
     }
 
-    UdpSocket forward_socket(0);
+    UdpSocket forward_socket("0.0.0.0", 0);
     std::uint32_t forward_datagrams = 0;
     std::uint32_t feedback_datagrams = 0;
     std::uint64_t impairment_attempt = 0;
     std::uint32_t dropped = 0;
     std::uint32_t duplicated = 0;
+    std::uint32_t delayed = 0;
+    std::uint32_t reordered = 0;
 
     auto accept_feedback = [&](aurora::emulation::FeedbackFrame incoming) {
         for (auto& generation : generations) {
@@ -272,7 +299,7 @@ int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
             if (generation.feedback) continue;
             all_acknowledged = false;
             forward_socket.send(aurora::emulation::encode_descriptor(
-                generation.spawned.descriptor), forward_port);
+                generation.spawned.descriptor), forward_host, forward_port);
             ++forward_datagrams;
             poll_feedback();
         }
@@ -283,21 +310,62 @@ int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
             "process emulation: receiver did not acknowledge every descriptor");
     }
 
+    struct PendingDatagram {
+        std::chrono::steady_clock::time_point release;
+        std::uint64_t attempt = 0;
+        std::uint64_t order = 0;
+        std::vector<std::uint8_t> frame;
+    };
+    std::vector<PendingDatagram> pending;
+    std::uint64_t enqueue_order = 0;
+    std::uint64_t highest_sent_attempt = 0;
+    bool sent_any = false;
+    auto release_epoch = std::chrono::steady_clock::now();
+
+    auto flush_pending = [&](bool flush_all) {
+        while (!pending.empty()) {
+            const auto next = std::min_element(
+                pending.begin(), pending.end(),
+                [](const auto& left, const auto& right) {
+                    if (left.release != right.release) {
+                        return left.release < right.release;
+                    }
+                    return left.order < right.order;
+                });
+            const auto now = std::chrono::steady_clock::now();
+            if (next->release > now) {
+                if (!flush_all) return;
+                std::this_thread::sleep_until(next->release);
+            }
+            if (sent_any && next->attempt < highest_sent_attempt) ++reordered;
+            highest_sent_attempt = std::max(
+                highest_sent_attempt, next->attempt);
+            sent_any = true;
+            forward_socket.send(
+                next->frame, forward_host, forward_port);
+            ++forward_datagrams;
+            pending.erase(next);
+            poll_feedback();
+        }
+    };
+
     auto send_symbol = [&](const ::fec::Pkt& packet) {
         const auto frame = aurora::emulation::encode_symbol(packet);
-        const auto action = trace.action(impairment_attempt++);
-        if (action == aurora::emulation::ImpairmentAction::DROP) {
+        const auto attempt = impairment_attempt++;
+        const auto directive = trace.directive(attempt);
+        if (directive.action == aurora::emulation::ImpairmentAction::DROP) {
             ++dropped;
             return;
         }
-        forward_socket.send(frame, forward_port);
-        ++forward_datagrams;
-        if (action == aurora::emulation::ImpairmentAction::DUPLICATE) {
-            forward_socket.send(frame, forward_port);
-            ++forward_datagrams;
+        if (directive.delay_ms > 0) ++delayed;
+        const auto release = release_epoch +
+            std::chrono::milliseconds(directive.delay_ms);
+        pending.push_back({release, attempt, enqueue_order++, frame});
+        if (directive.action ==
+            aurora::emulation::ImpairmentAction::DUPLICATE) {
+            pending.push_back({release, attempt, enqueue_order++, frame});
             ++duplicated;
         }
-        poll_feedback();
     };
 
     std::size_t maximum_packets = 0;
@@ -312,9 +380,11 @@ int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
             send_symbol(generation.spawned.packets[index]);
         }
     }
+    flush_pending(true);
 
     for (int round = 0; round < 128; ++round) {
         bool all_delivered = true;
+        release_epoch = std::chrono::steady_clock::now();
         for (auto& generation : generations) {
             if (generation.feedback->report.delivered()) continue;
             all_delivered = false;
@@ -323,6 +393,7 @@ int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
                 elapsed_ms(started));
             if (!emitted.packets.empty()) send_symbol(emitted.packets.front());
         }
+        flush_pending(true);
         if (all_delivered) break;
     }
 
@@ -346,16 +417,21 @@ int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
               << " impairment_attempts=" << impairment_attempt
               << " impairment_dropped=" << dropped
               << " impairment_duplicated=" << duplicated
+              << " impairment_delayed=" << delayed
+              << " impairment_reordered=" << reordered
               << " trace_name=" << trace.name()
               << " trace_fingerprint=" << trace.fingerprint()
               << " feedback_applied=2\n";
     return 0;
 }
 
-int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port,
+int run_receiver(std::string_view forward_bind_host,
+                 std::uint16_t forward_port,
+                 std::string_view feedback_host,
+                 std::uint16_t feedback_port,
                  std::size_t expected_generations) {
-    UdpSocket forward_socket(forward_port);
-    UdpSocket feedback_socket(0);
+    UdpSocket forward_socket(forward_bind_host, forward_port);
+    UdpSocket feedback_socket("0.0.0.0", 0);
     aurora::fec::ExperimentalLtLikeCodec codec;
     std::unordered_map<std::string,
         std::unique_ptr<aurora::transport::GenerationReceiver>> receivers;
@@ -384,7 +460,7 @@ int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port,
                 feedback_socket.send(
                     aurora::emulation::encode_feedback({
                         descriptor.descriptor_fingerprint, report}),
-                    feedback_port);
+                    feedback_host, feedback_port);
                 continue;
             }
             if (type != aurora::emulation::FrameType::SYMBOL) {
@@ -397,12 +473,12 @@ int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port,
                 found->second->integrate({packet}, elapsed_ms(started));
             const auto feedback = aurora::emulation::encode_feedback({
                 found->second->descriptor().descriptor_fingerprint, report});
-            feedback_socket.send(feedback, feedback_port);
+            feedback_socket.send(feedback, feedback_host, feedback_port);
             if (report.delivered()) {
                 // Repeat the terminal datagram to tolerate one lost reverse
                 // packet while keeping UDP semantics explicit.
-                feedback_socket.send(feedback, feedback_port);
-                feedback_socket.send(feedback, feedback_port);
+                feedback_socket.send(feedback, feedback_host, feedback_port);
+                feedback_socket.send(feedback, feedback_host, feedback_port);
                 if (completed.insert(packet.generation_id).second) {
                     std::cout << "receiver_generation_complete generation="
                               << packet.generation_id
@@ -427,28 +503,30 @@ int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port,
 
 int main(int argc, char* argv[]) {
     try {
-        if (argc != 5) {
+        if (argc != 7) {
             std::cerr << "usage: aurora_process_emulation "
-                         "sender <forward-port> <feedback-port> <trace-file>\n"
+                         "sender <forward-host> <forward-port> "
+                         "<feedback-bind-host> <feedback-port> <trace-file>\n"
                          "   or: aurora_process_emulation receiver "
-                         "<forward-port> <feedback-port> <generation-count>\n";
+                         "<forward-bind-host> <forward-port> "
+                         "<feedback-host> <feedback-port> <generation-count>\n";
             return 2;
         }
         SocketRuntime runtime;
-        const auto forward_port = parse_port(argv[2]);
-        const auto feedback_port = parse_port(argv[3]);
+        const auto forward_port = parse_port(argv[3]);
+        const auto feedback_port = parse_port(argv[5]);
         if (forward_port == feedback_port) {
             throw std::invalid_argument(
                 "process emulation: forward and feedback ports must differ");
         }
         if (std::string_view(argv[1]) == "sender") {
-            return run_sender(forward_port, feedback_port, argv[4]);
+            return run_sender(argv[2], forward_port, argv[4],
+                              feedback_port, argv[6]);
         }
         if (std::string_view(argv[1]) == "receiver") {
-            const auto count = std::stoul(argv[4]);
-            if (count == 0) throw std::invalid_argument(
-                "process emulation: generation count must be positive");
-            return run_receiver(forward_port, feedback_port, count);
+            const auto count = parse_generation_count(argv[6]);
+            return run_receiver(argv[2], forward_port, argv[4],
+                                feedback_port, count);
         }
         throw std::invalid_argument("process emulation: unknown role");
     } catch (const std::exception& error) {

@@ -376,7 +376,7 @@ if(BUILD_TESTING)
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_emulation.py"
         "$<TARGET_FILE:aurora_process_emulation>"
-        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_loopback_v1.trace")
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_timed_v2.trace")
     set_tests_properties(
       aurora.process_separated_emulation
       PROPERTIES

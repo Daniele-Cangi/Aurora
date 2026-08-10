@@ -1,0 +1,4 @@
+AURORA_IMPAIRMENT_TRACE_V2
+name=process-timed-v2
+events=P@35,P@0,D@0,U@5,P@0
+checksum=96549766f147be77
