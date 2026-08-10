@@ -34,9 +34,10 @@ void print_metrics(
     const char* mode,
     const aurora::simulation::GenerationSchedulerBenchmarkMetrics& metrics) {
     std::cout << mode << ',' << metrics.candidates << ',' << metrics.steps
-              << ',' << metrics.comparison_bound_ms << ','
-              << metrics.maximum_observed_gap_ms << ','
-              << metrics.bound_violations << ',' << metrics.selections.front()
+              << ',' << metrics.comparison_turn_gap_bound_ms << ','
+              << metrics.maximum_observed_turn_gap_ms << ','
+              << metrics.turn_gap_bound_violations << ','
+              << metrics.scheduled_turns.front()
               << '\n';
 }
 
@@ -118,12 +119,13 @@ int main(int argc, char* argv[]) {
         const auto comparison =
             aurora::simulation::compare_adversarial_scheduler_policies(
                 policy, steps, critical_contenders);
-        std::cout << "mode,candidates,steps,bound_ms,max_gap_ms,"
-                     "bound_violations,elastic_selections\n";
+        std::cout << "mode,candidates,steps,turn_gap_bound_ms,"
+                     "max_turn_gap_ms,turn_gap_bound_violations,"
+                     "elastic_scheduled_turns\n";
         print_metrics("strict", comparison.strict);
         print_metrics("fair", comparison.fair);
-        return comparison.strict.bound_violations > 0 &&
-                comparison.fair.bound_violations == 0
+        return comparison.strict.turn_gap_bound_violations > 0 &&
+                comparison.fair.turn_gap_bound_violations == 0
             ? 0 : 1;
     } catch (const std::exception& error) {
         std::cerr << "scheduler benchmark: " << error.what() << '\n';

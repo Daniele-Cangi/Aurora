@@ -349,7 +349,7 @@ if(BUILD_TESTING)
     NAME aurora.generation_scheduler_benchmark_report
     COMMAND aurora_scheduler_benchmark
       --verify-sweep
-      "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/generation_scheduler_sweep_v1.csv")
+      "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/generation_scheduler_sweep_v2.csv")
   set_tests_properties(
     aurora.generation_scheduler_benchmark_sweep
     aurora.generation_scheduler_benchmark_report

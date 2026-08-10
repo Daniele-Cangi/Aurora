@@ -442,6 +442,34 @@ void generation_planning_is_causal_at_arrival() {
     assert(engine.simulation_event_log.session().generations[1].planned());
 }
 
+void scheduled_turn_is_not_effective_transport_service() {
+    Engine engine;
+    engine.init(
+        "deadline:10; reliability:0.99; duty:0.01; optical:on; "
+        "backscatter:on; ris:2; selector:argmax");
+    auto& source = *engine.net.get("SRC");
+    (void)engine.release_scheduled_arrival(0, source);
+    engine.select_active_generation(0);
+
+    auto& generation = engine.scheduled_generations.front();
+    assert(generation.scheduled_turns == 1);
+    assert(generation.last_scheduled_at_ms == 0);
+    assert(!generation.last_effective_service_at_ms.has_value());
+    assert(generation.effective_service_attempts == 0);
+
+    // A refused or zero-attempt action does not turn the scheduler grant into
+    // transport service and therefore cannot support an effective-service
+    // fairness claim.
+    engine.record_effective_transport_service(0, 0);
+    assert(!generation.last_effective_service_at_ms.has_value());
+    assert(generation.effective_service_attempts == 0);
+
+    engine.record_effective_transport_service(0, 2);
+    assert(generation.last_effective_service_at_ms == 0);
+    assert(generation.effective_service_attempts == 2);
+    assert(generation.scheduled_turns == 1);
+}
+
 } // namespace
 
 int main() {
@@ -458,6 +486,7 @@ int main() {
     safety_monitor_snapshot_restores_pending_transition();
     cross_layer_proposal_replays_rng_selector_and_ucb_feedback();
     generation_planning_is_causal_at_arrival();
+    scheduled_turn_is_not_effective_transport_service();
     std::cout << "runtime correctness tests passed\n";
     return 0;
 }

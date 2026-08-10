@@ -89,6 +89,10 @@ struct SimulationStepEvent {
     std::uint64_t step = 0;
     std::uint64_t simulated_now_ms = 0;
     std::uint32_t active_generation_index = 0;
+    // A step grants the active generation one scheduler turn. Effective
+    // service counts only attempts accepted by the HAL; channel delivery is a
+    // separate outcome and is intentionally not required here.
+    std::uint32_t effective_transport_service_attempts = 0;
     std::uint32_t arrived_generation_index = no_generation_arrival;
     std::uint64_t arrived_source_packets = 0;
     std::uint64_t random_before = 0;
@@ -402,7 +406,7 @@ inline std::string decode_bytes(const std::string& encoded) {
 
 } // namespace simulation_event_detail
 
-// Identity over the descriptor fields intentionally carried by the V6
+// Identity over the descriptor fields intentionally carried by the V7
 // decision trace. This remains stable after DecisionReplayLog serialization,
 // unlike the richer in-memory generation fingerprint.
 inline std::uint64_t simulation_descriptor_identity(
@@ -461,7 +465,7 @@ inline DerivedSimulationEnvironment derive_simulation_environment(
 class SimulationEventLedger {
 public:
     static constexpr std::string_view format_header =
-        "AURORA_SIMULATION_EVENT_LEDGER_V6";
+        "AURORA_SIMULATION_EVENT_LEDGER_V7";
 
     void begin(SimulationEventSession session) {
         if (!records_.empty() || session_.initial_random_state != 0) {
@@ -575,7 +579,7 @@ public:
             validate_planning_horizon();
             std::vector<std::uint32_t> ranks(session_.generations.size(), 0);
             std::vector<bool> terminal(session_.generations.size(), false);
-            std::vector<std::optional<std::uint64_t>> last_served_at_ms(
+            std::vector<std::optional<std::uint64_t>> last_scheduled_at_ms(
                 session_.generations.size());
             for (std::size_t index = 0; index < records_.size(); ++index) {
                 const auto& event = records_[index];
@@ -595,7 +599,7 @@ public:
                         identity.scheduling_importance,
                         identity.arrives_at_ms <= event.simulated_now_ms,
                         terminal[generation],
-                        last_served_at_ms[generation]});
+                        last_scheduled_at_ms[generation]});
                 }
                 auto selected = simulation::select_scheduled_generation(
                     candidates, event.simulated_now_ms,
@@ -618,7 +622,7 @@ public:
                         "active generation does not match aging/fairness schedule");
                 }
                 if (selected) {
-                    last_served_at_ms[*selected] = event.simulated_now_ms;
+                    last_scheduled_at_ms[*selected] = event.simulated_now_ms;
                 }
                 if (event.decoder_rank_before !=
                     ranks[event.active_generation_index]) {
@@ -680,6 +684,11 @@ public:
                 const auto& decision = decisions.records()[index];
                 verify_session_binding(event, decision);
                 verify_decision_binding(event, decision, link_outcomes);
+                if (event.effective_transport_service_attempts !=
+                    decision.trace.execution.hal_accepted_attempts) {
+                    throw std::invalid_argument(
+                        "effective transport service does not match HAL-accepted execution");
+                }
                 verify_arrivals(event, decision, destination_seen, pending_inbox);
                 verify_action_rng(event, decision);
                 for (const auto& attempt : decision.trace.execution.attempts) {
@@ -1379,6 +1388,7 @@ private:
                << hex_u64(previous_checksum) << '|'
                << event.simulated_now_ms << '|'
                << event.active_generation_index << '|'
+               << event.effective_transport_service_attempts << '|'
                << event.arrived_generation_index << '|'
                << event.arrived_source_packets << '|'
                << hex_u64(event.random_before) << '|'
@@ -1416,7 +1426,7 @@ private:
                                             std::uint64_t previous_checksum) {
         using namespace simulation_event_detail;
         const auto fields = split(encoded, '|');
-        if (fields.size() != 35 || fields[0] != "STEP") {
+        if (fields.size() != 36 || fields[0] != "STEP") {
             throw std::invalid_argument(
                 "simulation event ledger: invalid step record");
         }
@@ -1431,9 +1441,13 @@ private:
         event.simulated_now_ms = parse_u64(fields[cursor++], 10, "time");
         const auto active_generation_index = parse_u64(
             fields[cursor++], 10, "active generation index");
+        const auto effective_transport_service_attempts = parse_u64(
+            fields[cursor++], 10, "effective transport service attempts");
         const auto arrived_generation_index = parse_u64(
             fields[cursor++], 10, "arrived generation index");
         if (active_generation_index >
+                std::numeric_limits<std::uint32_t>::max() ||
+            effective_transport_service_attempts >
                 std::numeric_limits<std::uint32_t>::max() ||
             arrived_generation_index >
                 std::numeric_limits<std::uint32_t>::max()) {
@@ -1442,6 +1456,8 @@ private:
         }
         event.active_generation_index = static_cast<std::uint32_t>(
             active_generation_index);
+        event.effective_transport_service_attempts =
+            static_cast<std::uint32_t>(effective_transport_service_attempts);
         event.arrived_generation_index = static_cast<std::uint32_t>(
             arrived_generation_index);
         event.arrived_source_packets = parse_u64(

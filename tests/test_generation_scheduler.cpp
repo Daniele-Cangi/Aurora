@@ -8,7 +8,7 @@
 int main() {
     using aurora::simulation::GenerationSchedulingCandidate;
     using aurora::simulation::GenerationSchedulingPolicy;
-    using aurora::simulation::maximum_service_gap_ms;
+    using aurora::simulation::maximum_scheduling_turn_gap_ms;
     using aurora::simulation::select_scheduled_generation;
     using aurora::transport::TransportImportance;
 
@@ -31,7 +31,7 @@ int main() {
 
     bool strict_bound_rejected = false;
     try {
-        (void)maximum_service_gap_ms(strict_policy, candidates.size());
+        (void)maximum_scheduling_turn_gap_ms(strict_policy, candidates.size());
     } catch (const std::invalid_argument&) {
         strict_bound_rejected = true;
     }
@@ -59,14 +59,15 @@ int main() {
         {1, 0, 50'000, TransportImportance::CRITICAL, true, false, {}},
         {2, 0, 50'000, TransportImportance::CRITICAL, true, false, {}}};
     assert(select_scheduled_generation(bounded, 3'000, policy) == 0);
-    bounded[0].last_served_at_ms = 3'000;
+    bounded[0].last_scheduled_at_ms = 3'000;
     assert(select_scheduled_generation(bounded, 4'000, policy) == 1);
-    bounded[1].last_served_at_ms = 4'000;
+    bounded[1].last_scheduled_at_ms = 4'000;
     assert(select_scheduled_generation(bounded, 5'000, policy) == 2);
-    assert(maximum_service_gap_ms(policy, bounded.size()) == 5'000);
+    assert(maximum_scheduling_turn_gap_ms(policy, bounded.size()) == 5'000);
     auto unaligned_policy = policy;
     unaligned_policy.starvation_limit_ms = 2'501;
-    assert(maximum_service_gap_ms(unaligned_policy, bounded.size()) == 5'000);
+    assert(maximum_scheduling_turn_gap_ms(
+        unaligned_policy, bounded.size()) == 5'000);
 
     candidates[0].terminal = true;
     candidates[2].terminal = true;

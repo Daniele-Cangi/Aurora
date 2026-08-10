@@ -420,7 +420,10 @@ struct Engine {
     bool arrived = false;
     bool terminal = false;
     bool delivered = false;
-    optional<uint64_t> last_served_at_ms;
+    optional<uint64_t> last_scheduled_at_ms;
+    optional<uint64_t> last_effective_service_at_ms;
+    uint64_t scheduled_turns = 0;
+    uint64_t effective_service_attempts = 0;
   };
   vector<ScheduledGeneration> scheduled_generations;
   size_t active_generation_index = 0;
@@ -533,10 +536,10 @@ struct Engine {
          << " aging_ms=" << generation_scheduling_policy.aging_interval_ms
          << " starvation_ms="
          << generation_scheduling_policy.starvation_limit_ms
-         << " maximum_gap_ms=";
+         << " maximum_scheduling_turn_gap_ms=";
     if (generation_scheduling_policy.discipline ==
         aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR) {
-      cout << aurora::simulation::maximum_service_gap_ms(
+      cout << aurora::simulation::maximum_scheduling_turn_gap_ms(
         generation_scheduling_policy, scheduled_generations.size());
     } else {
       cout << "unbounded";
@@ -619,13 +622,15 @@ struct Engine {
         generation.scheduling_importance,
         generation.arrived,
         generation.terminal,
-        generation.last_served_at_ms});
+        generation.last_scheduled_at_ms});
     }
     if (const auto selected =
           aurora::simulation::select_scheduled_generation(
             candidates, simulated_now_ms, generation_scheduling_policy)) {
       activate_generation(*selected);
-      scheduled_generations[*selected].last_served_at_ms = simulated_now_ms;
+      auto& generation = scheduled_generations[*selected];
+      generation.last_scheduled_at_ms = simulated_now_ms;
+      ++generation.scheduled_turns;
       return;
     }
     for (size_t index = scheduled_generations.size(); index-- > 0;) {
@@ -760,7 +765,9 @@ struct Engine {
       aurora::telemetry::SimulationStepEvent event,
       const Node& source,
       const Node& destination,
-      const aurora::transport::DecodeReport& report) {
+      const aurora::transport::DecodeReport& report,
+      uint32_t effective_service_attempts) {
+    event.effective_transport_service_attempts = effective_service_attempts;
     event.random_after_action = util::rng.s;
     event.source_energy_after_action_j = source.bat.E;
     event.destination_energy_after_action_j = destination.bat.E;
@@ -770,6 +777,14 @@ struct Engine {
     event.decoder_rank_after = report.decoder_rank;
     event.decode_status = static_cast<uint8_t>(report.status);
     simulation_event_log.record(event);
+  }
+
+  void record_effective_transport_service(
+      uint64_t simulated_now_ms, uint32_t hal_accepted_attempts) {
+    if (hal_accepted_attempts == 0) return;
+    auto& generation = scheduled_generations[active_generation_index];
+    generation.last_effective_service_at_ms = simulated_now_ms;
+    generation.effective_service_attempts += hal_accepted_attempts;
   }
 
   static double entropy_residual(int have, int need){ double e=max(0, need-have)/(double)need; return min(1.0,max(0.0,e)); }
@@ -1194,6 +1209,8 @@ struct Engine {
       const int tries_real = executed.attempts;
       const int ok_cnt = executed.delivered;
       const string mode_chosen = executed.mode;
+      record_effective_transport_service(
+        simulated_now_ms, static_cast<uint32_t>(executed.hal_accepted));
       if(step < 3) std::cout << "[ADAPTIVE] step=" << step << " mode_chosen=" << mode_chosen << std::endl;
 
       double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
@@ -1286,7 +1303,9 @@ struct Engine {
       update_controller_and_record(
         opt, decision_trace, proposal_transition, sample, simulated_now_ms,
         controller_before, controller_mode_before);
-      finish_simulation_step(simulation_event, S, D, res);
+      finish_simulation_step(
+        simulation_event, S, D, res,
+        static_cast<uint32_t>(executed.hal_accepted));
 
       emit_health_event(step, nerve_health_, aurora::FlowClass::NERVE);
       emit_health_event(step, gland_health_, aurora::FlowClass::GLAND);
@@ -1460,6 +1479,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     const int tries_real = executed.attempts;
     const int ok_cnt = executed.delivered;
     const string mode_chosen = executed.mode;
+    engine.record_effective_transport_service(
+      simulated_now_ms, static_cast<uint32_t>(executed.hal_accepted));
 
     double reward = clamp( (double)ok_cnt / max(1, tries_real), 0.0, 1.0 );
     aurora::control::ProposalFeedback proposal_feedback;
@@ -1535,7 +1556,9 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     engine.update_controller_and_record(
       opt, decision_trace, proposal_transition, sample, simulated_now_ms,
       controller_before, controller_mode_before);
-    engine.finish_simulation_step(simulation_event, S, D, res);
+    engine.finish_simulation_step(
+      simulation_event, S, D, res,
+      static_cast<uint32_t>(executed.hal_accepted));
 
     engine.emit_health_event(step, engine.nerve_health_, aurora::FlowClass::NERVE);
     engine.emit_health_event(step, engine.gland_health_, aurora::FlowClass::GLAND);
@@ -1702,7 +1725,7 @@ int main(int argc, char* argv[]){
   if (engine->generation_scheduling_policy.discipline ==
       aurora::simulation::GenerationSchedulingDiscipline::AGING_FAIR) {
     try {
-      (void)aurora::simulation::maximum_service_gap_ms(
+      (void)aurora::simulation::maximum_scheduling_turn_gap_ms(
         engine->generation_scheduling_policy,
         engine->generation_arrival_schedule.arrivals().size());
     } catch (const exception& error) {
