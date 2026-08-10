@@ -10,6 +10,7 @@ include(CTest)
 option(BUILD_FIELD          "Enable FIELD_BUILD definitions (current HAL remains experimental)" OFF)
 option(USE_SODIUM           "Link against libsodium and enable real Ed25519" OFF)
 option(USE_RAPTORQ          "Enable the external/legacy RaptorQ adapter" OFF)
+option(USE_WIREHAIR         "Enable the pinned Wirehair external FEC baseline" OFF)
 option(RAPTORQ_HEADER_ONLY  "Use a header-only libRaptorQ integration" ON)
 option(BUILD_NET_TOOLS      "Build UDP and batch research utilities" ON)
 
@@ -77,6 +78,9 @@ endif()
 if(USE_RAPTORQ)
   set(AURORA_RAPTORQ_BOOL true)
   set(AURORA_FEC_PROFILE "experimental-lt-like+legacy-raptorq-adapter")
+endif()
+if(USE_WIREHAIR)
+  set(AURORA_FEC_PROFILE "experimental-lt-like+wirehair-legacy-fixups-2026-07")
 endif()
 
 set(_AURORA_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -169,6 +173,47 @@ else()
 endif()
 
 # -------------------------------------------------------------------
+# Wirehair: pinned, optional external FEC baseline
+set(AURORA_WIREHAIR_ROOT "" CACHE PATH
+    "Local Wirehair source tree; otherwise FetchContent uses the pinned commit")
+
+if(USE_WIREHAIR)
+  include(FetchContent)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build dependencies as static libraries" FORCE)
+  set(BUILD_TESTS OFF CACHE BOOL "Disable dependency-owned tests" FORCE)
+  set(BUILD_CODEC_V2 OFF CACHE BOOL "Disable Wirehair internal V2 tools/tests" FORCE)
+  set(WIREHAIR_BUILD_TOOLS OFF CACHE BOOL "Disable Wirehair tools" FORCE)
+  set(WIREHAIR_BUILD_BENCHMARKS OFF CACHE BOOL "Disable Wirehair benchmarks" FORCE)
+  set(WIREHAIR_ENABLE_SCHEDULED_TESTS OFF CACHE BOOL "Disable Wirehair scheduled tests" FORCE)
+
+  if(AURORA_WIREHAIR_ROOT)
+    if(NOT EXISTS "${AURORA_WIREHAIR_ROOT}/CMakeLists.txt")
+      message(FATAL_ERROR
+        "AURORA_WIREHAIR_ROOT does not contain a Wirehair source tree")
+    endif()
+    add_subdirectory(
+      "${AURORA_WIREHAIR_ROOT}"
+      "${CMAKE_BINARY_DIR}/_deps/wirehair-build"
+      EXCLUDE_FROM_ALL)
+  else()
+    FetchContent_Declare(
+      wirehair_external
+      GIT_REPOSITORY https://github.com/catid/wirehair.git
+      GIT_TAG 067ca7cdb66aed424ec23f97557429bf791c6f0c
+      GIT_SHALLOW FALSE)
+    FetchContent_MakeAvailable(wirehair_external)
+  endif()
+
+  if(NOT TARGET wirehair::wirehair)
+    message(FATAL_ERROR "The pinned Wirehair source did not define wirehair::wirehair")
+  endif()
+
+  add_library(aurora_wirehair_adapter STATIC src/fec/WirehairCodec.cpp)
+  target_link_libraries(aurora_wirehair_adapter
+    PUBLIC aurora_headers wirehair::wirehair)
+  target_compile_definitions(aurora_headers INTERFACE AURORA_USE_WIREHAIR=1)
+endif()
+
 # RaptorQ: explicit optional/legacy integration
 set(RAPTORQ_ROOT "" CACHE PATH "Root of a compatible RaptorQ SDK (include/lib or source tree)")
 set(AURORA_FEC_SOURCES)
@@ -246,6 +291,9 @@ function(aurora_link_common target)
   endif()
   if(TARGET aurora_raptorq)
     target_link_libraries(${target} PRIVATE aurora_raptorq)
+  endif()
+  if(TARGET aurora_wirehair_adapter)
+    target_link_libraries(${target} PRIVATE aurora_wirehair_adapter)
   endif()
 endfunction()
 
@@ -506,6 +554,30 @@ if(BUILD_TESTING)
     aurora_link_common(test_raptorq_adapter)
     add_test(NAME aurora.raptorq_adapter COMMAND test_raptorq_adapter)
   endif()
+
+  if(USE_WIREHAIR)
+    add_executable(test_wirehair_adapter tests/test_wirehair_adapter.cpp)
+    aurora_link_common(test_wirehair_adapter)
+    add_test(NAME aurora.wirehair_adapter COMMAND test_wirehair_adapter)
+    add_test(
+      NAME aurora.external_fec_transport_benchmark_sweep
+      COMMAND aurora_transport_benchmark --external-fec-sweep)
+    add_test(
+      NAME aurora.external_fec_transport_benchmark_report
+      COMMAND aurora_transport_benchmark
+        --verify-external-fec-sweep
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/external_fec_transport_sweep_v1.csv")
+    set_tests_properties(
+      aurora.wirehair_adapter
+      aurora.external_fec_transport_benchmark_sweep
+      aurora.external_fec_transport_benchmark_report
+      PROPERTIES LABELS "external-fec;benchmark;regression")
+    if(MSVC)
+      target_compile_options(test_wirehair_adapter PRIVATE /UNDEBUG)
+    else()
+      target_compile_options(test_wirehair_adapter PRIVATE -UNDEBUG)
+    endif()
+  endif()
 endif()
 
 # -------------------------------------------------------------------
@@ -555,7 +627,9 @@ set(_AURORA_ALL_TARGETS
   aurora_generation_arrivals
   aurora_scheduler_benchmark
   aurora_transport_benchmark
+  aurora_wirehair_adapter
   test_raptorq_adapter
+  test_wirehair_adapter
   test_aurora_organism
   test_transport_contract
   test_safety_envelope
@@ -597,6 +671,7 @@ message(STATUS "  C++ standard      : ${CMAKE_CXX_STANDARD}")
 message(STATUS "  BUILD_FIELD       : ${BUILD_FIELD}")
 message(STATUS "  USE_SODIUM        : ${USE_SODIUM}")
 message(STATUS "  USE_RAPTORQ       : ${USE_RAPTORQ}")
+message(STATUS "  USE_WIREHAIR      : ${USE_WIREHAIR}")
 message(STATUS "  RAPTORQ_HEADER    : ${RAPTORQ_HEADER_ONLY}")
 message(STATUS "  BUILD_NET_TOOLS   : ${BUILD_NET_TOOLS}")
 message(STATUS "  BUILD_TESTING     : ${BUILD_TESTING}")

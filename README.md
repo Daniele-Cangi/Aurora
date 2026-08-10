@@ -42,11 +42,11 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** add an established external FEC baseline to the complete deterministic transport comparison
+**Primary current task:** process-separated emulation with an explicit reverse-feedback channel
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
-| LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | The deterministic harness includes no-FEC, repetition and internal LT-like comparisons, but not an established external codec |
+| Fountain FEC | Internal experiment plus external baseline | Deterministic LT-like codec and an optional, pinned Wirehair adapter using its explicit frozen `FIXUPS_2026_07` wire profile; both traverse the same descriptor/report lifecycle and complete-stack benchmark | The internal codec is not a standard; Wirehair is a simulation baseline, not authenticated framing, and its adapter requires segments with at least two source symbols |
 | Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed encoder/decoder state, independent segment expiry, bounded deterministic runtime repair emission, exact length, integrity result and authoritative per-segment `DecodeReport` evidence | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
 | Adaptive transport policy | Modular prototype | Injected codec and policy interfaces, fixed policies, NERVE/GLAND/MUSCLE adaptive policy, bounded per-generation manager, failure response and gradual relaxation | Threshold, PID and risk-sensitive alternatives are not implemented; current evidence remains synthetic despite covering multiple channel traces |
 | Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection, an isolated replayable proposal RNG, and a complete contact/deadline-aware benchmark path | Uses synthetic channel and hardware models; comparative results remain simulation evidence rather than calibrated performance claims |
@@ -59,7 +59,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, isolated baselines and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, paired simulator-event/decision replay, replayable benchmark channel traces, Wilson confidence intervals, per-trial records and configure-time build/profile fingerprints | Provenance and checksum chains detect reproducibility failures and corruption but do not authenticate the producing build |
 
 ---
@@ -188,7 +188,7 @@ The current boundary is intentionally narrow:
 - adaptation parameters used at spawn time;
 - bounded in-memory state for concurrent generations.
 
-`AlienFountainOrganism` remains as a compatibility facade that composes the biological policy, the experimental LT-like codec and the generation manager. Fixed policies and tagged codecs can be injected independently in tests and benchmark runs. The optional external RaptorQ adapter is not part of this lifecycle and remains a disabled legacy experiment until it can implement the same descriptor/report contract.
+`AlienFountainOrganism` remains as a compatibility facade that composes a transport policy, a generation codec and the generation manager. Fixed policies and codecs can be injected independently in tests and benchmark runs. The optional Wirehair adapter implements this same lifecycle, including exact source length and completion-gated progress. The old RaptorQ switch remains a disabled legacy integration stub.
 
 ---
 
@@ -243,7 +243,7 @@ aurora_intention.hpp         Transitional include for TransportContract
 aurora_hal.hpp               Hardware abstraction and current mock backends
 include/aurora/
   control/                   Proposal replay and transport policy interfaces
-  fec/                       Codec interface and deterministic LT-like codec
+  fec/                       Codec interface, LT-like codec and Wirehair adapter
   transport/                 Contract, descriptor, manager, report and health
   safety/SafetyEnvelope.hpp  Hard transport-decision constraints and trace
   telemetry/DecisionReplayLog.hpp  Canonical decision log and verifier
@@ -420,6 +420,17 @@ This runner uses the main `Engine`, not the isolated codec harness. Every row tr
 
 Controllers receive identical exogenous inputs: intention, topology/model, contact schedule, arrival schedule, scheduler configuration and seed set. This is deliberately labelled `simulation-common-inputs-action-dependent-rng`, not “identical trace”: once controllers choose different actions, they can consume the deterministic RNG differently. The world fingerprint proves common declared inputs, while each row's compiler-portable structural trace fingerprint covers RNG checkpoints, scheduling, discrete descriptor protection, attempts and outcomes for its actual causal trajectory. The snapshot is a regression oracle, not a claim that one policy is universally superior.
 
+With `USE_WIREHAIR=ON`, run and verify the external-FEC comparison through the same complete stack:
+
+```bash
+./build/bin/aurora_transport_benchmark --external-fec-sweep
+
+./build/bin/aurora_transport_benchmark \
+  --verify-external-fec-sweep benchmarks/external_fec_transport_sweep_v1.csv
+```
+
+This holds the fixed class-aware policy constant and changes only the codec between the internal LT-like experiment and Wirehair. The canonical report covers the same two scenarios and four seeds and is enforced in Linux and Windows CI. Wirehair recovery success proves equation solvability, not integrity or authenticity; Aurora still verifies the generation payload digest from its trusted simulation descriptor before reporting delivery.
+
 Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
 
 ```bash
@@ -456,6 +467,22 @@ cmake --build build-secure --config Release
 ```
 
 Only this path may be described as using real Ed25519.
+
+### Optional Wirehair baseline
+
+The default build remains offline and dependency-light. Enable the external baseline explicitly; CMake fetches the pinned Wirehair commit `067ca7cdb66aed424ec23f97557429bf791c6f0c` and disables its own tools, benchmarks and test suite:
+
+```bash
+cmake -S . -B build-wirehair \
+  -DUSE_WIREHAIR=ON \
+  -DUSE_RAPTORQ=OFF \
+  -DBUILD_NET_TOOLS=OFF
+
+cmake --build build-wirehair --config Release
+ctest --test-dir build-wirehair -C Release --output-on-failure
+```
+
+For offline or audited builds, set `AURORA_WIREHAIR_ROOT=/path/to/wirehair` to a local checkout of that revision. The adapter selects Wirehair's explicit frozen `WIREHAIR_LEGACY_PROFILE_FIXUPS_2026_07`; it does not rely on the library's implicit current-profile alias. Wirehair is BSD-3-Clause licensed and remains a separately maintained third-party dependency.
 
 ### Optional RaptorQ path
 
@@ -498,17 +525,18 @@ Aurora-X will distinguish four levels of evidence:
 
 Results from one level must not be presented as proof of another.
 
-The current baseline harness compares, under identical seeds and constraints:
+Across the isolated and complete-stack harnesses, current comparisons include:
 
 - no FEC;
 - fixed repetition;
 - fixed LT-like overhead;
 - class-aware fixed overhead;
 - adaptive Aurora policy;
+- fixed class-aware transport with the pinned external Wirehair codec;
 
 The harness now supports IID loss, Gilbert–Elliott bursts, scheduled outages, slow drift and shock/recovery traces, per-trial retention, Wilson confidence intervals, goodput, transmitted-byte cost, innovative-symbol ratio and overhead-direction changes. Every summary and retained trial also declares its configure-time commit, clean/dirty source state, compiler, target, build type/generator, execution profile, crypto/FEC profile, and a canonical build fingerprint. Benchmark evidence is always labelled `simulation`; even a `BUILD_FIELD=ON` executable remains `field-experimental` with `hardware_validated=false`. Innovative-symbol ratio is reported only for coded policies; overhead-direction changes only for the adaptive policy; and cost per delivered byte is `N/A` when no payload is delivered.
 
-An established block or fountain codec, broader asymmetric scenarios, authenticated provenance and calibrated resource/energy costs remain required before comparative claims can be made. The complete-stack sweep now measures contact/deadline-aware execution under declared simulation inputs; it does not turn those inputs into field evidence.
+Broader asymmetric scenarios, authenticated provenance and calibrated resource/energy costs remain required before comparative claims can be made. The complete-stack sweep now measures contact/deadline-aware execution under declared simulation inputs and includes an independently maintained external FEC baseline; it does not turn those inputs into field evidence.
 
 Primary metrics:
 
@@ -540,4 +568,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep now exercises that stack end to end under common declared inputs. The next obligation is an established external FEC baseline, followed by process-separated emulation with an explicit reverse-feedback channel and finally calibrated hardware evidence.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep now exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. The next obligation is process-separated emulation with an explicit reverse-feedback channel, followed by calibrated hardware evidence.
