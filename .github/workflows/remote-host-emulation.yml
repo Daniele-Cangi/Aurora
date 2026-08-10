@@ -133,7 +133,8 @@ jobs:
           test -n "${peer_ip}"
           test "${own_ip}" != "${peer_ip}"
 
-          tailscale ping --c 3 --timeout=10s "${peer_ip}" |
+          tailscale ping --c 3 --timeout=10s --until-direct=false \
+            "${peer_ip}" |
             tee "${{ matrix.role }}-tailscale-ping.log"
           {
             echo "own_ip=${own_ip}"
