@@ -1,3 +1,4 @@
+import re
 import socket
 import subprocess
 import sys
@@ -103,6 +104,12 @@ def main():
             raise RuntimeError(
                 f"missing receiver completion: {receiver_stdout}"
             )
+        if not re.search(r"sender_elapsed_ms=[1-9][0-9]*", sender.stdout):
+            raise RuntimeError(f"missing sender timing: {sender.stdout}")
+        if not re.search(
+            r"service_elapsed_ms=[1-9][0-9]*", receiver_stdout
+        ):
+            raise RuntimeError(f"missing receiver timing: {receiver_stdout}")
     finally:
         if receiver.poll() is None:
             receiver.terminate()

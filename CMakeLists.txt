@@ -406,9 +406,18 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "emulation;regression"
         TIMEOUT 20)
+    add_test(
+      NAME aurora.gcp_raw_host_harness
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gcp_raw_host_harness.py")
+    set_tests_properties(
+      aurora.gcp_raw_host_harness
+      PROPERTIES
+        LABELS "emulation;regression"
+        TIMEOUT 20)
   else()
     message(WARNING
-      "Python3 was not found; the process-separated emulation test is disabled")
+      "Python3 was not found; Python emulation tests are disabled")
   endif()
 
   add_executable(test_baseline_benchmark tests/test_baseline_benchmark.cpp)

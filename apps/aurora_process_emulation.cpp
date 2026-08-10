@@ -495,6 +495,7 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
               << " impairment_reordered=" << reordered
               << " trace_name=" << trace.name()
               << " trace_fingerprint=" << trace.fingerprint()
+              << " sender_elapsed_ms=" << elapsed_ms(started)
               << " feedback_applied=2\n";
     return 0;
 }
@@ -702,6 +703,8 @@ int run_receiver(std::string_view forward_bind_host,
                               << " replay_rejected=" << replay_rejections
                               << " auth_profile="
                               << aurora::emulation::ProcessAuthenticator::profile()
+                              << " service_elapsed_ms="
+                              << elapsed_ms(*service_started)
                               << '\n';
                     return 0;
                 }
