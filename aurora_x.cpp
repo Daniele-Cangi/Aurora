@@ -131,10 +131,12 @@ public:
   }
 
   void record(const TelemetrySample& s) {
+    if (!_enabled) return;
     _samples.push_back(s);
   }
 
   void flush() {
+    if (!_enabled) return;
     if(_samples.empty()) return;
     std::ofstream out(_path, std::ios::app);
     if(!out) {
@@ -163,7 +165,13 @@ public:
     _samples.clear();
   }
 
+  void disable() {
+    _enabled = false;
+    _samples.clear();
+  }
+
 private:
+  bool _enabled = true;
   std::string _path;
   std::vector<TelemetrySample> _samples;
 };
@@ -430,6 +438,7 @@ struct Engine {
     bool arrived = false;
     bool terminal = false;
     bool delivered = false;
+    optional<uint64_t> terminal_at_ms;
     optional<uint64_t> last_scheduled_at_ms;
     optional<uint64_t> last_effective_service_at_ms;
     uint64_t scheduled_turns = 0;
@@ -1323,6 +1332,7 @@ struct Engine {
       if (!active_generation.terminal && res.delivered()) {
         active_generation.terminal = true;
         active_generation.delivered = true;
+        active_generation.terminal_at_ms = simulated_now_ms;
         out = res.payload;
         used.clear();
         for (const auto& packet : received_packets) used.push_back(packet.fp.data);
@@ -1333,6 +1343,7 @@ struct Engine {
         res.status == aurora::transport::DecodeStatus::EXPIRED;
       if (became_expired) {
         active_generation.terminal = true;
+        active_generation.terminal_at_ms = simulated_now_ms;
       }
       
       TelemetrySample sample;

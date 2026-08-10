@@ -273,6 +273,11 @@ add_executable(
   apps/aurora_scheduler_benchmark.cpp)
 aurora_link_common(aurora_scheduler_benchmark)
 
+add_executable(
+  aurora_transport_benchmark
+  apps/aurora_transport_benchmark.cpp)
+aurora_link_common(aurora_transport_benchmark)
+
 # -------------------------------------------------------------------
 # Tests
 if(BUILD_TESTING)
@@ -361,6 +366,19 @@ if(BUILD_TESTING)
   set_tests_properties(
     aurora.generation_scheduler_benchmark_sweep
     aurora.generation_scheduler_benchmark_report
+    PROPERTIES LABELS "benchmark;regression")
+
+  add_test(
+    NAME aurora.end_to_end_transport_benchmark_sweep
+    COMMAND aurora_transport_benchmark --sweep)
+  add_test(
+    NAME aurora.end_to_end_transport_benchmark_report
+    COMMAND aurora_transport_benchmark
+      --verify-sweep
+      "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/end_to_end_transport_sweep_v1.csv")
+  set_tests_properties(
+    aurora.end_to_end_transport_benchmark_sweep
+    aurora.end_to_end_transport_benchmark_report
     PROPERTIES LABELS "benchmark;regression")
 
   set(_AURORA_EVENT_DECISION_TRACE
@@ -536,6 +554,7 @@ set(_AURORA_ALL_TARGETS
   aurora_contact_schedule
   aurora_generation_arrivals
   aurora_scheduler_benchmark
+  aurora_transport_benchmark
   test_raptorq_adapter
   test_aurora_organism
   test_transport_contract

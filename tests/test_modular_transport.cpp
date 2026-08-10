@@ -136,6 +136,17 @@ int main() {
     assert(legacy.descriptor.codec_id == "experimental-lt-like");
     assert(legacy.descriptor.policy_id == "biological-adaptive");
 
+    auto injected_policy =
+        std::make_shared<aurora::control::FixedTransportPolicy>(
+            "injected-fixed", 2.0, 1.5, 1.0);
+    aurora::AlienFountainOrganism injected(
+        std::make_shared<TaggedCodec>(), injected_policy);
+    const auto injected_generation = injected.spawn(
+        contract, "injected", bytes, 32, 0);
+    assert(injected_generation.descriptor.codec_id == "test-codec");
+    assert(injected_generation.descriptor.policy_id == "injected-fixed");
+    assert(!injected.flow_state(injected.build_profile(contract)).has_value());
+
     aurora::control::AdaptivePolicyConfig adaptive_config;
     adaptive_config.panic_boost_generations = 3;
     aurora::control::BiologicalAdaptivePolicy adaptive(adaptive_config);

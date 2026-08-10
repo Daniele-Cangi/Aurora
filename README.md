@@ -42,14 +42,14 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** build a complete contact/deadline-aware end-to-end transport benchmark on the deterministic event kernel before adding further policy surface
+**Primary current task:** add an established external FEC baseline to the complete deterministic transport comparison
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
 | LT-like fountain FEC | Implemented experimental codec | Deterministic systematic/repair symbols, unique source-index sampling, ideal-soliton repair degrees, incremental bounded-rank GF(2) decoding | The deterministic harness includes no-FEC, repetition and internal LT-like comparisons, but not an established external codec |
 | Generation lifecycle | Implemented first vertical slice | Parsed `TransportContract`, immutable `GenerationDescriptor`, generation-indexed encoder/decoder state, independent segment expiry, bounded deterministic runtime repair emission, exact length, integrity result and authoritative per-segment `DecodeReport` evidence | Descriptor integrity uses a research checksum, not authenticated metadata; the in-memory generation store is bounded but not persistent |
 | Adaptive transport policy | Modular prototype | Injected codec and policy interfaces, fixed policies, NERVE/GLAND/MUSCLE adaptive policy, bounded per-generation manager, failure response and gradual relaxation | Threshold, PID and risk-sensitive alternatives are not implemented; current evidence remains synthetic despite covering multiple channel traces |
-| Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection, and an isolated replayable proposal RNG | Uses synthetic channel and hardware models; the benchmark still isolates coding policy rather than comparing the complete cross-layer optimizer |
+| Cross-layer channel optimizer | Implemented prototype | RF/IR/backscatter selection, urgency, reliability target, energy and duty inputs, UCB or SNR selection, an isolated replayable proposal RNG, and a complete contact/deadline-aware benchmark path | Uses synthetic channel and hardware models; comparative results remain simulation evidence rather than calibrated performance claims |
 | Transport health | Implemented first slice | Consumes only `DecodeReport`; progress polls update coverage without being counted as delivery failures | Aggregation/confidence and multi-flow recovery semantics still need development |
 | Safety supervision | Partial | Hard envelope constrains generation/segment expiry, freshness, post-action reserve, allowed and in-contact links, simulated RF airtime, active-segment repair capacity and critical protection; timestamped health evidence expires deterministically, while the supervisory monitor preserves its bounded window and hysteresis transition state for replay | Thresholds and the default 5-second evidence lifetime remain configurable research values rather than calibrated field limits |
 | Operating modes | Implemented prototype | CONSERVATIVE, NORMAL, and AGGRESSIVE policies | The default single-flow scenario provides limited transition evidence |
@@ -59,7 +59,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity and benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, isolated baselines and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, paired simulator-event/decision replay, replayable benchmark channel traces, Wilson confidence intervals, per-trial records and configure-time build/profile fingerprints | Provenance and checksum chains detect reproducibility failures and corruption but do not authenticate the producing build |
 
 ---
@@ -260,9 +260,11 @@ apps/
   aurora_contact_schedule.cpp Canonical contact-schedule creator
   aurora_generation_arrivals.cpp Canonical generation-arrival creator
   aurora_scheduler_benchmark.cpp Strict-vs-fair starvation benchmark
+  aurora_transport_benchmark.cpp Complete deterministic transport comparison
   aurora_benchmark.cpp       CSV baseline runner
 benchmarks/
   generation_scheduler_sweep_v2.csv Canonical scheduling-turn regression report
+  end_to_end_transport_sweep_v1.csv Canonical complete-stack regression report
 src/core/
   AuroraSafetyMonitor.hpp    Legacy safety-state prototype
 tests/
@@ -401,6 +403,23 @@ Verify the generated bytes and semantic thresholds against the versioned report:
 
 The V2 sweep varies contention, aging and starvation intervals, including a starvation interval that is not aligned to the fixed 1000 ms scheduler tick. Every strict row must starve the elastic candidate and exceed the fair scheduling-turn comparison bound. Every fair row must schedule every candidate, remain within the turn-gap bound and report zero violations. It deliberately makes no effective-service claim. CTest performs both the semantic checks and byte-for-byte snapshot verification, so the Linux and Windows GitHub Actions jobs reject unexplained metric drift.
 
+Run the complete transport-stack sweep:
+
+```bash
+./build/bin/aurora_transport_benchmark --sweep
+```
+
+Verify its semantic gates and byte-for-byte canonical report:
+
+```bash
+./build/bin/aurora_transport_benchmark \
+  --verify-sweep benchmarks/end_to_end_transport_sweep_v1.csv
+```
+
+This runner uses the main `Engine`, not the isolated codec harness. Every row traverses scheduled arrivals, causal arrival-time planning, the aging/fair scheduler, contact windows, the cross-layer proposal, `SafetyEnvelope`, HAL acceptance, channel delivery and authoritative generation decode. It compares the existing fixed-minimum, fixed-class-aware and biological-adaptive policies across four declared seeds in a causal feedback-wave scenario and a deadline-contention scenario. Reported metrics include initial protection, scheduler turns, HAL-accepted service, attempts and delivery, wire bytes, useful bytes, energy, terminal latency and deadline outcomes. Every trial must pass paired V7/V6 ledger replay before it contributes to the report.
+
+Controllers receive identical exogenous inputs: intention, topology/model, contact schedule, arrival schedule, scheduler configuration and seed set. This is deliberately labelled `simulation-common-inputs-action-dependent-rng`, not “identical trace”: once controllers choose different actions, they can consume the deterministic RNG differently. The world fingerprint proves common declared inputs, while each row's compiler-portable structural trace fingerprint covers RNG checkpoints, scheduling, discrete descriptor protection, attempts and outcomes for its actual causal trajectory. The snapshot is a regression oracle, not a claim that one policy is universally superior.
+
 Run the deterministic IID-loss comparison (`loss`, `trials`, `seed`):
 
 ```bash
@@ -489,7 +508,7 @@ The current baseline harness compares, under identical seeds and constraints:
 
 The harness now supports IID loss, Gilbert–Elliott bursts, scheduled outages, slow drift and shock/recovery traces, per-trial retention, Wilson confidence intervals, goodput, transmitted-byte cost, innovative-symbol ratio and overhead-direction changes. Every summary and retained trial also declares its configure-time commit, clean/dirty source state, compiler, target, build type/generator, execution profile, crypto/FEC profile, and a canonical build fingerprint. Benchmark evidence is always labelled `simulation`; even a `BUILD_FIELD=ON` executable remains `field-experimental` with `hardware_validated=false`. Innovative-symbol ratio is reported only for coded policies; overhead-direction changes only for the adaptive policy; and cost per delivered byte is `N/A` when no payload is delivered.
 
-An established block or fountain codec, a complete end-to-end contact/deadline-aware transport comparison, asymmetric scenarios, authenticated provenance and calibrated resource/energy costs remain required before comparative claims can be made. Contact schedules already participate in the main orchestrator and paired replay; what remains missing is measuring the complete transport stack under those constraints rather than treating contact support itself as absent.
+An established block or fountain codec, broader asymmetric scenarios, authenticated provenance and calibrated resource/energy costs remain required before comparative claims can be made. The complete-stack sweep now measures contact/deadline-aware execution under declared simulation inputs; it does not turn those inputs into field evidence.
 
 Primary metrics:
 
@@ -521,4 +540,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is now driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The next obligation is a complete contact/deadline-aware end-to-end transport benchmark. After that come an established external FEC baseline, process-separated emulation with an explicit reverse-feedback channel, and finally calibrated hardware evidence.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep now exercises that stack end to end under common declared inputs. The next obligation is an established external FEC baseline, followed by process-separated emulation with an explicit reverse-feedback channel and finally calibrated hardware evidence.
