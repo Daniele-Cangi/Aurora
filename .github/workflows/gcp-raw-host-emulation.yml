@@ -1,0 +1,132 @@
+name: authenticated-gcp-raw-host-emulation
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type CREATE_AND_DELETE to authorize the ephemeral GCP run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: authenticated-gcp-raw-host-emulation
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    environment: gcp-raw-emulation
+    steps:
+      - name: Require explicit creation and teardown confirmation
+        shell: bash
+        env:
+          AURORA_CONFIRM: ${{ inputs.confirm }}
+        run: test "${AURORA_CONFIRM}" = CREATE_AND_DELETE
+
+  raw-host-emulation:
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
+      AURORA_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_EVIDENCE_DIR: raw-host-evidence/gha-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate keyless GCP configuration
+        shell: bash
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          test -n "${AURORA_GCP_PROJECT}"
+          test -n "${GCP_WORKLOAD_IDENTITY_PROVIDER}"
+          test -n "${GCP_SERVICE_ACCOUNT}"
+
+      - name: Authenticate to GCP with GitHub OIDC
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.AURORA_GCP_PROJECT }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Install gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.AURORA_GCP_PROJECT }}
+
+      - name: Run authenticated raw-routed transport and audited teardown
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/gcp_raw_host_emulation.py \
+            --project "${AURORA_GCP_PROJECT}" \
+            --run-id "${AURORA_RUN_ID}" \
+            --source-commit "${GITHUB_SHA}" \
+            --evidence-dir "${AURORA_EVIDENCE_DIR}" \
+            --execute \
+            --acknowledge-billing-and-teardown
+
+      - name: Repeat exact-name cleanup and audit
+        if: always()
+        shell: bash
+        run: |
+          python3 tools/gcp_raw_host_emulation.py \
+            --project "${AURORA_GCP_PROJECT}" \
+            --run-id "${AURORA_RUN_ID}" \
+            --source-commit "${GITHUB_SHA}" \
+            --evidence-dir "${AURORA_EVIDENCE_DIR}" \
+            --cleanup-only \
+            --acknowledge-billing-and-teardown
+
+      - name: Retain transport and teardown evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-gcp-raw-host-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.AURORA_EVIDENCE_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  independent-cleanup:
+    needs: raw-host-emulation
+    if: always() && needs.raw-host-emulation.result != 'skipped'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
+      AURORA_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_EVIDENCE_DIR: raw-host-evidence/cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.AURORA_GCP_PROJECT }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.AURORA_GCP_PROJECT }}
+      - name: Independently repeat exact-name cleanup and audit
+        shell: bash
+        run: |
+          python3 tools/gcp_raw_host_emulation.py \
+            --project "${AURORA_GCP_PROJECT}" \
+            --run-id "${AURORA_RUN_ID}" \
+            --source-commit "${GITHUB_SHA}" \
+            --evidence-dir "${AURORA_EVIDENCE_DIR}" \
+            --cleanup-only \
+            --acknowledge-billing-and-teardown
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: authenticated-gcp-cleanup-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.AURORA_EVIDENCE_DIR }}
+          if-no-files-found: warn
+          retention-days: 14

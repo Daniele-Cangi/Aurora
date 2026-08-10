@@ -109,6 +109,16 @@ def main():
             raise RuntimeError(f"missing startup timeout evidence: {receiver_stdout}")
         if "service_timeout_ms=15000" not in receiver_stdout:
             raise RuntimeError(f"missing service timeout evidence: {receiver_stdout}")
+        sender_elapsed = re.search(r"sender_elapsed_ms=(\d+)", sender.stdout)
+        receiver_elapsed = re.search(
+            r"service_elapsed_ms=(\d+)", receiver_stdout
+        )
+        if not sender_elapsed or int(sender_elapsed.group(1)) == 0:
+            raise RuntimeError(f"missing sender timing evidence: {sender.stdout}")
+        if not receiver_elapsed or int(receiver_elapsed.group(1)) == 0:
+            raise RuntimeError(
+                f"missing receiver timing evidence: {receiver_stdout}"
+            )
         receiver_replay = re.search(
             r"replay_rejected=(\d+)", receiver_stdout
         )

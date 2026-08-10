@@ -18,6 +18,7 @@ build/
 build-*/
 aurora_telemetry.jsonl
 aurora_interactive_config.json
+raw-host-evidence/
 
 # Visual Studio Code
 .vscode/
