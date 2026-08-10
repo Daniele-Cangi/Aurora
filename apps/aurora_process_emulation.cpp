@@ -155,6 +155,14 @@ public:
         return bytes;
     }
 
+    void receive_timeout(int milliseconds) const {
+        if (milliseconds <= 0) {
+            throw std::invalid_argument(
+                "process emulation: receive timeout must be positive");
+        }
+        set_timeout(milliseconds);
+    }
+
 private:
     void set_timeout(int milliseconds) const {
 #ifdef _WIN32
@@ -266,6 +274,7 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
     UdpSocket forward_socket("0.0.0.0", 0);
     std::uint32_t forward_datagrams = 0;
     std::uint32_t feedback_datagrams = 0;
+    std::uint32_t stale_feedback_datagrams = 0;
     std::uint64_t impairment_attempt = 0;
     std::uint32_t dropped = 0;
     std::uint32_t duplicated = 0;
@@ -281,6 +290,17 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
                 incoming.report.source_bytes ==
                     descriptor.original_payload_length &&
                 incoming.report.required_rank == descriptor.total_source_symbols) {
+                if (generation.feedback) {
+                    const auto& current = generation.feedback->report;
+                    if (current.delivered() || current.terminal_failure() ||
+                        incoming.report.decoder_rank < current.decoder_rank ||
+                        (incoming.report.decoder_rank == current.decoder_rank &&
+                         incoming.report.symbols_observed <
+                             current.symbols_observed)) {
+                        ++stale_feedback_datagrams;
+                        return;
+                    }
+                }
                 generation.feedback = std::move(incoming);
                 ++feedback_datagrams;
                 return;
@@ -309,6 +329,9 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         if (!generation.feedback) throw std::runtime_error(
             "process emulation: receiver did not acknowledge every descriptor");
     }
+    // Descriptor establishment is allowed to wait. Symbol service is not
+    // stop-and-wait: a short poll lets multiple reverse reports coexist.
+    feedback_socket.receive_timeout(2);
 
     struct PendingDatagram {
         std::chrono::steady_clock::time_point release;
@@ -414,6 +437,8 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
               << " feedback_port=" << feedback_port
               << " forward_datagrams=" << forward_datagrams
               << " feedback_datagrams=" << feedback_datagrams
+              << " stale_feedback_datagrams="
+              << stale_feedback_datagrams
               << " impairment_attempts=" << impairment_attempt
               << " impairment_dropped=" << dropped
               << " impairment_duplicated=" << duplicated
@@ -429,7 +454,8 @@ int run_receiver(std::string_view forward_bind_host,
                  std::uint16_t forward_port,
                  std::string_view feedback_host,
                  std::uint16_t feedback_port,
-                 std::size_t expected_generations) {
+                 std::size_t expected_generations,
+                 const std::string& reverse_trace_path) {
     UdpSocket forward_socket(forward_bind_host, forward_port);
     UdpSocket feedback_socket("0.0.0.0", 0);
     aurora::fec::ExperimentalLtLikeCodec codec;
@@ -437,10 +463,82 @@ int run_receiver(std::string_view forward_bind_host,
         std::unique_ptr<aurora::transport::GenerationReceiver>> receivers;
     std::unordered_set<std::string> completed;
     const auto started = std::chrono::steady_clock::now();
+    const auto reverse_trace =
+        aurora::emulation::ImpairmentTrace::load(reverse_trace_path);
+    struct PendingFeedback {
+        std::chrono::steady_clock::time_point release;
+        std::uint64_t attempt = 0;
+        std::uint64_t order = 0;
+        std::vector<std::uint8_t> frame;
+    };
+    std::vector<PendingFeedback> pending_feedback;
+    std::uint64_t reverse_attempts = 0;
+    std::uint64_t reverse_order = 0;
+    std::uint64_t highest_reverse_sent = 0;
+    std::uint32_t reverse_datagrams = 0;
+    std::uint32_t reverse_dropped = 0;
+    std::uint32_t reverse_duplicated = 0;
+    std::uint32_t reverse_delayed = 0;
+    std::uint32_t reverse_reordered = 0;
+    bool reverse_sent_any = false;
+
+    auto flush_feedback = [&](bool flush_all) {
+        while (!pending_feedback.empty()) {
+            const auto next = std::min_element(
+                pending_feedback.begin(), pending_feedback.end(),
+                [](const auto& left, const auto& right) {
+                    if (left.release != right.release) {
+                        return left.release < right.release;
+                    }
+                    return left.order < right.order;
+                });
+            const auto now = std::chrono::steady_clock::now();
+            if (next->release > now) {
+                if (!flush_all) return;
+                std::this_thread::sleep_until(next->release);
+            }
+            if (reverse_sent_any &&
+                next->attempt < highest_reverse_sent) {
+                ++reverse_reordered;
+            }
+            highest_reverse_sent = std::max(
+                highest_reverse_sent, next->attempt);
+            reverse_sent_any = true;
+            feedback_socket.send(
+                next->frame, feedback_host, feedback_port);
+            ++reverse_datagrams;
+            pending_feedback.erase(next);
+        }
+    };
+
+    auto send_feedback = [&](const std::vector<std::uint8_t>& frame) {
+        const auto attempt = reverse_attempts++;
+        const auto directive = reverse_trace.directive(attempt);
+        if (directive.action ==
+            aurora::emulation::ImpairmentAction::DROP) {
+            ++reverse_dropped;
+            return;
+        }
+        if (directive.delay_ms > 0) ++reverse_delayed;
+        const auto release = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(directive.delay_ms);
+        pending_feedback.push_back(
+            {release, attempt, reverse_order++, frame});
+        if (directive.action ==
+            aurora::emulation::ImpairmentAction::DUPLICATE) {
+            pending_feedback.push_back(
+                {release, attempt, reverse_order++, frame});
+            ++reverse_duplicated;
+        }
+        flush_feedback(false);
+    };
 
     while (elapsed_ms(started) < 15'000) {
         const auto datagram = forward_socket.receive();
-        if (!datagram) continue;
+        if (!datagram) {
+            flush_feedback(false);
+            continue;
+        }
         try {
             const auto type = aurora::emulation::frame_type(*datagram);
             if (type == aurora::emulation::FrameType::DESCRIPTOR) {
@@ -457,10 +555,8 @@ int run_receiver(std::string_view forward_bind_host,
                         "process emulation: conflicting descriptor");
                 }
                 const auto report = found->second->integrate({}, elapsed_ms(started));
-                feedback_socket.send(
-                    aurora::emulation::encode_feedback({
-                        descriptor.descriptor_fingerprint, report}),
-                    feedback_host, feedback_port);
+                send_feedback(aurora::emulation::encode_feedback({
+                    descriptor.descriptor_fingerprint, report}));
                 continue;
             }
             if (type != aurora::emulation::FrameType::SYMBOL) {
@@ -473,22 +569,33 @@ int run_receiver(std::string_view forward_bind_host,
                 found->second->integrate({packet}, elapsed_ms(started));
             const auto feedback = aurora::emulation::encode_feedback({
                 found->second->descriptor().descriptor_fingerprint, report});
-            feedback_socket.send(feedback, feedback_host, feedback_port);
+            send_feedback(feedback);
             if (report.delivered()) {
                 // Repeat the terminal datagram to tolerate one lost reverse
                 // packet while keeping UDP semantics explicit.
-                feedback_socket.send(feedback, feedback_host, feedback_port);
-                feedback_socket.send(feedback, feedback_host, feedback_port);
+                send_feedback(feedback);
+                send_feedback(feedback);
                 if (completed.insert(packet.generation_id).second) {
                     std::cout << "receiver_generation_complete generation="
                               << packet.generation_id
                               << " bytes=" << report.recovered_bytes << '\n';
                 }
                 if (completed.size() == expected_generations) {
+                    flush_feedback(true);
                     std::cout << "receiver_complete generations="
                               << completed.size()
                               << " forward_port=" << forward_port
-                              << " feedback_port=" << feedback_port << '\n';
+                              << " feedback_port=" << feedback_port
+                              << " reverse_attempts=" << reverse_attempts
+                              << " reverse_datagrams=" << reverse_datagrams
+                              << " reverse_dropped=" << reverse_dropped
+                              << " reverse_duplicated=" << reverse_duplicated
+                              << " reverse_delayed=" << reverse_delayed
+                              << " reverse_reordered=" << reverse_reordered
+                              << " reverse_trace_name="
+                              << reverse_trace.name()
+                              << " reverse_trace_fingerprint="
+                              << reverse_trace.fingerprint() << '\n';
                     return 0;
                 }
             }
@@ -503,13 +610,17 @@ int run_receiver(std::string_view forward_bind_host,
 
 int main(int argc, char* argv[]) {
     try {
-        if (argc != 7) {
+        const auto role = argc > 1 ? std::string_view(argv[1]) : "";
+        const bool sender_arguments = role == "sender" && argc == 7;
+        const bool receiver_arguments = role == "receiver" && argc == 8;
+        if (!sender_arguments && !receiver_arguments) {
             std::cerr << "usage: aurora_process_emulation "
                          "sender <forward-host> <forward-port> "
                          "<feedback-bind-host> <feedback-port> <trace-file>\n"
                          "   or: aurora_process_emulation receiver "
                          "<forward-bind-host> <forward-port> "
-                         "<feedback-host> <feedback-port> <generation-count>\n";
+                         "<feedback-host> <feedback-port> <generation-count> "
+                         "<reverse-trace-file>\n";
             return 2;
         }
         SocketRuntime runtime;
@@ -519,14 +630,14 @@ int main(int argc, char* argv[]) {
             throw std::invalid_argument(
                 "process emulation: forward and feedback ports must differ");
         }
-        if (std::string_view(argv[1]) == "sender") {
+        if (role == "sender") {
             return run_sender(argv[2], forward_port, argv[4],
                               feedback_port, argv[6]);
         }
-        if (std::string_view(argv[1]) == "receiver") {
+        if (role == "receiver") {
             const auto count = parse_generation_count(argv[6]);
             return run_receiver(argv[2], forward_port, argv[4],
-                                feedback_port, count);
+                                feedback_port, count, argv[7]);
         }
         throw std::invalid_argument("process emulation: unknown role");
     } catch (const std::exception& error) {
