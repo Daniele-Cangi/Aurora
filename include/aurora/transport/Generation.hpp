@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -28,6 +29,44 @@ inline std::uint64_t fnv1a64(const std::vector<std::uint8_t>& data) {
 inline std::uint64_t fnv1a64(const std::string& data) {
     return fnv1a64(reinterpret_cast<const std::uint8_t*>(data.data()), data.size());
 }
+
+inline std::string compute_generation_id(const std::string& token_id,
+                                         std::uint64_t payload_digest,
+                                         std::uint64_t experiment_seed,
+                                         std::uint64_t sequence) {
+    std::ostringstream value;
+    value << token_id << ':' << payload_digest << ':'
+          << experiment_seed << ':' << sequence;
+    std::ostringstream encoded;
+    encoded << std::hex << std::setw(16) << std::setfill('0')
+            << fnv1a64(value.str());
+    return encoded.str();
+}
+
+// Descriptor-independent identity reserved before a generation arrives.
+// Reserving identity is deterministic and does not invoke transport policy
+// planning; the policy-dependent descriptor is created only by spawn_reserved.
+struct GenerationIdentity {
+    std::string generation_id;
+    std::string token_id;
+    std::uint64_t payload_digest = 0;
+    std::uint64_t experiment_seed = 0;
+    std::uint64_t sequence = 0;
+
+    [[nodiscard]] std::optional<std::string> validation_error() const {
+        if (generation_id.empty() || token_id.empty()) {
+            return "generation and token identifiers are required";
+        }
+        if (generation_id != compute_generation_id(
+                token_id, payload_digest, experiment_seed, sequence)) {
+            return "generation identifier does not match reserved identity";
+        }
+        return std::nullopt;
+    }
+
+    friend bool operator==(const GenerationIdentity&,
+                           const GenerationIdentity&) = default;
+};
 
 struct CodingParameters {
     std::uint64_t seed = 0;

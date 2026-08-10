@@ -391,6 +391,57 @@ void cross_layer_proposal_replays_rng_selector_and_ucb_feedback() {
     assert(tampered.validation_error().has_value());
 }
 
+void generation_planning_is_causal_at_arrival() {
+    Engine engine;
+    engine.generation_arrival_schedule =
+        aurora::simulation::GenerationArrivalSchedule({
+            {0, "cause", aurora::simulation::GenerationServiceClass::IMPORTANT,
+             1'000},
+            {2'000, "effect",
+             aurora::simulation::GenerationServiceClass::IMPORTANT, 1'000}});
+    engine.init(
+        "deadline:10; reliability:0.99; duty:0.01; optical:on; "
+        "backscatter:on; ris:2; selector:argmax");
+
+    assert(engine.scheduled_generations.size() == 2);
+    const auto reserved_effect_id =
+        engine.scheduled_generations[1].identity.generation_id;
+    assert(!engine.scheduled_generations[0].planned);
+    assert(!engine.scheduled_generations[1].planned);
+    assert(engine.scheduled_generations[0].descriptor.generation_id.empty());
+    assert(engine.scheduled_generations[1].descriptor.generation_id.empty());
+    assert(engine.simulation_event_log.session().generations[0].reserved_only());
+    assert(engine.simulation_event_log.session().generations[1].reserved_only());
+
+    auto& source = *engine.net.get("SRC");
+    const auto first_arrival = engine.release_scheduled_arrival(0, source);
+    assert(first_arrival.first == 0);
+    assert(first_arrival.second > 0);
+    assert(engine.scheduled_generations[0].planned);
+    assert(!engine.scheduled_generations[1].planned);
+    assert(engine.simulation_event_log.session().generations[0].planned());
+    assert(engine.simulation_event_log.session().generations[1].reserved_only());
+
+    const auto first_overhead =
+        engine.scheduled_generations[0].descriptor.segments.front()
+            .coding.overhead_factor;
+    const auto failed = engine.organism->integrate(
+        engine.scheduled_generations[0].descriptor.generation_id, {}, 1'001);
+    assert(failed.status == aurora::transport::DecodeStatus::EXPIRED);
+
+    const auto second_arrival = engine.release_scheduled_arrival(2'000, source);
+    assert(second_arrival.first == 1);
+    assert(second_arrival.second > 0);
+    const auto& effect = engine.scheduled_generations[1];
+    assert(effect.planned);
+    assert(effect.identity.generation_id == reserved_effect_id);
+    assert(effect.descriptor.generation_id == reserved_effect_id);
+    assert(effect.descriptor.created_at_ms == 2'000);
+    assert(effect.descriptor.segments.front().coding.overhead_factor >
+           first_overhead);
+    assert(engine.simulation_event_log.session().generations[1].planned());
+}
+
 } // namespace
 
 int main() {
@@ -406,6 +457,7 @@ int main() {
     safety_monitor_expires_stale_evidence_by_timestamp();
     safety_monitor_snapshot_restores_pending_transition();
     cross_layer_proposal_replays_rng_selector_and_ucb_feedback();
+    generation_planning_is_causal_at_arrival();
     std::cout << "runtime correctness tests passed\n";
     return 0;
 }

@@ -77,14 +77,65 @@ public:
         return policy_->profile_for(contract);
     }
 
+    GenerationIdentity reserve_identity(
+        const TransportContract& contract,
+        const std::string& token_id,
+        const std::vector<std::uint8_t>& payload_bytes) {
+        contract.validate();
+        if (token_id.empty()) {
+            throw std::invalid_argument(
+                "generation identity: token id is required");
+        }
+        if (payload_bytes.size() > contract.maximum_generation_bytes) {
+            throw std::invalid_argument(
+                "generation identity: payload exceeds contract generation-size limit");
+        }
+        GenerationIdentity identity;
+        identity.token_id = token_id;
+        identity.payload_digest = fnv1a64(payload_bytes);
+        identity.experiment_seed = contract.experiment_seed;
+        identity.sequence = generation_counter_++;
+        identity.generation_id = compute_generation_id(
+            identity.token_id, identity.payload_digest,
+            identity.experiment_seed, identity.sequence);
+        return identity;
+    }
+
     GenerationSpawnResult spawn(const TransportContract& contract,
                                 const std::string& token_id,
                                 const std::vector<std::uint8_t>& payload_bytes,
                                 std::size_t symbol_size = 128,
                                 std::uint64_t now_ms = 0) {
+        if (symbol_size == 0) {
+            throw std::invalid_argument(
+                "generation spawn: symbol size must be positive");
+        }
+        auto identity = reserve_identity(contract, token_id, payload_bytes);
+        return spawn_reserved(
+            identity, contract, token_id, payload_bytes, symbol_size, now_ms);
+    }
+
+    GenerationSpawnResult spawn_reserved(
+        const GenerationIdentity& identity,
+        const TransportContract& contract,
+        const std::string& token_id,
+        const std::vector<std::uint8_t>& payload_bytes,
+        std::size_t symbol_size = 128,
+        std::uint64_t now_ms = 0) {
         contract.validate();
-        if (token_id.empty()) {
-            throw std::invalid_argument("generation spawn: token id is required");
+        if (const auto error = identity.validation_error()) {
+            throw std::invalid_argument(
+                "generation spawn: invalid reserved identity: " + *error);
+        }
+        if (identity.token_id != token_id ||
+            identity.payload_digest != fnv1a64(payload_bytes) ||
+            identity.experiment_seed != contract.experiment_seed) {
+            throw std::invalid_argument(
+                "generation spawn: reserved identity does not match input");
+        }
+        if (generations_.contains(identity.generation_id)) {
+            throw std::logic_error(
+                "generation spawn: reserved identity was already consumed");
         }
         if (symbol_size == 0) {
             throw std::invalid_argument("generation spawn: symbol size must be positive");
@@ -108,9 +159,8 @@ public:
         descriptor.symbol_size = symbol_size;
         descriptor.created_at_ms = now_ms;
         descriptor.expires_at_ms = saturating_add(now_ms, contract.deadline_ms());
-        descriptor.payload_digest = fnv1a64(payload_bytes);
-        descriptor.generation_id = make_generation_id(
-            token_id, descriptor.payload_digest, contract.experiment_seed, generation_counter_++);
+        descriptor.payload_digest = identity.payload_digest;
+        descriptor.generation_id = identity.generation_id;
 
         for (std::size_t index = 0; index < requirements.size(); ++index) {
             const auto& requirement = requirements[index];
@@ -605,17 +655,6 @@ private:
             return std::numeric_limits<std::uint64_t>::max();
         }
         return left + right;
-    }
-
-    static std::string make_generation_id(const std::string& token_id,
-                                          std::uint64_t payload_digest,
-                                          std::uint64_t seed,
-                                          std::uint64_t counter) {
-        std::ostringstream value;
-        value << token_id << ':' << payload_digest << ':' << seed << ':' << counter;
-        std::ostringstream encoded;
-        encoded << std::hex << std::setw(16) << std::setfill('0') << fnv1a64(value.str());
-        return encoded.str();
     }
 
     static std::uint64_t segment_seed(std::uint64_t experiment_seed,

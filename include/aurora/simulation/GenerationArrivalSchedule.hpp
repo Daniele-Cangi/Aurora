@@ -59,7 +59,8 @@ public:
     static constexpr std::string_view format_header =
         "AURORA_GENERATION_ARRIVAL_SCHEDULE_V2";
     // Matches the default bounded GenerationManager capacity used by the
-    // simulator, which pre-constructs descriptors before timed release.
+    // simulator. Identities are reserved up front; descriptor planning and
+    // spawn occur causally at each timed release.
     static constexpr std::size_t maximum_arrivals = 128;
 
     GenerationArrivalSchedule() = default;

@@ -251,6 +251,8 @@ struct GenerationDescriptor {
 - [x] non-aligned payload lengths;
 - [x] empty bulk or empty critical segment;
 - [x] descriptor mismatch and corruption.
+- [x] reserve deterministic future identity without invoking policy planning;
+- [x] plan/spawn at arrival so terminal feedback from generation A changes generation B.
 
 ## Phase 1B — One encoder and one decoder path
 
@@ -524,7 +526,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
 
-The current V6 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies contact-aware safety decisions; replays each admitted action; applies UCB feedback; and reconstructs the bounded supervisory transition. The paired V6 `SimulationEventLedger` embeds canonical `ContactSchedule` and V2 `GenerationArrivalSchedule` inputs plus strict/fair discipline, the fixed 1000 ms service quantum and configurable aging/fairness intervals. It binds records to fixed node topology, immutable generation identities, resolved service class and descriptor expiry, then independently reconstructs timed generation release, last-service clocks, configured priority-then-EDF selection, the tick-rounded `ceil(starvation_ms / 1000) * 1000 + (N - 1) * 1000` ms fair service-gap bound, contact availability, inter-step harvesting/ingest, RIS phases, world gain, channel history, LBT/fading/pacing randomness, generation-qualified inbox arrivals and per-generation state continuity. This covers preemptible external arrivals with configurable bounded starvation prevention in the implemented fixed-node simulator. Concurrent/mobile nodes, weighted-share schedulers and imported field/emulation traces remain pending.
+The current V6 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies contact-aware safety decisions; replays each admitted action; applies UCB feedback; and reconstructs the bounded supervisory transition. The paired V6 `SimulationEventLedger` embeds canonical `ContactSchedule` and V2 `GenerationArrivalSchedule` inputs plus strict/fair discipline, the fixed 1000 ms service quantum and configurable aging/fairness intervals. Future generation IDs are reserved without policy planning; policy-dependent descriptor construction and initial symbol emission occur at arrival after prior feedback, and the ledger completes the reserved identity before recording that arrival. It then binds records to fixed node topology, resolved service class and descriptor expiry and independently reconstructs timed generation release, last-service clocks, configured priority-then-EDF selection, the tick-rounded `ceil(starvation_ms / 1000) * 1000 + (N - 1) * 1000` ms fair service-gap bound, contact availability, inter-step harvesting/ingest, RIS phases, world gain, channel history, LBT/fading/pacing randomness, generation-qualified inbox arrivals and per-generation state continuity. This covers causal preemptible external arrivals with configurable bounded starvation prevention in the implemented fixed-node simulator. Effective-service accounting, concurrent/mobile nodes and imported field/emulation traces remain pending.
 
 ### Exit gate
 

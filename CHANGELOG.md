@@ -29,12 +29,15 @@ All notable changes to Aurora-X will be documented in this file.
 - `aurora_scheduler_benchmark` compares strict priority-then-EDF against aging/fair scheduling under an identical deterministic adversarial workload and reports service-gap violations plus elastic selections.
 - Versioned `AURORA_GENERATION_SCHEDULER_SWEEP_V1` report covering seven canonical scheduler scenarios, including dense contention and tick-rounded starvation intervals.
 - CTest/GitHub Actions regression gates enforce strict starvation exposure, bounded fair service for every candidate and byte-exact agreement with the canonical scheduler report.
+- Descriptor-independent generation identity reservations that do not invoke transport policy planning, allowing future arrival identities to remain deterministic without consuming adaptive state.
+- Causal A-to-B runtime coverage proving that feedback from an expired generation changes the later generation's arrival-time descriptor and initial symbol budget.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
 - Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
 
 ### Changed
-- Routed the dependency-light simulator through `AlienFountainOrganism::spawn()` and `integrate()` exclusively; delivery and health now consume the same report.
+- Routed the dependency-light simulator through the organism's reserved-identity/spawn/integrate lifecycle exclusively; delivery and health consume the same report.
+- Deferred policy planning, descriptor construction and initial symbol emission from simulator initialization to each declared generation arrival; V6 ledger metadata now completes reserved future identities before their arrival event without changing the serialized format version.
 - Reduced `AlienFountainOrganism` to a compatibility facade over separately testable codec, policy and generation-state components.
 - Reworked the experimental LT-like codec to use deterministic systematic symbols, unique source-index sampling, ideal-soliton repair degrees, incremental rank tracking, and bounded equation storage.
 - Made simulation and coding randomness reproducible from the contract seed.
