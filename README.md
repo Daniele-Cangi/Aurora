@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** extend process-separated emulation to replayable impairments and concurrent generations
+**Primary current task:** extend replayable process-separated emulation to delay/reordering profiles and remote-host validation
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -145,9 +145,11 @@ Secure claims apply only to builds explicitly using the real cryptographic backe
 
 ### 7. Process-separated transport emulation
 
-`aurora_process_emulation` runs sender and receiver roles in separate OS processes. The sender transmits a canonical generation descriptor and FEC symbols on one IPv4 loopback UDP port. The receiver constructs `GenerationReceiver` from the descriptor alone, decodes without access to the source payload, and returns progress or terminal `DecodeReport` summaries on a separately configured feedback port. The sender applies successful terminal feedback to its adaptive policy.
+`aurora_process_emulation` runs sender and receiver roles in separate OS processes. The sender multiplexes two concurrent generations by interleaving their canonical descriptors and FEC symbols on one IPv4 loopback UDP port. The receiver keeps decoder-only state keyed by generation identity, without access to either source payload, and returns progress or terminal `DecodeReport` summaries on a separately configured feedback port. The sender validates and applies each successful terminal feedback exactly once to its adaptive policy.
 
-Descriptor, symbol and feedback frames share a bounded versioned envelope with explicit type, payload length and checksum. This detects accidental corruption and incompatible framing; it is not authentication. The current harness uses one generation and a deterministic forward drop rule on loopback. It proves process and channel separation, not Internet behaviour, calibrated impairment or field performance.
+Forward symbol attempts are driven by a checked-in `AURORA_IMPAIRMENT_TRACE_V1`. Its canonical text envelope binds the scenario name and cyclic `P` (pass), `D` (drop) and `U` (duplicate) actions to an FNV-1a checksum. Actions index the global interleaved symbol-attempt order, so the same trace and inputs reproduce the same disposition sequence. Descriptor retransmission and the reverse channel are deliberately outside this first impairment model.
+
+Descriptor, symbol and feedback frames share a bounded versioned envelope with explicit type, payload length and checksum. This detects accidental corruption and incompatible framing; it is not authentication. The current harness uses two generations and a replayable pass/drop/duplicate rule on loopback. It proves process and channel separation plus deterministic multiplexing, not Internet behaviour, time-based impairment, calibrated conditions or field performance.
 
 ---
 
@@ -337,14 +339,14 @@ On multi-configuration Windows generators the executable may be under `build/bin
 Run the two process roles manually on separate terminals, with distinct forward and reverse UDP ports:
 
 ```bash
-./build/bin/aurora_process_emulation receiver 47001 47002
-./build/bin/aurora_process_emulation sender   47001 47002
+./build/bin/aurora_process_emulation receiver 47001 47002 2
+./build/bin/aurora_process_emulation sender   47001 47002 benchmarks/process_loopback_v1.trace
 ```
 
 Or run the automated launcher, which selects free loopback ports and verifies both process exit codes plus terminal feedback application:
 
 ```bash
-python tests/run_process_emulation.py ./build/bin/aurora_process_emulation
+python tests/run_process_emulation.py ./build/bin/aurora_process_emulation benchmarks/process_loopback_v1.trace
 ```
 
 The receiver must start first, although the sender retries descriptor delivery for a bounded interval. This first emulation profile uses actual UDP datagrams and process boundaries but remains local loopback evidence; it does not inherit the simulator's contact, energy or HAL models.
@@ -602,4 +604,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A first process-separated UDP path now carries descriptors and symbols forward and decode feedback in reverse. The next obligation is to drive that path with replayable impairments and concurrent generations before moving to remote-host and calibrated hardware evidence.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generation descriptors and symbols forward, replays a checksum-bound pass/drop/duplicate trace, and carries per-generation decode feedback in reverse. This is deterministic loopback evidence: it does not model delay, reordering, reverse-path loss, authentication, calibrated network conditions or hardware. The next obligation is to add time-based delay/reordering profiles and validate the same protocol across remote hosts before calibrated hardware work.

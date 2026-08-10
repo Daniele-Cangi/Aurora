@@ -363,13 +363,20 @@ if(BUILD_TESTING)
   set_tests_properties(
     aurora.process_protocol PROPERTIES LABELS "emulation;regression")
 
+  add_executable(test_impairment_trace tests/test_impairment_trace.cpp)
+  aurora_link_common(test_impairment_trace)
+  add_test(NAME aurora.impairment_trace COMMAND test_impairment_trace)
+  set_tests_properties(
+    aurora.impairment_trace PROPERTIES LABELS "emulation;regression")
+
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(
       NAME aurora.process_separated_emulation
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_emulation.py"
-        "$<TARGET_FILE:aurora_process_emulation>")
+        "$<TARGET_FILE:aurora_process_emulation>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_loopback_v1.trace")
     set_tests_properties(
       aurora.process_separated_emulation
       PROPERTIES

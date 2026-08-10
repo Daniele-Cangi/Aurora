@@ -1,1 +1,2 @@
 benchmarks/*.csv text eol=lf
+benchmarks/*.trace text eol=lf
