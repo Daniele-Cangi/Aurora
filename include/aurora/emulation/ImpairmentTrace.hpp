@@ -13,6 +13,11 @@ namespace aurora::emulation {
 
 enum class ImpairmentAction { PASS, DROP, DUPLICATE };
 
+struct ImpairmentDirective {
+    ImpairmentAction action = ImpairmentAction::PASS;
+    std::uint32_t delay_ms = 0;
+};
+
 class ImpairmentTrace {
 public:
     static ImpairmentTrace parse(std::string_view text) {
@@ -29,27 +34,50 @@ public:
         if (std::getline(input, extra) && !extra.empty()) {
             throw std::invalid_argument("impairment trace: trailing content");
         }
-        if (magic != "AURORA_IMPAIRMENT_TRACE_V1" ||
-            !name_line.starts_with("name=") ||
-            !actions_line.starts_with("actions=") ||
+        const bool v1 = magic == "AURORA_IMPAIRMENT_TRACE_V1";
+        const bool v2 = magic == "AURORA_IMPAIRMENT_TRACE_V2";
+        if ((!v1 && !v2) || !name_line.starts_with("name=") ||
+            !(v1 ? actions_line.starts_with("actions=")
+                 : actions_line.starts_with("events=")) ||
             !checksum_line.starts_with("checksum=")) {
-            throw std::invalid_argument("impairment trace: invalid V1 envelope");
+            throw std::invalid_argument("impairment trace: invalid envelope");
         }
         ImpairmentTrace trace;
         trace.name_ = name_line.substr(5);
         if (trace.name_.empty()) {
             throw std::invalid_argument("impairment trace: empty name");
         }
-        const auto encoded = actions_line.substr(8);
-        for (char value : encoded) {
-            switch (value) {
-                case 'P': trace.actions_.push_back(ImpairmentAction::PASS); break;
-                case 'D': trace.actions_.push_back(ImpairmentAction::DROP); break;
-                case 'U': trace.actions_.push_back(ImpairmentAction::DUPLICATE); break;
-                default: throw std::invalid_argument("impairment trace: invalid action");
+        trace.version_ = v1 ? 1 : 2;
+        const auto encoded = actions_line.substr(v1 ? 8 : 7);
+        if (v1) {
+            for (char value : encoded) {
+                trace.directives_.push_back({parse_action(value), 0});
+            }
+        } else {
+            std::size_t begin = 0;
+            while (begin <= encoded.size()) {
+                const auto end = encoded.find(',', begin);
+                const auto token = encoded.substr(
+                    begin, end == std::string::npos ? end : end - begin);
+                const auto separator = token.find('@');
+                if (separator != 1 || token.size() < 3) {
+                    throw std::invalid_argument(
+                        "impairment trace: invalid timed event");
+                }
+                std::size_t consumed = 0;
+                const auto delay = std::stoul(token.substr(2), &consumed, 10);
+                if (consumed != token.size() - 2 || delay > 60'000) {
+                    throw std::invalid_argument(
+                        "impairment trace: invalid event delay");
+                }
+                trace.directives_.push_back({
+                    parse_action(token.front()),
+                    static_cast<std::uint32_t>(delay)});
+                if (end == std::string::npos) break;
+                begin = end + 1;
             }
         }
-        if (trace.actions_.empty()) {
+        if (trace.directives_.empty()) {
             throw std::invalid_argument("impairment trace: no actions");
         }
         const auto canonical = magic + "\n" + name_line + "\n" + actions_line + "\n";
@@ -74,14 +102,35 @@ public:
         return canonical + "checksum=" + hex(fnv1a64(canonical)) + "\n";
     }
 
+    static std::string make_timed(std::string_view name,
+                                  std::string_view events) {
+        const std::string canonical = "AURORA_IMPAIRMENT_TRACE_V2\nname=" +
+            std::string(name) + "\nevents=" + std::string(events) + "\n";
+        return canonical + "checksum=" + hex(fnv1a64(canonical)) + "\n";
+    }
+
     [[nodiscard]] ImpairmentAction action(std::uint64_t attempt) const {
-        return actions_[attempt % actions_.size()];
+        return directive(attempt).action;
+    }
+    [[nodiscard]] ImpairmentDirective directive(std::uint64_t attempt) const {
+        return directives_[attempt % directives_.size()];
     }
     [[nodiscard]] const std::string& name() const { return name_; }
     [[nodiscard]] std::uint64_t fingerprint() const { return fingerprint_; }
-    [[nodiscard]] std::size_t period() const { return actions_.size(); }
+    [[nodiscard]] std::size_t period() const { return directives_.size(); }
+    [[nodiscard]] int version() const { return version_; }
 
 private:
+    static ImpairmentAction parse_action(char value) {
+        switch (value) {
+            case 'P': return ImpairmentAction::PASS;
+            case 'D': return ImpairmentAction::DROP;
+            case 'U': return ImpairmentAction::DUPLICATE;
+            default: throw std::invalid_argument(
+                "impairment trace: invalid action");
+        }
+    }
+
     static void strip_carriage_return(std::string& line) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
     }
@@ -98,8 +147,9 @@ private:
     }
 
     std::string name_;
-    std::vector<ImpairmentAction> actions_;
+    std::vector<ImpairmentDirective> directives_;
     std::uint64_t fingerprint_ = 0;
+    int version_ = 0;
 };
 
 } // namespace aurora::emulation

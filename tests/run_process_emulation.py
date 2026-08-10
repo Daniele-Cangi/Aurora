@@ -1,6 +1,7 @@
 import socket
 import subprocess
 import sys
+import re
 
 
 def free_port(excluded=None):
@@ -21,7 +22,15 @@ def main():
     forward_port = free_port()
     feedback_port = free_port(forward_port)
     receiver = subprocess.Popen(
-        [executable, "receiver", str(forward_port), str(feedback_port), "2"],
+        [
+            executable,
+            "receiver",
+            "127.0.0.1",
+            str(forward_port),
+            "127.0.0.1",
+            str(feedback_port),
+            "2",
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29,7 +38,15 @@ def main():
 
     try:
         sender = subprocess.run(
-            [executable, "sender", str(forward_port), str(feedback_port), trace],
+            [
+                executable,
+                "sender",
+                "127.0.0.1",
+                str(forward_port),
+                "127.0.0.1",
+                str(feedback_port),
+                trace,
+            ],
             capture_output=True,
             text=True,
             timeout=20,
@@ -50,6 +67,10 @@ def main():
             raise RuntimeError(f"missing sender evidence: {sender.stdout}")
         if "generations=2" not in sender.stdout or "feedback_applied=2" not in sender.stdout:
             raise RuntimeError(f"reverse feedback was not applied: {sender.stdout}")
+        delayed = re.search(r"impairment_delayed=(\d+)", sender.stdout)
+        reordered = re.search(r"impairment_reordered=(\d+)", sender.stdout)
+        if not delayed or not reordered or int(delayed.group(1)) == 0 or int(reordered.group(1)) == 0:
+            raise RuntimeError(f"missing timed impairment evidence: {sender.stdout}")
         if receiver_stdout.count("receiver_generation_complete") != 2:
             raise RuntimeError(f"missing per-generation evidence: {receiver_stdout}")
         if "receiver_complete generations=2" not in receiver_stdout:
