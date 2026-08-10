@@ -421,7 +421,7 @@ At minimum compare:
 6. Reed–Solomon or another block-code baseline where appropriate;
 7. RaptorQ baseline when a verified implementation is available.
 
-**Current status:** items 1–5 use explicit replayable traces with shared transmission-slot outcomes. A separate deterministic adversarial scheduler harness now compares strict priority-then-EDF with configurable aging/fair scheduling on identical candidates and reports service-gap bound violations. Items 6–7 and externally valid comparative conclusions remain pending.
+**Current status:** items 1–5 use explicit replayable traces with shared transmission-slot outcomes. A separate deterministic adversarial scheduler harness compares strict priority-then-EDF with configurable aging/fair scheduling on identical candidates. Its versioned V1 report sweeps seven contention/aging/starvation configurations and is enforced in CI through semantic service-gap gates plus byte-exact snapshot verification. Items 6–7 and externally valid comparative conclusions remain pending.
 
 ## Phase 3B — Channel scenarios
 
@@ -452,7 +452,7 @@ For every scenario:
 - configuration and commit hash in every output;
 - deterministic replay of individual runs.
 
-**Current status:** shared trace slots, exact trace import/export, checksum-chain integrity, per-trial failed/successful records, configuration/trace fingerprints, Wilson 95% delivery intervals, and configure-time commit/compiler/target/build provenance are implemented. Outputs explicitly distinguish the simulation evidence level from the `field-experimental` build profile and never mark current hardware as validated. Authenticated provenance, larger prescribed repetition counts and distributional latency/energy statistics remain pending.
+**Current status:** shared trace slots, exact trace import/export, checksum-chain integrity, per-trial failed/successful records, configuration/trace fingerprints, Wilson 95% delivery intervals, and configure-time commit/compiler/target/build provenance are implemented. The canonical scheduler sweep adds reviewed regression thresholds and cross-platform snapshot checks to every dependency-light CI run. Outputs explicitly distinguish the simulation evidence level from the `field-experimental` build profile and never mark current hardware as validated. Authenticated provenance, larger prescribed repetition counts and distributional latency/energy statistics remain pending.
 
 ## Primary metrics
 

@@ -1,0 +1,16 @@
+AURORA_GENERATION_SCHEDULER_SWEEP_V1
+scenario,mode,steps,critical_contenders,candidates,aging_ms,starvation_ms,bound_ms,max_gap_ms,bound_violations,elastic_selections,gate
+baseline,strict,20,2,3,2000,3000,5000,20000,2,0,PASS
+baseline,fair,20,2,3,2000,3000,5000,4000,0,6,PASS
+fast-aging,strict,24,2,3,1000,3000,5000,24000,2,0,PASS
+fast-aging,fair,24,2,3,1000,3000,5000,3000,0,8,PASS
+slow-aging,strict,30,2,3,4000,3000,5000,30000,2,0,PASS
+slow-aging,fair,30,2,3,4000,3000,5000,4000,0,9,PASS
+tight-bound,strict,24,3,4,2000,2000,5000,24000,3,0,PASS
+tight-bound,fair,24,3,4,2000,2000,5000,4000,0,6,PASS
+rounded-bound,strict,24,3,4,2000,2501,6000,24000,3,0,PASS
+rounded-bound,fair,24,3,4,2000,2501,6000,5000,0,6,PASS
+wide-bound,strict,40,4,5,4000,6000,10000,40000,4,0,PASS
+wide-bound,fair,40,4,5,4000,6000,10000,9000,0,6,PASS
+dense,strict,80,8,9,2000,6000,14000,80000,8,0,PASS
+dense,fair,80,8,9,2000,6000,14000,12000,0,9,PASS

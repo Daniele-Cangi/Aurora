@@ -27,6 +27,8 @@ All notable changes to Aurora-X will be documented in this file.
 - Shared `GenerationScheduler` selection logic and tests for priority, earliest-deadline, stable tie-break and invalid-candidate rejection.
 - Bounded starvation prevention: one-class promotion every 2000 ms, a 3000 ms fairness deadline and a replayable maximum service gap of `3000 + (N - 1) * 1000` ms.
 - `aurora_scheduler_benchmark` compares strict priority-then-EDF against aging/fair scheduling under an identical deterministic adversarial workload and reports service-gap violations plus elastic selections.
+- Versioned `AURORA_GENERATION_SCHEDULER_SWEEP_V1` report covering seven canonical scheduler scenarios, including dense contention and tick-rounded starvation intervals.
+- CTest/GitHub Actions regression gates enforce strict starvation exposure, bounded fair service for every candidate and byte-exact agreement with the canonical scheduler report.
 - Timestamp-based safety-evidence expiry with monotonic-clock validation and replayable monitor restoration.
 - Configure-time benchmark provenance covering commit/source state, compiler, target, build generator/profile, crypto/FEC profile and an explicit non-validated hardware boundary.
 - CTest coverage for deterministic/reordered/duplicate symbols, concurrent interleaved generations, dynamic repair identity/caps, bounded panic, rolling statistics, HAL/duty refusal, critical scheduling, execution-trace consistency, integrity failure and safety action costs.
@@ -41,6 +43,7 @@ All notable changes to Aurora-X will be documented in this file.
 - Added `--contact-schedule <path>` and `--contact-schedule-out <path>` to the simulation CLI; replay/contact options remain unavailable in `FIELD_BUILD`.
 - Added `--generation-arrivals <path>` and `--generation-arrivals-out <path>` to the simulation CLI; arrival replay remains unavailable in interactive-lab and `FIELD_BUILD` modes.
 - Added `--generation-scheduler <strict|fair>`, `--generation-aging-ms` and `--generation-starvation-ms`; scheduler options remain simulation-only in `FIELD_BUILD`.
+- Added `aurora_scheduler_benchmark --sweep` and `--verify-sweep <report>` for deterministic report generation and CI snapshot verification.
 - Extended arrival specifications with optional service class and relative deadline fields while preserving the compact inheritance form.
 - Upgraded decision provenance to V5: proposal derivation, selector/RNG advancement, UCB feedback, per-attempt HAL/channel/resource transitions, and safety-window/operating-mode transitions are independently reconstructed and checked for cross-record continuity.
 - V2 through V5 decision traces are no longer accepted because they cannot provide the complete V6 contact, proposal, action and supervisory evidence and must be regenerated.
