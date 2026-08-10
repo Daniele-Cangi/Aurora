@@ -342,6 +342,18 @@ if(BUILD_TESTING)
   add_test(
     NAME aurora.generation_scheduler_benchmark_cli
     COMMAND aurora_scheduler_benchmark 20 2 2000 3000)
+  add_test(
+    NAME aurora.generation_scheduler_benchmark_sweep
+    COMMAND aurora_scheduler_benchmark --sweep)
+  add_test(
+    NAME aurora.generation_scheduler_benchmark_report
+    COMMAND aurora_scheduler_benchmark
+      --verify-sweep
+      "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/generation_scheduler_sweep_v1.csv")
+  set_tests_properties(
+    aurora.generation_scheduler_benchmark_sweep
+    aurora.generation_scheduler_benchmark_report
+    PROPERTIES LABELS "benchmark;regression")
 
   set(_AURORA_EVENT_DECISION_TRACE
       "${CMAKE_CURRENT_BINARY_DIR}/simulation-event-decisions.trace")

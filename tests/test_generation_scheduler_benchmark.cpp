@@ -24,6 +24,10 @@ int main() {
     assert(std::all_of(
         comparison.fair.selections.begin(), comparison.fair.selections.end(),
         [](std::uint64_t selections) { return selections > 0; }));
+    assert(aurora::simulation::generation_scheduler_benchmark_gate_passes(
+        comparison.strict));
+    assert(aurora::simulation::generation_scheduler_benchmark_gate_passes(
+        comparison.fair));
 
     const GenerationSchedulingPolicy slower{
         1'000, 4'000, 6'000,
@@ -32,6 +36,20 @@ int main() {
     assert(custom.fair.comparison_bound_ms == 9'000);
     assert(custom.fair.bound_violations == 0);
     assert(custom.strict.bound_violations > 0);
+
+    const auto sweep = aurora::simulation::
+        run_canonical_generation_scheduler_benchmark_sweep();
+    assert(sweep == aurora::simulation::
+        run_canonical_generation_scheduler_benchmark_sweep());
+    assert(sweep.scenarios == 7);
+    assert(sweep.failed_gates == 0);
+    assert(sweep.report.starts_with(
+        "AURORA_GENERATION_SCHEDULER_SWEEP_V1\n"));
+
+    auto regressed = comparison.fair;
+    regressed.bound_violations = 1;
+    assert(!aurora::simulation::generation_scheduler_benchmark_gate_passes(
+        regressed));
 
     bool invalid_rejected = false;
     try {

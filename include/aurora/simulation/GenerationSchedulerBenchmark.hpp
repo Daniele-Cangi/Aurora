@@ -3,10 +3,14 @@
 #include "GenerationScheduler.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace aurora::simulation {
@@ -32,6 +36,26 @@ struct GenerationSchedulerBenchmarkComparison {
 
     friend bool operator==(const GenerationSchedulerBenchmarkComparison&,
                            const GenerationSchedulerBenchmarkComparison&) = default;
+};
+
+struct GenerationSchedulerBenchmarkScenario {
+    std::string_view name;
+    std::uint64_t steps;
+    std::size_t critical_contenders;
+    std::uint64_t aging_interval_ms;
+    std::uint64_t starvation_limit_ms;
+
+    friend bool operator==(const GenerationSchedulerBenchmarkScenario&,
+                           const GenerationSchedulerBenchmarkScenario&) = default;
+};
+
+struct GenerationSchedulerBenchmarkSweep {
+    std::string report;
+    std::size_t scenarios = 0;
+    std::size_t failed_gates = 0;
+
+    friend bool operator==(const GenerationSchedulerBenchmarkSweep&,
+                           const GenerationSchedulerBenchmarkSweep&) = default;
 };
 
 inline GenerationSchedulerBenchmarkMetrics run_adversarial_scheduler_benchmark(
@@ -134,6 +158,86 @@ compare_adversarial_scheduler_policies(
         run_adversarial_scheduler_benchmark(
             policy, GenerationSchedulingDiscipline::AGING_FAIR,
             steps, critical_contenders)};
+}
+
+inline bool generation_scheduler_benchmark_gate_passes(
+    const GenerationSchedulerBenchmarkMetrics& metrics) {
+    if (metrics.selections.empty()) return false;
+    if (metrics.discipline ==
+        GenerationSchedulingDiscipline::STRICT_PRIORITY_EDF) {
+        return metrics.bound_violations > 0 &&
+            metrics.maximum_observed_gap_ms > metrics.comparison_bound_ms &&
+            metrics.selections.front() == 0;
+    }
+    return metrics.bound_violations == 0 &&
+        metrics.maximum_observed_gap_ms <= metrics.comparison_bound_ms &&
+        std::all_of(
+            metrics.selections.begin(), metrics.selections.end(),
+            [](std::uint64_t selections) { return selections > 0; });
+}
+
+inline const std::array<GenerationSchedulerBenchmarkScenario, 7>&
+canonical_generation_scheduler_benchmark_scenarios() {
+    static constexpr std::array<GenerationSchedulerBenchmarkScenario, 7>
+        scenarios{{
+            {"baseline", 20, 2, 2'000, 3'000},
+            {"fast-aging", 24, 2, 1'000, 3'000},
+            {"slow-aging", 30, 2, 4'000, 3'000},
+            {"tight-bound", 24, 3, 2'000, 2'000},
+            {"rounded-bound", 24, 3, 2'000, 2'501},
+            {"wide-bound", 40, 4, 4'000, 6'000},
+            {"dense", 80, 8, 2'000, 6'000},
+        }};
+    return scenarios;
+}
+
+inline void append_generation_scheduler_benchmark_sweep_row(
+    std::ostringstream& output,
+    const GenerationSchedulerBenchmarkScenario& scenario,
+    std::string_view mode,
+    const GenerationSchedulerBenchmarkMetrics& metrics,
+    bool gate_passes) {
+    output << scenario.name << ',' << mode << ',' << scenario.steps << ','
+           << scenario.critical_contenders << ',' << metrics.candidates << ','
+           << scenario.aging_interval_ms << ','
+           << scenario.starvation_limit_ms << ','
+           << metrics.comparison_bound_ms << ','
+           << metrics.maximum_observed_gap_ms << ','
+           << metrics.bound_violations << ',' << metrics.selections.front()
+           << ',' << (gate_passes ? "PASS" : "FAIL") << '\n';
+}
+
+inline GenerationSchedulerBenchmarkSweep
+run_canonical_generation_scheduler_benchmark_sweep() {
+    GenerationSchedulerBenchmarkSweep sweep;
+    const auto& scenarios =
+        canonical_generation_scheduler_benchmark_scenarios();
+    sweep.scenarios = scenarios.size();
+
+    std::ostringstream output;
+    output << "AURORA_GENERATION_SCHEDULER_SWEEP_V1\n"
+           << "scenario,mode,steps,critical_contenders,candidates,aging_ms,"
+              "starvation_ms,bound_ms,max_gap_ms,bound_violations,"
+              "elastic_selections,gate\n";
+    for (const auto& scenario : scenarios) {
+        GenerationSchedulingPolicy policy;
+        policy.aging_interval_ms = scenario.aging_interval_ms;
+        policy.starvation_limit_ms = scenario.starvation_limit_ms;
+        const auto comparison = compare_adversarial_scheduler_policies(
+            policy, scenario.steps, scenario.critical_contenders);
+        const bool strict_passes =
+            generation_scheduler_benchmark_gate_passes(comparison.strict);
+        const bool fair_passes =
+            generation_scheduler_benchmark_gate_passes(comparison.fair);
+        sweep.failed_gates += static_cast<std::size_t>(!strict_passes);
+        sweep.failed_gates += static_cast<std::size_t>(!fair_passes);
+        append_generation_scheduler_benchmark_sweep_row(
+            output, scenario, "strict", comparison.strict, strict_passes);
+        append_generation_scheduler_benchmark_sweep_row(
+            output, scenario, "fair", comparison.fair, fair_passes);
+    }
+    sweep.report = output.str();
+    return sweep;
 }
 
 } // namespace aurora::simulation
