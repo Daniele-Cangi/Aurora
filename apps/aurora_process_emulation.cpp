@@ -1,4 +1,5 @@
 #include "aurora/control/TransportPolicy.hpp"
+#include "aurora/emulation/ImpairmentTrace.hpp"
 #include "aurora/emulation/ProcessProtocol.hpp"
 #include "aurora/fec/GenerationCodec.hpp"
 #include "aurora/transport/GenerationManager.hpp"
@@ -13,6 +14,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef _WIN32
@@ -193,28 +196,18 @@ std::uint64_t elapsed_ms(
 }
 
 std::optional<aurora::emulation::FeedbackFrame> receive_feedback(
-    const UdpSocket& socket,
-    const aurora::transport::GenerationDescriptor& descriptor) {
+    const UdpSocket& socket) {
     const auto datagram = socket.receive();
     if (!datagram) return std::nullopt;
     try {
-        auto feedback = aurora::emulation::decode_feedback(*datagram);
-        if (feedback.descriptor_fingerprint !=
-                descriptor.descriptor_fingerprint ||
-            feedback.report.generation_id != descriptor.generation_id ||
-            feedback.report.source_bytes !=
-                descriptor.original_payload_length ||
-            feedback.report.required_rank !=
-                descriptor.total_source_symbols) {
-            return std::nullopt;
-        }
-        return feedback;
+        return aurora::emulation::decode_feedback(*datagram);
     } catch (const std::invalid_argument&) {
         return std::nullopt;
     }
 }
 
-int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port) {
+int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port,
+               const std::string& trace_path) {
     const auto started = std::chrono::steady_clock::now();
     UdpSocket feedback_socket(feedback_port);
     auto codec = std::make_shared<aurora::fec::ExperimentalLtLikeCodec>();
@@ -226,83 +219,147 @@ int run_sender(std::uint16_t forward_port, std::uint16_t feedback_port) {
         "backscatter:on;ris:4;reserve:0.05;max_repair_amplification:4;"
         "min_critical_overhead:1.5;seed:1701");
     const auto profile = manager.build_profile(contract);
-    std::vector<std::uint8_t> payload(512);
-    for (std::size_t i = 0; i < payload.size(); ++i) {
-        payload[i] = static_cast<std::uint8_t>((i * 41 + 13) & 0xffU);
+    const auto trace = aurora::emulation::ImpairmentTrace::load(trace_path);
+    struct SenderGeneration {
+        aurora::transport::GenerationSpawnResult spawned;
+        std::optional<aurora::emulation::FeedbackFrame> feedback;
+    };
+    std::vector<SenderGeneration> generations;
+    for (std::size_t generation = 0; generation < 2; ++generation) {
+        std::vector<std::uint8_t> payload(448 + generation * 128);
+        for (std::size_t i = 0; i < payload.size(); ++i) {
+            payload[i] = static_cast<std::uint8_t>(
+                (i * (41 + generation * 2) + 13 + generation) & 0xffU);
+        }
+        SenderGeneration state;
+        state.spawned = manager.spawn(
+            contract, "process-emulation-" + std::to_string(generation),
+            payload, 64, 0);
+        generations.push_back(std::move(state));
     }
-    auto spawned = manager.spawn(
-        contract, "process-emulation", payload, 64, 0);
 
     UdpSocket forward_socket(0);
-    const auto descriptor_frame =
-        aurora::emulation::encode_descriptor(spawned.descriptor);
-    std::optional<aurora::emulation::FeedbackFrame> feedback;
     std::uint32_t forward_datagrams = 0;
     std::uint32_t feedback_datagrams = 0;
-    for (int attempt = 0; attempt < 20 && !feedback; ++attempt) {
-        forward_socket.send(descriptor_frame, forward_port);
-        ++forward_datagrams;
-        feedback = receive_feedback(feedback_socket, spawned.descriptor);
-        if (feedback) ++feedback_datagrams;
-    }
-    if (!feedback) {
-        throw std::runtime_error(
-            "process emulation: receiver did not acknowledge descriptor");
-    }
+    std::uint64_t impairment_attempt = 0;
+    std::uint32_t dropped = 0;
+    std::uint32_t duplicated = 0;
 
-    auto send_symbol = [&](const ::fec::Pkt& packet) {
-        forward_socket.send(
-            aurora::emulation::encode_symbol(packet), forward_port);
-        ++forward_datagrams;
-        if (auto received =
-                receive_feedback(feedback_socket, spawned.descriptor)) {
-            ++feedback_datagrams;
-            feedback = std::move(received);
+    auto accept_feedback = [&](aurora::emulation::FeedbackFrame incoming) {
+        for (auto& generation : generations) {
+            const auto& descriptor = generation.spawned.descriptor;
+            if (incoming.report.generation_id == descriptor.generation_id &&
+                incoming.descriptor_fingerprint ==
+                    descriptor.descriptor_fingerprint &&
+                incoming.report.source_bytes ==
+                    descriptor.original_payload_length &&
+                incoming.report.required_rank == descriptor.total_source_symbols) {
+                generation.feedback = std::move(incoming);
+                ++feedback_datagrams;
+                return;
+            }
+        }
+    };
+    auto poll_feedback = [&] {
+        if (auto incoming = receive_feedback(feedback_socket)) {
+            accept_feedback(std::move(*incoming));
         }
     };
 
-    for (const auto& packet : spawned.packets) {
-        // A declared deterministic forward-path impairment. The receiver's
-        // explicit reverse feedback decides whether repairs are needed.
-        if (packet.seq % 4U == 0U) continue;
-        send_symbol(packet);
-        if (feedback->report.delivered()) break;
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        bool all_acknowledged = true;
+        for (auto& generation : generations) {
+            if (generation.feedback) continue;
+            all_acknowledged = false;
+            forward_socket.send(aurora::emulation::encode_descriptor(
+                generation.spawned.descriptor), forward_port);
+            ++forward_datagrams;
+            poll_feedback();
+        }
+        if (all_acknowledged) break;
+    }
+    for (const auto& generation : generations) {
+        if (!generation.feedback) throw std::runtime_error(
+            "process emulation: receiver did not acknowledge every descriptor");
     }
 
-    for (int repair = 0;
-         repair < 64 && !feedback->report.delivered(); ++repair) {
-        const auto emitted = manager.emit_repairs(
-            spawned.descriptor.generation_id, 1, false, elapsed_ms(started));
-        if (emitted.packets.empty()) break;
-        send_symbol(emitted.packets.front());
+    auto send_symbol = [&](const ::fec::Pkt& packet) {
+        const auto frame = aurora::emulation::encode_symbol(packet);
+        const auto action = trace.action(impairment_attempt++);
+        if (action == aurora::emulation::ImpairmentAction::DROP) {
+            ++dropped;
+            return;
+        }
+        forward_socket.send(frame, forward_port);
+        ++forward_datagrams;
+        if (action == aurora::emulation::ImpairmentAction::DUPLICATE) {
+            forward_socket.send(frame, forward_port);
+            ++forward_datagrams;
+            ++duplicated;
+        }
+        poll_feedback();
+    };
+
+    std::size_t maximum_packets = 0;
+    for (const auto& generation : generations) {
+        maximum_packets = std::max(
+            maximum_packets, generation.spawned.packets.size());
+    }
+    for (std::size_t index = 0; index < maximum_packets; ++index) {
+        for (auto& generation : generations) {
+            if (generation.feedback->report.delivered() ||
+                index >= generation.spawned.packets.size()) continue;
+            send_symbol(generation.spawned.packets[index]);
+        }
     }
 
-    if (!feedback->report.delivered()) {
-        throw std::runtime_error(
-            "process emulation: receiver did not report delivery");
+    for (int round = 0; round < 128; ++round) {
+        bool all_delivered = true;
+        for (auto& generation : generations) {
+            if (generation.feedback->report.delivered()) continue;
+            all_delivered = false;
+            const auto emitted = manager.emit_repairs(
+                generation.spawned.descriptor.generation_id, 1, false,
+                elapsed_ms(started));
+            if (!emitted.packets.empty()) send_symbol(emitted.packets.front());
+        }
+        if (all_delivered) break;
     }
-    policy->observe(profile, feedback->report);
+
+    for (auto& generation : generations) {
+        if (!generation.feedback->report.delivered()) throw std::runtime_error(
+            "process emulation: receiver did not report every delivery");
+        policy->observe(profile, generation.feedback->report);
+    }
     const auto state = policy->flow_state(profile);
-    if (!state || state->success_count != 1) {
+    if (!state || state->success_count !=
+                      static_cast<int>(generations.size())) {
         throw std::runtime_error(
             "process emulation: reverse feedback was not applied to policy");
     }
 
-    std::cout << "sender_complete generation="
-              << spawned.descriptor.generation_id
+    std::cout << "sender_complete generations=" << generations.size()
               << " forward_port=" << forward_port
               << " feedback_port=" << feedback_port
               << " forward_datagrams=" << forward_datagrams
               << " feedback_datagrams=" << feedback_datagrams
-              << " feedback_applied=true\n";
+              << " impairment_attempts=" << impairment_attempt
+              << " impairment_dropped=" << dropped
+              << " impairment_duplicated=" << duplicated
+              << " trace_name=" << trace.name()
+              << " trace_fingerprint=" << trace.fingerprint()
+              << " feedback_applied=2\n";
     return 0;
 }
 
-int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port) {
+int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port,
+                 std::size_t expected_generations) {
     UdpSocket forward_socket(forward_port);
     UdpSocket feedback_socket(0);
     aurora::fec::ExperimentalLtLikeCodec codec;
-    std::optional<aurora::transport::GenerationReceiver> receiver;
+    std::unordered_map<std::string,
+        std::unique_ptr<aurora::transport::GenerationReceiver>> receivers;
+    std::unordered_set<std::string> completed;
     const auto started = std::chrono::steady_clock::now();
 
     while (elapsed_ms(started) < 15'000) {
@@ -313,40 +370,51 @@ int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port) {
             if (type == aurora::emulation::FrameType::DESCRIPTOR) {
                 const auto descriptor =
                     aurora::emulation::decode_descriptor(*datagram);
-                if (!receiver) {
-                    receiver.emplace(descriptor, codec, true);
-                } else if (receiver->descriptor().descriptor_fingerprint !=
+                auto found = receivers.find(descriptor.generation_id);
+                if (found == receivers.end()) {
+                    found = receivers.emplace(descriptor.generation_id,
+                        std::make_unique<aurora::transport::GenerationReceiver>(
+                            descriptor, codec, true)).first;
+                } else if (found->second->descriptor().descriptor_fingerprint !=
                            descriptor.descriptor_fingerprint) {
                     throw std::invalid_argument(
                         "process emulation: conflicting descriptor");
                 }
-                const auto report = receiver->integrate({}, elapsed_ms(started));
+                const auto report = found->second->integrate({}, elapsed_ms(started));
                 feedback_socket.send(
                     aurora::emulation::encode_feedback({
                         descriptor.descriptor_fingerprint, report}),
                     feedback_port);
                 continue;
             }
-            if (type != aurora::emulation::FrameType::SYMBOL || !receiver) {
+            if (type != aurora::emulation::FrameType::SYMBOL) {
                 continue;
             }
             const auto packet = aurora::emulation::decode_symbol(*datagram);
+            const auto found = receivers.find(packet.generation_id);
+            if (found == receivers.end()) continue;
             const auto report =
-                receiver->integrate({packet}, elapsed_ms(started));
+                found->second->integrate({packet}, elapsed_ms(started));
             const auto feedback = aurora::emulation::encode_feedback({
-                receiver->descriptor().descriptor_fingerprint, report});
+                found->second->descriptor().descriptor_fingerprint, report});
             feedback_socket.send(feedback, feedback_port);
             if (report.delivered()) {
                 // Repeat the terminal datagram to tolerate one lost reverse
                 // packet while keeping UDP semantics explicit.
                 feedback_socket.send(feedback, feedback_port);
                 feedback_socket.send(feedback, feedback_port);
-                std::cout << "receiver_complete generation="
-                          << receiver->descriptor().generation_id
-                          << " bytes=" << report.recovered_bytes
-                          << " forward_port=" << forward_port
-                          << " feedback_port=" << feedback_port << '\n';
-                return 0;
+                if (completed.insert(packet.generation_id).second) {
+                    std::cout << "receiver_generation_complete generation="
+                              << packet.generation_id
+                              << " bytes=" << report.recovered_bytes << '\n';
+                }
+                if (completed.size() == expected_generations) {
+                    std::cout << "receiver_complete generations="
+                              << completed.size()
+                              << " forward_port=" << forward_port
+                              << " feedback_port=" << feedback_port << '\n';
+                    return 0;
+                }
             }
         } catch (const std::invalid_argument&) {
             // Malformed datagrams are isolated to the receiver boundary.
@@ -359,9 +427,11 @@ int run_receiver(std::uint16_t forward_port, std::uint16_t feedback_port) {
 
 int main(int argc, char* argv[]) {
     try {
-        if (argc != 4) {
+        if (argc != 5) {
             std::cerr << "usage: aurora_process_emulation "
-                         "<sender|receiver> <forward-port> <feedback-port>\n";
+                         "sender <forward-port> <feedback-port> <trace-file>\n"
+                         "   or: aurora_process_emulation receiver "
+                         "<forward-port> <feedback-port> <generation-count>\n";
             return 2;
         }
         SocketRuntime runtime;
@@ -372,10 +442,13 @@ int main(int argc, char* argv[]) {
                 "process emulation: forward and feedback ports must differ");
         }
         if (std::string_view(argv[1]) == "sender") {
-            return run_sender(forward_port, feedback_port);
+            return run_sender(forward_port, feedback_port, argv[4]);
         }
         if (std::string_view(argv[1]) == "receiver") {
-            return run_receiver(forward_port, feedback_port);
+            const auto count = std::stoul(argv[4]);
+            if (count == 0) throw std::invalid_argument(
+                "process emulation: generation count must be positive");
+            return run_receiver(forward_port, feedback_port, count);
         }
         throw std::invalid_argument("process emulation: unknown role");
     } catch (const std::exception& error) {

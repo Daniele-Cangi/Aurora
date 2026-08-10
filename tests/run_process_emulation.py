@@ -13,14 +13,15 @@ def free_port(excluded=None):
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: run_process_emulation.py <emulator>")
+    if len(sys.argv) != 3:
+        raise SystemExit("usage: run_process_emulation.py <emulator> <trace>")
 
     executable = sys.argv[1]
+    trace = sys.argv[2]
     forward_port = free_port()
     feedback_port = free_port(forward_port)
     receiver = subprocess.Popen(
-        [executable, "receiver", str(forward_port), str(feedback_port)],
+        [executable, "receiver", str(forward_port), str(feedback_port), "2"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28,7 +29,7 @@ def main():
 
     try:
         sender = subprocess.run(
-            [executable, "sender", str(forward_port), str(feedback_port)],
+            [executable, "sender", str(forward_port), str(feedback_port), trace],
             capture_output=True,
             text=True,
             timeout=20,
@@ -47,9 +48,11 @@ def main():
             )
         if "sender_complete" not in sender.stdout:
             raise RuntimeError(f"missing sender evidence: {sender.stdout}")
-        if "feedback_applied=true" not in sender.stdout:
+        if "generations=2" not in sender.stdout or "feedback_applied=2" not in sender.stdout:
             raise RuntimeError(f"reverse feedback was not applied: {sender.stdout}")
-        if "receiver_complete" not in receiver_stdout:
+        if receiver_stdout.count("receiver_generation_complete") != 2:
+            raise RuntimeError(f"missing per-generation evidence: {receiver_stdout}")
+        if "receiver_complete generations=2" not in receiver_stdout:
             raise RuntimeError(f"missing receiver evidence: {receiver_stdout}")
         print(sender.stdout.strip())
         print(receiver_stdout.strip())
