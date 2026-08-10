@@ -1,0 +1,53 @@
+evidence_version=1
+evidence_level=emulation
+result=passed
+collected_at_utc=2026-08-10T21:13:23Z
+provider=google-cloud
+project=aurora-dc-transport-20260810
+topology=distinct-cross-region-vms-non-peered-vpcs-public-ipv4
+sender_zone=us-east1-b
+sender_machine_type=e2-micro
+sender_public_ipv4=35.196.111.122
+sender_internal_ipv4=10.44.2.2
+receiver_zone=us-west1-b
+receiver_machine_type=e2-micro
+receiver_public_ipv4=136.117.117.152
+receiver_internal_ipv4=10.45.1.2
+forward_port=47001
+reverse_port=47002
+firewall_scope=peer-public-and-private-ipv4-32-per-direction
+private_vpc_route_between_hosts=false
+authentication_profile=hmac-sha256-libsodium
+source_commit=bdc0093b311833002a8e5b2e67c27b915d58fbd5
+binary_sha256=5248daee1c0b21f45cc52ebf07f0b5aea651c243667ee9c93f1cb1579f0d27ed
+sender_log_sha256=9de53fc8f7977b85afa1676fcc9b242ccee08e74974fed160f3b775fe0bf091a
+receiver_log_sha256=89cd1d3fa17dc58ecb6ce5dccf1d67ff2a8de38e35a407ef596c467048c936aa
+sender_ntp_synchronized=true
+receiver_ntp_synchronized=true
+sender_exit_status=0
+receiver_exit_status=0
+sender_complete_generations=2
+receiver_complete_generations=2
+feedback_applied=2
+sender_replay_rejected=4
+receiver_replay_rejected=5
+forward_packet_source_observed=35.196.111.122
+launch_mode=concurrent-ssh-sessions-sender-delay-3s
+post_run_instances=0
+post_run_disks=0
+post_run_reserved_addresses=0
+post_run_snapshots=0
+ephemeral_credentials_retained=false
+
+[sender_log]
+sender_complete generations=2 forward_port=47001 feedback_port=47002 forward_datagrams=42 feedback_datagrams=13 stale_feedback_datagrams=2 auth_rejected=0 replay_rejected=4 auth_profile=hmac-sha256-libsodium impairment_attempts=39 impairment_dropped=8 impairment_duplicated=8 impairment_delayed=16 impairment_reordered=19 trace_name=process-timed-v2 trace_fingerprint=10832449472123354743 feedback_applied=2
+
+[receiver_log]
+receiver_generation_complete generation=7a45154f49eb8198 bytes=576
+receiver_generation_complete generation=fba2941b7a385bda bytes=448
+receiver_complete generations=2 forward_port=47001 feedback_port=47002 reverse_attempts=25 reverse_datagrams=29 reverse_dropped=3 reverse_duplicated=7 reverse_delayed=7 reverse_reordered=10 reverse_trace_name=process-feedback-v2 reverse_trace_fingerprint=9344546774146586815 auth_rejected=0 replay_rejected=5 auth_profile=hmac-sha256-libsodium
+
+[limitations]
+This is one manually provisioned emulation run, not recurring CI or field evidence.
+No calibrated latency, throughput, energy, availability, or cost claim is made.
+VM provisioning and SSH setup are outside the application logs.

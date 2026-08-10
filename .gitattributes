@@ -1,2 +1,5 @@
 benchmarks/*.csv text eol=lf
 benchmarks/*.trace text eol=lf
+tests/*.sh text eol=lf
+tests/Dockerfile.* text eol=lf
+.github/workflows/*.yml text eol=lf

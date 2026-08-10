@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** obtain explicit authenticated remote-host execution evidence
+**Primary current task:** turn the first authenticated raw-routed VM result into a repeatable harness and calibrate transport timing
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -56,7 +56,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
-| Process emulation | Implemented authenticated loopback slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback | Real HMAC requires `USE_SODIUM=ON`; evidence remains loopback-only, and remote-host execution plus calibrated timing remain future work |
+| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while a retained GCP run records two non-peered VPCs in different regions communicating through public IPv4 endpoints | Real HMAC requires `USE_SODIUM=ON`; the raw-routed result is a manually provisioned, one-run emulation record rather than recurring CI or calibrated timing/throughput evidence, and controlled physical hosts remain future work |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
@@ -145,7 +145,7 @@ Secure claims apply only to builds explicitly using the real cryptographic backe
 
 ### 7. Process-separated transport emulation
 
-`aurora_process_emulation` runs sender and receiver roles in separate OS processes. The sender multiplexes two concurrent generations by interleaving their canonical descriptors and FEC symbols on one IPv4 UDP destination. The receiver keeps decoder-only state keyed by generation identity, without access to either source payload, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. Each successful terminal feedback is applied exactly once to the adaptive policy. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts; the checked-in CI evidence still uses loopback.
+`aurora_process_emulation` runs sender and receiver roles in separate OS processes. The sender multiplexes two concurrent generations by interleaving their canonical descriptors and FEC symbols on one IPv4 UDP destination. The receiver keeps decoder-only state keyed by generation identity, without access to either source payload, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. Each successful terminal feedback is applied exactly once to the adaptive policy. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts. CI exercises them in distinct Docker network namespaces and on independent GitHub-hosted VMs over Tailscale; a retained manual record additionally exercises public IPv4 routing between non-peered GCP VPCs in different regions.
 
 Forward symbol attempts and reverse feedback attempts are driven by independent checked-in impairment traces. V1 binds cyclic `P` (pass), `D` (drop) and `U` (duplicate) actions to a scenario name and FNV-1a checksum. V2 uses `action@delay-ms` events, capped at 60 seconds. Events index their channel's attempt order; release time is ordered first and attempt index breaks ties. A delayed earlier event can therefore be overtaken by a later immediate event reproducibly. Forward descriptor retransmission remains outside impairment; the reverse trace covers descriptor acknowledgements, progress reports and repeated terminal reports.
 
@@ -153,7 +153,7 @@ Descriptor, symbol and feedback payloads retain their bounded versioned checksum
 
 With `USE_SODIUM=OFF`, the same envelope and replay invariants use a deterministic placeholder tagged `insecure-test-placeholder-mac`. That profile is a regression oracle only and is not authentication. CI includes a separate Ubuntu `secure-auth` job that installs libsodium and runs the authentication unit test plus the complete two-process path under the real backend. The checked-in key is public test material and must never be reused as a deployment secret.
 
-The current harness uses two generations and independent replayable pass/drop/duplicate/delay profiles on loopback. It proves authenticated framing in the secure CI profile, replay rejection, process/channel separation, deterministic bidirectional multiplexing and release ordering. It does not prove Internet behaviour, remote-host success, calibrated timing or field performance.
+The current harness uses two generations and independent replayable pass/drop/duplicate/delay profiles. The container-host job builds a libsodium-enabled image, runs sender and receiver under distinct network namespaces and IPv4 addresses, and retains their logs plus a topology/authentication manifest as a CI artifact. It proves authenticated framing, replay rejection, process/channel separation, deterministic bidirectional multiplexing and release ordering across that declared bridge topology. Because both containers still share one runner and Docker bridge, it does not prove Internet behaviour, independent-machine success, calibrated timing or field performance.
 
 ---
 
@@ -353,7 +353,43 @@ Or run the automated launcher, which selects free loopback ports and verifies bo
 python tests/run_process_emulation.py ./build/bin/aurora_process_emulation benchmarks/process_timed_v2.trace benchmarks/process_feedback_v2.trace benchmarks/process_auth_test.key 0123456789abcdef
 ```
 
-For two hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. The receiver must start first, UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. This interface is remote-capable, but the repository does not yet contain a two-host execution artifact. The regression profile uses actual UDP datagrams and process boundaries on local loopback; it does not inherit the simulator's contact, energy or HAL models.
+Build and run the authenticated container-host profile:
+
+```bash
+docker build -f tests/Dockerfile.process-emulation -t aurora-process-emulation:local .
+bash tests/run_container_host_emulation.sh aurora-process-emulation:local process-host-evidence
+```
+
+This produces `sender.log`, `receiver.log`, and `manifest.txt`. The manifest declares the distinct container addresses, ports, session, real HMAC profile, and exit status. The checked-in key and session are public deterministic test fixtures, not deployment secrets. This is stronger than loopback process evidence but remains a single-machine Docker experiment.
+
+The manually dispatchable `authenticated-remote-host-emulation` workflow also
+builds one libsodium-enabled binary and runs it on two fresh GitHub-hosted
+Ubuntu VMs connected as ephemeral, least-privilege Tailscale nodes. Sender and
+receiver derive a unique per-run process key, retain independent manifests and
+connection-path logs, and feed a paired evidence verifier. Same-repository pull
+requests may exercise this profile; fork pull requests cannot receive its
+secrets. A successful artifact proves execution on distinct VMs over the
+declared encrypted overlay, not raw public-Internet routing or field hardware.
+
+A separate retained GCP evidence record runs the same commit and one
+libsodium-enabled binary on `e2-micro` sender and receiver VMs in `us-east1`
+and `us-west1`. Each VM belonged to a different custom VPC with no peering.
+The forward and reverse firewall rules admitted only UDP 47001 and 47002 from
+the peer's exact public and private `/32` addresses. Because the VPCs were not
+peered, the private ranges supplied no route between hosts; packet capture
+confirmed the public sender address at the receiver boundary. Both roles completed two generations,
+applied two authenticated feedback reports, and rejected replayed datagrams.
+The VMs, boot disks, and ephemeral addresses were deleted after collection,
+and the post-run audit returned zero instances, disks, reserved addresses, or
+snapshots. See [`benchmarks/raw_public_host_evidence_v1.txt`](benchmarks/raw_public_host_evidence_v1.txt).
+
+This record demonstrates one successful raw-routed emulation topology. It is
+not a latency, goodput, availability, cost, or field-performance claim. VM
+provisioning and SSH setup were outside the measurement, and the two roles had
+to be launched concurrently because descriptor establishment currently has a
+15-second process timeout.
+
+For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. The receiver must be listening before the sender starts, and remote launch/setup latency must not consume its current 15-second establishment window. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP record supplies one raw-routed VM result; neither is physical-host or calibrated timing evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:
 
@@ -608,4 +644,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Its endpoints are configurable for distinct IPv4 hosts, but current evidence is authenticated loopback only. The next obligation is an explicit two-host authenticated run before calibrated hardware work.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; a retained manual GCP record adds one successful cross-region, non-peered-VPC public-IPv4 run. The next obligation is to automate that raw-routed topology, separate launch readiness from the fixed descriptor timeout, and collect calibrated end-to-end timing before hardware work.
