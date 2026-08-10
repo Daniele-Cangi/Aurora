@@ -94,12 +94,12 @@ struct LBTResult {
 struct LBT {
   double thresh_dBm=-95;
   int dwell_ms=5;
-  LBTResult clear_trace(function<int(void)> rssi){
+  LBTResult clear_trace(function<int(void)> rssi, bool wall_clock_pacing=true){
     LBTResult result;
     result.threshold_dbm=static_cast<int>(thresh_dBm);
     result.first_rssi_dbm=rssi();
     if(result.first_rssi_dbm<thresh_dBm){
-      this_thread::sleep_for(milliseconds(dwell_ms));
+      if(wall_clock_pacing) this_thread::sleep_for(milliseconds(dwell_ms));
       result.second_valid=true;
       result.second_rssi_dbm=rssi();
       result.accepted=result.second_rssi_dbm<thresh_dBm;
@@ -143,10 +143,17 @@ struct SX1262 {
   SimulationTransmitTrace tx_simulation_trace(const uint8_t*, size_t len){
     SimulationTransmitTrace result;
     double t_s=max(0.005, len / (125000.0/8.0));
-    result.lbt=lbt.clear_trace([&](){return rssi();});
+#ifdef FIELD_BUILD
+    constexpr bool wall_clock_pacing=true;
+#else
+    constexpr bool wall_clock_pacing=false;
+#endif
+    result.lbt=lbt.clear_trace([&](){return rssi();}, wall_clock_pacing);
     result.accepted=result.lbt.accepted;
     if(!result.accepted) return result;
-    this_thread::sleep_for(milliseconds((int)(t_s*1000)));
+    if(wall_clock_pacing){
+      this_thread::sleep_for(milliseconds((int)(t_s*1000)));
+    }
     return result;
   }
   bool tx_simulation(const uint8_t* data, size_t len){ return tx_simulation_trace(data,len).accepted; }
@@ -186,6 +193,8 @@ inline bool CW_ON(double s){ return radio().tx_cw(s); }
 inline bool CW_OFF(){ return true; }
 inline bool IR_TX(const uint8_t* b, size_t n, int bitrate){ return ir().tx(b,n,bitrate); }
 inline bool BS_MODULATE(const uint8_t* bits, size_t nbits, int bitrate){ return bs().mod(bits,nbits,bitrate); }
+inline bool IR_TX_SIMULATION(const uint8_t*, size_t, int){ return true; }
+inline bool BS_MODULATE_SIMULATION(const uint8_t*, size_t, int){ return true; }
 inline bool RIS_SET_PHASES(const vector<uint8_t>& p){ return ris().set(p); }
 inline double DutyLeftHint(){ return radio().duty_left(); }
 inline double LoraAirtimeSeconds(size_t bytes){ return max(0.005, bytes / (125000.0/8.0)); }

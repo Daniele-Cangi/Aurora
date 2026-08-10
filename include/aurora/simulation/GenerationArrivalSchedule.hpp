@@ -52,7 +52,8 @@ struct GenerationArrival {
 };
 
 // Canonical external-generation arrivals. Times are unique, strictly ordered,
-// and aligned to the simulator's one-second step boundary. Tags are stable
+// and aligned to the currently modeled one-second transport quantum. The
+// deterministic event kernel itself supports arbitrary millisecond times.
 // payload identities rather than arbitrary user content.
 class GenerationArrivalSchedule {
 public:

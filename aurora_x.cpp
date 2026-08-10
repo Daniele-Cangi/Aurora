@@ -30,6 +30,7 @@ using namespace std; using namespace chrono;
 #include "include/aurora/safety/SafetyEnvelope.hpp"
 #include "include/aurora/telemetry/DecisionReplayLog.hpp"
 #include "include/aurora/telemetry/SimulationEventLedger.hpp"
+#include "include/aurora/simulation/DeterministicEventKernel.hpp"
 #include "include/aurora/simulation/GenerationArrivalSchedule.hpp"
 #include "include/aurora/simulation/GenerationScheduler.hpp"
 #ifdef AURORA_USE_LIBRAPTORQ
@@ -319,10 +320,19 @@ struct Node {
       attempt.hal_replayable = true;
 #endif
       if(mode==phy::Mode::IR){
+#ifdef FIELD_BUILD
         return HAL::IR_TX(packet.fp.data.data(), packet.fp.data.size(), 3500);
+#else
+        return HAL::IR_TX_SIMULATION(
+          packet.fp.data.data(), packet.fp.data.size(), 3500);
+#endif
       }
       vector<uint8_t> bits(packet.fp.data.size()*8, 1);
+#ifdef FIELD_BUILD
       return HAL::BS_MODULATE(bits.data(), bits.size(), 450);
+#else
+      return HAL::BS_MODULATE_SIMULATION(bits.data(), bits.size(), 450);
+#endif
     };
     bool hal_ok = false;
     if(injected_hal){
@@ -650,6 +660,19 @@ struct Engine {
       });
   }
 
+  aurora::simulation::DeterministicEventKernel simulation_kernel() const {
+    aurora::simulation::DeterministicEventKernel kernel;
+    for (size_t index = 0; index < scheduled_generations.size(); ++index) {
+      kernel.schedule(
+        scheduled_generations[index].arrival.arrives_at_ms,
+        aurora::simulation::SimulationEventType::GENERATION_ARRIVAL,
+        index);
+    }
+    kernel.schedule(
+      0, aurora::simulation::SimulationEventType::TRANSPORT_QUANTUM, 0);
+    return kernel;
+  }
+
   void begin_simulation_event_session(const Node& source,
                                       const Node& destination) {
     aurora::telemetry::SimulationEventSession session;
@@ -692,12 +715,13 @@ struct Engine {
   }
 
   aurora::telemetry::SimulationStepEvent begin_simulation_step(
-      int step, Node& source, Node& destination,
+      uint64_t step, uint64_t simulated_now_ms,
+      Node& source, Node& destination,
       uint32_t arrived_generation_index,
       uint64_t arrived_source_packets) {
     aurora::telemetry::SimulationStepEvent event;
-    event.step = static_cast<uint64_t>(step);
-    event.simulated_now_ms = static_cast<uint64_t>(step) * 1000ULL;
+    event.step = step;
+    event.simulated_now_ms = simulated_now_ms;
     event.active_generation_index =
       static_cast<uint32_t>(active_generation_index);
     event.arrived_generation_index = arrived_generation_index;
@@ -850,7 +874,8 @@ struct Engine {
       int min_spacing_ms,
       int jitter_ms,
       int step,
-      bool debug_steps) {
+      bool debug_steps,
+      bool wall_clock_pacing) {
     ActionExecutionSummary summary;
     const auto mode = phy_link(trace.decision.link);
     summary.mode = mode_to_string(mode);
@@ -872,7 +897,10 @@ struct Engine {
     auto do_sleep = [&](int base_ms, int random_ms){
       if(base_ms<=0 && random_ms<=0) return;
       int extra = random_ms>0 ? static_cast<int>(util::rng.uni()*random_ms) : 0;
-      this_thread::sleep_for(std::chrono::milliseconds(base_ms + extra));
+      if (wall_clock_pacing) {
+        this_thread::sleep_for(
+          std::chrono::milliseconds(base_ms + extra));
+      }
     };
 
     for(uint32_t i=0; i<trace.decision.transmission_attempts; ++i){
@@ -1131,23 +1159,62 @@ struct Engine {
     opt.reseed_proposal(I.experiment_seed);
     telem::ChannelState chan;
     double epoch=1.0;
+#ifdef FIELD_BUILD
+    constexpr bool wall_clock_pacing = true;
+#else
+    constexpr bool wall_clock_pacing = false;
+#endif
 
     // T3: Ricarica config all'inizio se in modalità interattiva
     if (interactive_stream_) {
       reload_interactive_config("aurora_interactive_config.json");
     }
 
-    // Iterazioni massime (sufficienti anche per deadline lunghe)
-    for(int step=0; step<500 && !all_generations_terminal(); ++step){
+    auto kernel = simulation_kernel();
+    uint32_t arrived_generation_index =
+      aurora::telemetry::SimulationStepEvent::no_generation_arrival;
+    uint64_t arrived_source_packets = 0;
+    int step = 0;
+    cout << "[EVENT_KERNEL] deterministic order=time,phase,sequence"
+         << " quantum_ms="
+         << generation_scheduling_policy.service_quantum_ms << endl;
+
+    while (const auto event = kernel.pop_next()) {
+      if (event->type ==
+          aurora::simulation::SimulationEventType::GENERATION_ARRIVAL) {
+        if (arrived_generation_index !=
+            aurora::telemetry::SimulationStepEvent::no_generation_arrival) {
+          throw logic_error(
+            "multiple generation arrivals accumulated before a transport quantum");
+        }
+        const auto arrival = release_scheduled_arrival(event->time_ms, S);
+        if (arrival.first != event->subject) {
+          throw logic_error(
+            "discrete-event arrival does not match scheduled subject");
+        }
+        arrived_generation_index = arrival.first;
+        arrived_source_packets = arrival.second;
+        continue;
+      }
+      if (step >= 500 || all_generations_terminal()) break;
+      const uint64_t step_now_ms = event->time_ms;
+      if (event->subject != static_cast<size_t>(step) ||
+          step_now_ms != static_cast<uint64_t>(step) *
+            generation_scheduling_policy.service_quantum_ms) {
+        throw logic_error(
+          "discrete-event transport quantum is not contiguous");
+      }
       // T3: Ricarica config periodicamente (ogni 20 step)
       if (interactive_stream_ && (step % 20 == 0)) {
         reload_interactive_config("aurora_interactive_config.json");
       }
-      const uint64_t step_now_ms = static_cast<uint64_t>(step) * 1000ULL;
-      const auto arrival = release_scheduled_arrival(step_now_ms, S);
       select_active_generation(step_now_ms);
       auto simulation_event = begin_simulation_step(
-        step, S, D, arrival.first, arrival.second);
+        static_cast<uint64_t>(step), step_now_ms, S, D,
+        arrived_generation_index, arrived_source_packets);
+      arrived_generation_index =
+        aurora::telemetry::SimulationStepEvent::no_generation_arrival;
+      arrived_source_packets = 0;
       int have=static_cast<int>(last_decode_report.decoder_rank);
 
       // progress
@@ -1205,7 +1272,7 @@ struct Engine {
       const auto executed = execute_decision(
         S, D, chan, decision_trace, simulated_now_ms,
         proposal_decision.minimum_spacing_ms,
-        proposal_decision.jitter_ms, step, true);
+        proposal_decision.jitter_ms, step, true, wall_clock_pacing);
       const int tries_real = executed.attempts;
       const int ok_cnt = executed.delivered;
       const string mode_chosen = executed.mode;
@@ -1323,10 +1390,21 @@ struct Engine {
       epoch += 1.0;
 
       // **PATCH**: sleep adattivo in base al tempo rimanente
-      {
+      if (wall_clock_pacing) {
         double dl_rem = Sx.deadline_left_s;
         int ms; if      (dl_rem < 2.0) ms = 2; else if (dl_rem < 5.0) ms = 6; else ms = 12;
         this_thread::sleep_for(std::chrono::milliseconds(ms));
+      }
+      ++step;
+      if (step < 500 && !all_generations_terminal()) {
+        const auto quantum_ms = generation_scheduling_policy.service_quantum_ms;
+        if (step_now_ms > numeric_limits<uint64_t>::max() - quantum_ms) {
+          throw overflow_error("next transport quantum overflows");
+        }
+        kernel.schedule(
+          step_now_ms + quantum_ms,
+          aurora::simulation::SimulationEventType::TRANSPORT_QUANTUM,
+          static_cast<size_t>(step));
       }
     }
 
@@ -1415,7 +1493,8 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     const auto arrival = engine.release_scheduled_arrival(step_now_ms, S);
     engine.select_active_generation(step_now_ms);
     auto simulation_event = engine.begin_simulation_step(
-      step, S, D, arrival.first, arrival.second);
+      static_cast<uint64_t>(step), step_now_ms, S, D,
+      arrival.first, arrival.second);
     int have=static_cast<int>(engine.last_decode_report.decoder_rank);
 
     // progress (meno verboso in lab mode)
@@ -1475,7 +1554,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
     const auto executed = engine.execute_decision(
       S, D, chan, decision_trace, simulated_now_ms,
       proposal_decision.minimum_spacing_ms,
-      proposal_decision.jitter_ms, step, false);
+      proposal_decision.jitter_ms, step, false, true);
     const int tries_real = executed.attempts;
     const int ok_cnt = executed.delivered;
     const string mode_chosen = executed.mode;
