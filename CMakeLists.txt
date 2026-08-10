@@ -326,6 +326,14 @@ add_executable(
   apps/aurora_transport_benchmark.cpp)
 aurora_link_common(aurora_transport_benchmark)
 
+add_executable(
+  aurora_process_emulation
+  apps/aurora_process_emulation.cpp)
+aurora_link_common(aurora_process_emulation)
+if(WIN32)
+  target_link_libraries(aurora_process_emulation PRIVATE ws2_32)
+endif()
+
 # -------------------------------------------------------------------
 # Tests
 if(BUILD_TESTING)
@@ -348,6 +356,29 @@ if(BUILD_TESTING)
   add_executable(test_modular_transport tests/test_modular_transport.cpp)
   aurora_link_common(test_modular_transport)
   add_test(NAME aurora.modular_transport COMMAND test_modular_transport)
+
+  add_executable(test_process_protocol tests/test_process_protocol.cpp)
+  aurora_link_common(test_process_protocol)
+  add_test(NAME aurora.process_protocol COMMAND test_process_protocol)
+  set_tests_properties(
+    aurora.process_protocol PROPERTIES LABELS "emulation;regression")
+
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(
+      NAME aurora.process_separated_emulation
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_emulation.py"
+        "$<TARGET_FILE:aurora_process_emulation>")
+    set_tests_properties(
+      aurora.process_separated_emulation
+      PROPERTIES
+        LABELS "emulation;regression"
+        TIMEOUT 45)
+  else()
+    message(WARNING
+      "Python3 was not found; the process-separated emulation test is disabled")
+  endif()
 
   add_executable(test_baseline_benchmark tests/test_baseline_benchmark.cpp)
   aurora_link_common(test_baseline_benchmark)
@@ -519,6 +550,7 @@ if(BUILD_TESTING)
     target_compile_options(test_safety_envelope PRIVATE /UNDEBUG)
     target_compile_options(test_decision_replay PRIVATE /UNDEBUG)
     target_compile_options(test_modular_transport PRIVATE /UNDEBUG)
+    target_compile_options(test_process_protocol PRIVATE /UNDEBUG)
     target_compile_options(test_baseline_benchmark PRIVATE /UNDEBUG)
     target_compile_options(test_channel_trace PRIVATE /UNDEBUG)
     target_compile_options(test_runtime_correctness PRIVATE /UNDEBUG)
@@ -534,6 +566,7 @@ if(BUILD_TESTING)
     target_compile_options(test_safety_envelope PRIVATE -UNDEBUG)
     target_compile_options(test_decision_replay PRIVATE -UNDEBUG)
     target_compile_options(test_modular_transport PRIVATE -UNDEBUG)
+    target_compile_options(test_process_protocol PRIVATE -UNDEBUG)
     target_compile_options(test_baseline_benchmark PRIVATE -UNDEBUG)
     target_compile_options(test_channel_trace PRIVATE -UNDEBUG)
     target_compile_options(test_runtime_correctness PRIVATE -UNDEBUG)
@@ -627,6 +660,7 @@ set(_AURORA_ALL_TARGETS
   aurora_generation_arrivals
   aurora_scheduler_benchmark
   aurora_transport_benchmark
+  aurora_process_emulation
   aurora_wirehair_adapter
   test_raptorq_adapter
   test_wirehair_adapter
@@ -635,6 +669,7 @@ set(_AURORA_ALL_TARGETS
   test_safety_envelope
   test_decision_replay
   test_modular_transport
+  test_process_protocol
   test_baseline_benchmark
   test_channel_trace
   test_runtime_correctness

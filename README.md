@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** process-separated emulation with an explicit reverse-feedback channel
+**Primary current task:** extend process-separated emulation to replayable impairments and concurrent generations
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -56,10 +56,10 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
-| UDP tools | Experimental socket tools | Local and Internet-oriented UDP sequence, bidirectional, and echo experiments | Crossing an Internet path validates socket transport and RTT observation, not the complete Aurora adaptive/FEC architecture |
+| Process emulation | Implemented first vertical slice | Sender and receiver run as separate OS processes over versioned UDP descriptor/symbol frames and a distinct reverse-feedback port; the receiver owns decoder-only state and feedback updates the sender policy | Current evidence is single-generation IPv4 loopback with a fixed deterministic drop rule; authenticated framing, impairment-trace import, concurrent generations and remote hosts remain future work |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, paired simulator-event/decision replay, replayable benchmark channel traces, Wilson confidence intervals, per-trial records and configure-time build/profile fingerprints | Provenance and checksum chains detect reproducibility failures and corruption but do not authenticate the producing build |
 
 ---
@@ -143,9 +143,11 @@ The repository includes:
 
 Secure claims apply only to builds explicitly using the real cryptographic backend.
 
-### 7. Real socket experiments
+### 7. Process-separated transport emulation
 
-The UDP tools demonstrate that Aurora-related payloads and sequence data can be serialized and moved through actual operating-system sockets across local or Internet paths. They are useful transport experiments, but they do not by themselves validate Aurora's simulated RF, RIS, energy, or adaptive-FEC models.
+`aurora_process_emulation` runs sender and receiver roles in separate OS processes. The sender transmits a canonical generation descriptor and FEC symbols on one IPv4 loopback UDP port. The receiver constructs `GenerationReceiver` from the descriptor alone, decodes without access to the source payload, and returns progress or terminal `DecodeReport` summaries on a separately configured feedback port. The sender applies successful terminal feedback to its adaptive policy.
+
+Descriptor, symbol and feedback frames share a bounded versioned envelope with explicit type, payload length and checksum. This detects accidental corruption and incompatible framing; it is not authentication. The current harness uses one generation and a deterministic forward drop rule on loopback. It proves process and channel separation, not Internet behaviour, calibrated impairment or field performance.
 
 ---
 
@@ -176,6 +178,19 @@ DecisionReplayLog V6 + action and supervisory feedback
 ```
 
 The same report determines delivery, coverage/rank, critical completion, integrity outcome, and health feedback. A decision trace is saved only after runtime execution counts have been attached and checked against the constrained decision. The former monolithic delivery decoder and parallel organism health decoder were removed from the active simulator path.
+
+The process-separated path makes the transport boundary explicit:
+
+```text
+sender process                         receiver process
+GenerationManager                     GenerationReceiver(descriptor)
+       |                                      |
+       +-- descriptor + symbols --UDP-------->+
+       |                                      |
+       +<-- DecodeReport feedback --UDP-------+
+       |
+TransportPolicy::observe(remote feedback)
+```
 
 The current boundary is intentionally narrow:
 
@@ -244,7 +259,9 @@ aurora_hal.hpp               Hardware abstraction and current mock backends
 include/aurora/
   control/                   Proposal replay and transport policy interfaces
   fec/                       Codec interface, LT-like codec and Wirehair adapter
+  emulation/ProcessProtocol.hpp Versioned forward/reverse UDP framing
   transport/                 Contract, descriptor, manager, report and health
+  transport/GenerationReceiver.hpp Decoder-only remote generation state
   safety/SafetyEnvelope.hpp  Hard transport-decision constraints and trace
   telemetry/DecisionReplayLog.hpp  Canonical decision log and verifier
   telemetry/SimulationEventLedger.hpp  Inter-step simulator event ledger
@@ -261,6 +278,7 @@ apps/
   aurora_generation_arrivals.cpp Canonical generation-arrival creator
   aurora_scheduler_benchmark.cpp Strict-vs-fair starvation benchmark
   aurora_transport_benchmark.cpp Complete deterministic transport comparison
+  aurora_process_emulation.cpp Separate sender/receiver UDP roles
   aurora_benchmark.cpp       CSV baseline runner
 benchmarks/
   generation_scheduler_sweep_v2.csv Canonical scheduling-turn regression report
@@ -273,6 +291,8 @@ tests/
   test_safety_envelope.cpp
   test_decision_replay.cpp
   test_modular_transport.cpp
+  test_process_protocol.cpp  Descriptor/symbol/feedback and remote decode
+  run_process_emulation.py   Two-process loopback regression harness
   test_baseline_benchmark.cpp
   test_channel_trace.cpp
   test_deterministic_event_kernel.cpp
@@ -282,7 +302,6 @@ tests/
   test_generation_scheduler.cpp
   test_generation_scheduler_benchmark.cpp
 aurora_batch_test.cpp        Experimental parameter sweep harness
-aurora_udp_*.cpp             UDP transport experiments
 aurora_dash_lab.py           Live monitoring dashboard
 Orginal/                     Historical source snapshot; not the active implementation
 ```
@@ -314,6 +333,21 @@ Run:
 ```
 
 On multi-configuration Windows generators the executable may be under `build/bin/Debug/`.
+
+Run the two process roles manually on separate terminals, with distinct forward and reverse UDP ports:
+
+```bash
+./build/bin/aurora_process_emulation receiver 47001 47002
+./build/bin/aurora_process_emulation sender   47001 47002
+```
+
+Or run the automated launcher, which selects free loopback ports and verifies both process exit codes plus terminal feedback application:
+
+```bash
+python tests/run_process_emulation.py ./build/bin/aurora_process_emulation
+```
+
+The receiver must start first, although the sender retries descriptor delivery for a bounded interval. This first emulation profile uses actual UDP datagrams and process boundaries but remains local loopback evidence; it does not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:
 
@@ -568,4 +602,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep now exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. The next obligation is process-separated emulation with an explicit reverse-feedback channel, followed by calibrated hardware evidence.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A first process-separated UDP path now carries descriptors and symbols forward and decode feedback in reverse. The next obligation is to drive that path with replayable impairments and concurrent generations before moving to remote-host and calibrated hardware evidence.
