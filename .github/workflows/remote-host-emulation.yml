@@ -121,8 +121,10 @@ jobs:
 
           peer_ip=""
           for _ in $(seq 1 120); do
-            peer_ip="$(getent ahostsv4 "${peer_host}" |
-              awk 'NR == 1 {print $1}')"
+            peer_ip="$(
+              getent ahostsv4 "${peer_host}" 2>/dev/null |
+                awk 'NR == 1 {print $1}' || true
+            )"
             if [ -n "${peer_ip}" ]; then
               break
             fi
