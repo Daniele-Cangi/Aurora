@@ -100,15 +100,27 @@ public:
 class AlienFountainOrganism final : public AuroraOrganism {
 public:
     explicit AlienFountainOrganism(std::size_t maximum_active_generations = 128)
-        : policy_(std::make_shared<control::BiologicalAdaptivePolicy>()),
-          manager_(std::make_shared<fec::ExperimentalLtLikeCodec>(),
-                   policy_, maximum_active_generations) {}
+        : AlienFountainOrganism(
+              std::make_shared<fec::ExperimentalLtLikeCodec>(),
+              std::make_shared<control::BiologicalAdaptivePolicy>(),
+              maximum_active_generations) {}
 
     AlienFountainOrganism(std::size_t maximum_active_generations,
                           control::AdaptivePolicyConfig config)
-        : policy_(std::make_shared<control::BiologicalAdaptivePolicy>(config)),
-          manager_(std::make_shared<fec::ExperimentalLtLikeCodec>(),
-                   policy_, maximum_active_generations) {}
+        : AlienFountainOrganism(
+              std::make_shared<fec::ExperimentalLtLikeCodec>(),
+              std::make_shared<control::BiologicalAdaptivePolicy>(config),
+              maximum_active_generations) {}
+
+    AlienFountainOrganism(
+        std::shared_ptr<fec::GenerationCodec> codec,
+        std::shared_ptr<control::TransportPolicy> policy,
+        std::size_t maximum_active_generations = 128)
+        : adaptive_policy_(
+              std::dynamic_pointer_cast<control::BiologicalAdaptivePolicy>(
+                  policy)),
+          manager_(std::move(codec), std::move(policy),
+                   maximum_active_generations) {}
 
     [[nodiscard]] FlowProfile build_profile(
         const TransportContract& contract) const override {
@@ -175,7 +187,8 @@ public:
 
     [[nodiscard]] std::optional<FlowState> flow_state(
         const FlowProfile& profile) const {
-        const auto state = policy_->flow_state(profile);
+        if (!adaptive_policy_) return std::nullopt;
+        const auto state = adaptive_policy_->flow_state(profile);
         if (!state) return std::nullopt;
         FlowState legacy;
         legacy.crit_overhead = state->critical_overhead;
@@ -203,7 +216,7 @@ public:
     }
 
 private:
-    std::shared_ptr<control::BiologicalAdaptivePolicy> policy_;
+    std::shared_ptr<control::BiologicalAdaptivePolicy> adaptive_policy_;
     transport::GenerationManager manager_;
 };
 
