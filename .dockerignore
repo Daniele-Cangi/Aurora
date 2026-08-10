@@ -1,0 +1,4 @@
+.git
+build/
+build-*/
+process-host-evidence/

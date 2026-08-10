@@ -1,0 +1,34 @@
+FROM ubuntu:24.04 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates cmake g++ libsodium-dev make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+RUN cmake -S . -B build-container \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_TESTING=OFF \
+      -DBUILD_NET_TOOLS=OFF \
+      -DUSE_SODIUM=ON \
+      -DUSE_RAPTORQ=OFF \
+      -DUSE_WIREHAIR=OFF \
+    && cmake --build build-container --target aurora_process_emulation \
+       --parallel 2
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libstdc++6 libsodium23 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/aurora
+COPY --from=build /src/build-container/bin/aurora_process_emulation ./
+COPY benchmarks/process_timed_v2.trace ./
+COPY benchmarks/process_feedback_v2.trace ./
+COPY benchmarks/process_auth_test.key ./
+
+ENTRYPOINT ["/opt/aurora/aurora_process_emulation"]

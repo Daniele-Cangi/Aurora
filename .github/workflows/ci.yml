@@ -50,3 +50,24 @@ jobs:
         run: >-
           ctest --test-dir build-secure -C Release --output-on-failure
           -R 'aurora\.(process_authentication|process_separated_emulation)'
+
+  container-host-emulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build libsodium process-emulation image
+        run: >-
+          docker build
+          --file tests/Dockerfile.process-emulation
+          --tag aurora-process-emulation:ci .
+      - name: Run authenticated container-host emulation
+        run: >-
+          bash tests/run_container_host_emulation.sh
+          aurora-process-emulation:ci process-host-evidence
+      - name: Upload container-host evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-container-host-evidence
+          path: process-host-evidence
+          if-no-files-found: error
