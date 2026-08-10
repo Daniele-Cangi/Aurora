@@ -1,5 +1,6 @@
 #include "aurora/control/TransportPolicy.hpp"
 #include "aurora/emulation/ImpairmentTrace.hpp"
+#include "aurora/emulation/ProcessAuthentication.hpp"
 #include "aurora/emulation/ProcessProtocol.hpp"
 #include "aurora/fec/GenerationCodec.hpp"
 #include "aurora/transport/GenerationManager.hpp"
@@ -131,7 +132,7 @@ public:
 
     [[nodiscard]] std::optional<std::vector<std::uint8_t>> receive() const {
         std::vector<std::uint8_t> bytes(
-            aurora::emulation::maximum_datagram_bytes);
+            aurora::emulation::maximum_datagram_bytes + 128);
 #ifdef _WIN32
         const auto received = ::recvfrom(
             socket_, reinterpret_cast<char*>(bytes.data()),
@@ -227,12 +228,23 @@ std::uint64_t elapsed_ms(
 }
 
 std::optional<aurora::emulation::FeedbackFrame> receive_feedback(
-    const UdpSocket& socket) {
+    const UdpSocket& socket,
+    const aurora::emulation::ProcessAuthenticator& authenticator,
+    aurora::emulation::ReplayWindow& replay_window,
+    std::uint32_t& authentication_rejections,
+    std::uint32_t& replay_rejections) {
     const auto datagram = socket.receive();
     if (!datagram) return std::nullopt;
     try {
-        return aurora::emulation::decode_feedback(*datagram);
+        auto opened = authenticator.open(
+            aurora::emulation::ProcessDirection::REVERSE, *datagram);
+        if (!replay_window.accept(opened.sequence)) {
+            ++replay_rejections;
+            return std::nullopt;
+        }
+        return aurora::emulation::decode_feedback(opened.payload);
     } catch (const std::invalid_argument&) {
+        ++authentication_rejections;
         return std::nullopt;
     }
 }
@@ -240,7 +252,9 @@ std::optional<aurora::emulation::FeedbackFrame> receive_feedback(
 int run_sender(std::string_view forward_host, std::uint16_t forward_port,
                std::string_view feedback_bind_host,
                std::uint16_t feedback_port,
-               const std::string& trace_path) {
+               const std::string& trace_path,
+               const std::string& key_path,
+               std::uint64_t session_id) {
     const auto started = std::chrono::steady_clock::now();
     UdpSocket feedback_socket(feedback_bind_host, feedback_port);
     auto codec = std::make_shared<aurora::fec::ExperimentalLtLikeCodec>();
@@ -253,6 +267,10 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         "min_critical_overhead:1.5;seed:1701");
     const auto profile = manager.build_profile(contract);
     const auto trace = aurora::emulation::ImpairmentTrace::load(trace_path);
+    const aurora::emulation::ProcessAuthenticator authenticator(
+        aurora::emulation::ProcessAuthenticator::load_key(key_path),
+        session_id);
+    aurora::emulation::ReplayWindow reverse_replay_window;
     struct SenderGeneration {
         aurora::transport::GenerationSpawnResult spawned;
         std::optional<aurora::emulation::FeedbackFrame> feedback;
@@ -275,6 +293,9 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
     std::uint32_t forward_datagrams = 0;
     std::uint32_t feedback_datagrams = 0;
     std::uint32_t stale_feedback_datagrams = 0;
+    std::uint32_t authentication_rejections = 0;
+    std::uint32_t replay_rejections = 0;
+    std::uint64_t forward_auth_sequence = 0;
     std::uint64_t impairment_attempt = 0;
     std::uint32_t dropped = 0;
     std::uint32_t duplicated = 0;
@@ -308,7 +329,9 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         }
     };
     auto poll_feedback = [&] {
-        if (auto incoming = receive_feedback(feedback_socket)) {
+        if (auto incoming = receive_feedback(
+                feedback_socket, authenticator, reverse_replay_window,
+                authentication_rejections, replay_rejections)) {
             accept_feedback(std::move(*incoming));
         }
     };
@@ -318,8 +341,12 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         for (auto& generation : generations) {
             if (generation.feedback) continue;
             all_acknowledged = false;
-            forward_socket.send(aurora::emulation::encode_descriptor(
-                generation.spawned.descriptor), forward_host, forward_port);
+            const auto descriptor = aurora::emulation::encode_descriptor(
+                generation.spawned.descriptor);
+            forward_socket.send(authenticator.seal(
+                aurora::emulation::ProcessDirection::FORWARD,
+                forward_auth_sequence++, descriptor),
+                forward_host, forward_port);
             ++forward_datagrams;
             poll_feedback();
         }
@@ -373,7 +400,10 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
     };
 
     auto send_symbol = [&](const ::fec::Pkt& packet) {
-        const auto frame = aurora::emulation::encode_symbol(packet);
+        const auto frame = authenticator.seal(
+            aurora::emulation::ProcessDirection::FORWARD,
+            forward_auth_sequence++,
+            aurora::emulation::encode_symbol(packet));
         const auto attempt = impairment_attempt++;
         const auto directive = trace.directive(attempt);
         if (directive.action == aurora::emulation::ImpairmentAction::DROP) {
@@ -420,6 +450,11 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         if (all_delivered) break;
     }
 
+    // Drain bounded late/duplicate reverse datagrams so replay evidence is
+    // observed before the process exits. The short post-handshake timeout
+    // keeps this bounded even when the reverse path dropped its final events.
+    for (int drain = 0; drain < 32; ++drain) poll_feedback();
+
     for (auto& generation : generations) {
         if (!generation.feedback->report.delivered()) throw std::runtime_error(
             "process emulation: receiver did not report every delivery");
@@ -439,6 +474,10 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
               << " feedback_datagrams=" << feedback_datagrams
               << " stale_feedback_datagrams="
               << stale_feedback_datagrams
+              << " auth_rejected=" << authentication_rejections
+              << " replay_rejected=" << replay_rejections
+              << " auth_profile="
+              << aurora::emulation::ProcessAuthenticator::profile()
               << " impairment_attempts=" << impairment_attempt
               << " impairment_dropped=" << dropped
               << " impairment_duplicated=" << duplicated
@@ -455,7 +494,9 @@ int run_receiver(std::string_view forward_bind_host,
                  std::string_view feedback_host,
                  std::uint16_t feedback_port,
                  std::size_t expected_generations,
-                 const std::string& reverse_trace_path) {
+                 const std::string& reverse_trace_path,
+                 const std::string& key_path,
+                 std::uint64_t session_id) {
     UdpSocket forward_socket(forward_bind_host, forward_port);
     UdpSocket feedback_socket("0.0.0.0", 0);
     aurora::fec::ExperimentalLtLikeCodec codec;
@@ -465,6 +506,10 @@ int run_receiver(std::string_view forward_bind_host,
     const auto started = std::chrono::steady_clock::now();
     const auto reverse_trace =
         aurora::emulation::ImpairmentTrace::load(reverse_trace_path);
+    const aurora::emulation::ProcessAuthenticator authenticator(
+        aurora::emulation::ProcessAuthenticator::load_key(key_path),
+        session_id);
+    aurora::emulation::ReplayWindow forward_replay_window;
     struct PendingFeedback {
         std::chrono::steady_clock::time_point release;
         std::uint64_t attempt = 0;
@@ -481,6 +526,9 @@ int run_receiver(std::string_view forward_bind_host,
     std::uint32_t reverse_delayed = 0;
     std::uint32_t reverse_reordered = 0;
     bool reverse_sent_any = false;
+    std::uint64_t reverse_auth_sequence = 0;
+    std::uint32_t authentication_rejections = 0;
+    std::uint32_t replay_rejections = 0;
 
     auto flush_feedback = [&](bool flush_all) {
         while (!pending_feedback.empty()) {
@@ -522,28 +570,45 @@ int run_receiver(std::string_view forward_bind_host,
         if (directive.delay_ms > 0) ++reverse_delayed;
         const auto release = std::chrono::steady_clock::now() +
             std::chrono::milliseconds(directive.delay_ms);
+        const auto authenticated = authenticator.seal(
+            aurora::emulation::ProcessDirection::REVERSE,
+            reverse_auth_sequence++, frame);
         pending_feedback.push_back(
-            {release, attempt, reverse_order++, frame});
+            {release, attempt, reverse_order++, authenticated});
         if (directive.action ==
             aurora::emulation::ImpairmentAction::DUPLICATE) {
             pending_feedback.push_back(
-                {release, attempt, reverse_order++, frame});
+                {release, attempt, reverse_order++, authenticated});
             ++reverse_duplicated;
         }
         flush_feedback(false);
     };
 
     while (elapsed_ms(started) < 15'000) {
-        const auto datagram = forward_socket.receive();
-        if (!datagram) {
+        const auto wire_datagram = forward_socket.receive();
+        if (!wire_datagram) {
             flush_feedback(false);
             continue;
         }
+        std::optional<aurora::emulation::AuthenticatedPayload> opened;
         try {
-            const auto type = aurora::emulation::frame_type(*datagram);
+            opened = authenticator.open(
+                aurora::emulation::ProcessDirection::FORWARD,
+                *wire_datagram);
+        } catch (const std::invalid_argument&) {
+            ++authentication_rejections;
+            continue;
+        }
+        if (!forward_replay_window.accept(opened->sequence)) {
+            ++replay_rejections;
+            continue;
+        }
+        const auto& datagram = opened->payload;
+        try {
+            const auto type = aurora::emulation::frame_type(datagram);
             if (type == aurora::emulation::FrameType::DESCRIPTOR) {
                 const auto descriptor =
-                    aurora::emulation::decode_descriptor(*datagram);
+                    aurora::emulation::decode_descriptor(datagram);
                 auto found = receivers.find(descriptor.generation_id);
                 if (found == receivers.end()) {
                     found = receivers.emplace(descriptor.generation_id,
@@ -562,7 +627,7 @@ int run_receiver(std::string_view forward_bind_host,
             if (type != aurora::emulation::FrameType::SYMBOL) {
                 continue;
             }
-            const auto packet = aurora::emulation::decode_symbol(*datagram);
+            const auto packet = aurora::emulation::decode_symbol(datagram);
             const auto found = receivers.find(packet.generation_id);
             if (found == receivers.end()) continue;
             const auto report =
@@ -595,7 +660,13 @@ int run_receiver(std::string_view forward_bind_host,
                               << " reverse_trace_name="
                               << reverse_trace.name()
                               << " reverse_trace_fingerprint="
-                              << reverse_trace.fingerprint() << '\n';
+                              << reverse_trace.fingerprint()
+                              << " auth_rejected="
+                              << authentication_rejections
+                              << " replay_rejected=" << replay_rejections
+                              << " auth_profile="
+                              << aurora::emulation::ProcessAuthenticator::profile()
+                              << '\n';
                     return 0;
                 }
             }
@@ -611,16 +682,18 @@ int run_receiver(std::string_view forward_bind_host,
 int main(int argc, char* argv[]) {
     try {
         const auto role = argc > 1 ? std::string_view(argv[1]) : "";
-        const bool sender_arguments = role == "sender" && argc == 7;
-        const bool receiver_arguments = role == "receiver" && argc == 8;
+        const bool sender_arguments = role == "sender" && argc == 9;
+        const bool receiver_arguments = role == "receiver" && argc == 10;
         if (!sender_arguments && !receiver_arguments) {
             std::cerr << "usage: aurora_process_emulation "
                          "sender <forward-host> <forward-port> "
-                         "<feedback-bind-host> <feedback-port> <trace-file>\n"
+                         "<feedback-bind-host> <feedback-port> <trace-file> "
+                         "<key-file> <session-id-hex>\n"
                          "   or: aurora_process_emulation receiver "
                          "<forward-bind-host> <forward-port> "
                          "<feedback-host> <feedback-port> <generation-count> "
-                         "<reverse-trace-file>\n";
+                         "<reverse-trace-file> <key-file> "
+                         "<session-id-hex>\n";
             return 2;
         }
         SocketRuntime runtime;
@@ -632,12 +705,16 @@ int main(int argc, char* argv[]) {
         }
         if (role == "sender") {
             return run_sender(argv[2], forward_port, argv[4],
-                              feedback_port, argv[6]);
+                              feedback_port, argv[6], argv[7],
+                              aurora::emulation::ProcessAuthenticator::
+                                  parse_session_id(argv[8]));
         }
         if (role == "receiver") {
             const auto count = parse_generation_count(argv[6]);
             return run_receiver(argv[2], forward_port, argv[4],
-                                feedback_port, count, argv[7]);
+                                feedback_port, count, argv[7], argv[8],
+                                aurora::emulation::ProcessAuthenticator::
+                                    parse_session_id(argv[9]));
         }
         throw std::invalid_argument("process emulation: unknown role");
     } catch (const std::exception& error) {

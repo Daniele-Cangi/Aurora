@@ -29,3 +29,24 @@ jobs:
         run: cmake --build build --config Release --parallel 2
       - name: Test and enforce benchmark regression gates
         run: ctest --test-dir build -C Release --output-on-failure
+
+  secure-auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libsodium development headers
+        run: sudo apt-get update && sudo apt-get install -y libsodium-dev
+      - name: Configure authenticated process profile
+        run: >-
+          cmake -S . -B build-secure
+          -DBUILD_NET_TOOLS=OFF
+          -DUSE_SODIUM=ON
+          -DUSE_RAPTORQ=OFF
+          -DUSE_WIREHAIR=OFF
+          -DCMAKE_BUILD_TYPE=Release
+      - name: Build authenticated process targets
+        run: cmake --build build-secure --config Release --parallel 2
+      - name: Test real HMAC process authentication
+        run: >-
+          ctest --test-dir build-secure -C Release --output-on-failure
+          -R 'aurora\.(process_authentication|process_separated_emulation)'
