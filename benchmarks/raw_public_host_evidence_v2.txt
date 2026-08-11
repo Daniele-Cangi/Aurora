@@ -1,0 +1,87 @@
+evidence_version=2
+schema=aurora-raw-host-evidence-v2
+evidence_level=emulation
+result=passed
+collected_at_utc=2026-08-11T00:05:17Z
+provider=google-cloud
+project=aurora-dc-transport-20260810
+workflow_run=https://github.com/Daniele-Cangi/Aurora/actions/runs/31443690117
+workflow_trigger=manual-confirmed-CREATE_AND_DELETE
+source_commit=50e858b553e001df7680c582208bc37ae12a6895
+run_id=gha-31443690117-1
+topology=two-cross-region-non-peered-vpcs-public-ipv4
+sender_zone=us-east1-b
+sender_machine_type=e2-micro
+sender_public_ipv4=35.196.111.122
+receiver_zone=us-west1-b
+receiver_machine_type=e2-micro
+receiver_public_ipv4=136.117.117.152
+forward_port=47001
+reverse_port=47002
+firewall_scope=peer-public-ipv4-32-per-direction
+ssh_scope=iap-35.235.240.0-20-only
+vm_max_run_duration_seconds=1800
+vm_termination_action=DELETE
+vm_service_accounts_attached=false
+github_authentication=oidc-workload-identity-federation
+gcp_user_managed_service_account_keys=0
+authentication_profile=hmac-sha256-libsodium
+runtime_binary_sha256=395616ec22db26c4f2360c8413d3fedc75c8134a1ceda0d89fce620bf8dea726
+sender_binary_sha256=395616ec22db26c4f2360c8413d3fedc75c8134a1ceda0d89fce620bf8dea726
+receiver_binary_sha256=395616ec22db26c4f2360c8413d3fedc75c8134a1ceda0d89fce620bf8dea726
+sender_log_sha256=a02fc8c5411c455496b5af74326e5f227afe7d001fe503c94c18dd5801495e5d
+receiver_log_sha256=6d476e63d94d2cb5c9964eee23ae35e4147bf98ff004f6e37a2a1cf642cb3097
+sender_ntp_synchronized=true
+receiver_ntp_synchronized=true
+sender_complete_generations=2
+receiver_complete_generations=2
+feedback_applied=2
+sender_replay_rejected=4
+receiver_replay_rejected=5
+sender_auth_rejected=0
+receiver_auth_rejected=0
+sender_elapsed_ms=426
+receiver_service_elapsed_ms=1201
+controller_receiver_ready_ms=3004.135
+controller_sender_wall_ms=2955.916
+controller_total_wall_ms=6825.887
+timing_scope=application-and-controller-steady-clock
+calibrated_performance=false
+field_evidence=false
+primary_teardown_success=true
+primary_teardown_delete_nonzero_count=0
+independent_teardown_success=true
+external_post_run_prefix_audit_empty=true
+post_run_instances=0
+post_run_disks=0
+post_run_addresses=0
+post_run_snapshots=0
+post_run_firewall_rules=0
+post_run_subnets=0
+post_run_networks=0
+private_ssh_key_retained=false
+
+[sender_log]
+sender_complete generations=2 forward_port=47001 feedback_port=47002 forward_datagrams=43 feedback_datagrams=13 stale_feedback_datagrams=2 auth_rejected=0 replay_rejected=4 auth_profile=hmac-sha256-libsodium impairment_attempts=40 impairment_dropped=8 impairment_duplicated=8 impairment_delayed=16 impairment_reordered=19 trace_name=process-timed-v2 trace_fingerprint=10832449472123354743 sender_elapsed_ms=426 feedback_applied=2
+
+[receiver_log]
+receiver_ready forward_port=47001 feedback_port=47002 startup_timeout_ms=60000 service_timeout_ms=15000 auth_profile=hmac-sha256-libsodium
+receiver_generation_complete generation=7a45154f49eb8198 bytes=576
+receiver_generation_complete generation=fba2941b7a385bda bytes=448
+receiver_complete generations=2 forward_port=47001 feedback_port=47002 reverse_attempts=25 reverse_datagrams=29 reverse_dropped=3 reverse_duplicated=7 reverse_delayed=7 reverse_reordered=10 reverse_trace_name=process-feedback-v2 reverse_trace_fingerprint=9344546774146586815 auth_rejected=0 replay_rejected=5 auth_profile=hmac-sha256-libsodium service_elapsed_ms=1201
+
+[lifecycle_negative_evidence]
+workflow_run_31441938115=failed-closed-before-vm-creation-missing-firewall-role
+workflow_run_31441938115_primary_teardown_success=true
+workflow_run_31441938115_independent_teardown_success=true
+workflow_run_31442271547=failed-closed-after-provisioning-implicit-gcloud-ssh-keygen-failure
+workflow_run_31442271547_primary_teardown_success=true
+workflow_run_31442271547_independent_teardown_success=true
+
+[limitations]
+This is the first successful automated raw-routed harness run and the second
+successful raw-routed record overall. It is not a statistical sample.
+The application and controller clocks do not establish synchronized one-way
+latency. No calibrated goodput, availability, energy, cost, or field claim is
+made. VM provisioning, package installation, compilation, SSH setup, and
+teardown are outside the bounded application service timing.
