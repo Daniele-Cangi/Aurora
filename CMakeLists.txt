@@ -394,6 +394,21 @@ if(BUILD_TESTING)
         LABELS "emulation;regression"
         TIMEOUT 45)
     add_test(
+      NAME aurora.process_zero_delay_emulation
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_emulation.py"
+        "$<TARGET_FILE:aurora_process_emulation>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_zero_delay_forward_v1.trace"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_zero_delay_reverse_v1.trace"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_auth_test.key"
+        "fedcba9876543210"
+        "zero-delay")
+    set_tests_properties(
+      aurora.process_zero_delay_emulation
+      PROPERTIES
+        LABELS "emulation;regression"
+        TIMEOUT 45)
+    add_test(
       NAME aurora.process_receiver_readiness
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_readiness.py"

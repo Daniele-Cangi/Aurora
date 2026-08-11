@@ -14,10 +14,11 @@ def free_port(excluded=None):
 
 
 def main():
-    if len(sys.argv) != 6:
+    if len(sys.argv) not in (6, 7):
         raise SystemExit(
             "usage: run_process_emulation.py <emulator> <forward-trace> "
-            "<reverse-trace> <key-file> <session-id-hex>"
+            "<reverse-trace> <key-file> <session-id-hex> "
+            "[timed|zero-delay]"
         )
 
     executable = sys.argv[1]
@@ -25,6 +26,9 @@ def main():
     reverse_trace = sys.argv[3]
     key_file = sys.argv[4]
     session_id = sys.argv[5]
+    delay_mode = sys.argv[6] if len(sys.argv) == 7 else "timed"
+    if delay_mode not in ("timed", "zero-delay"):
+        raise SystemExit("delay mode must be timed or zero-delay")
     forward_port = free_port()
     feedback_port = free_port(forward_port)
     receiver = subprocess.Popen(
@@ -90,7 +94,9 @@ def main():
         stale_feedback = re.search(
             r"stale_feedback_datagrams=(\d+)", sender.stdout
         )
-        if not stale_feedback or int(stale_feedback.group(1)) == 0:
+        if delay_mode == "timed" and (
+            not stale_feedback or int(stale_feedback.group(1)) == 0
+        ):
             raise RuntimeError(
                 f"reordered feedback was not rejected monotonically: {sender.stdout}"
             )
@@ -99,8 +105,20 @@ def main():
             raise RuntimeError(f"reverse replay was not rejected: {sender.stdout}")
         delayed = re.search(r"impairment_delayed=(\d+)", sender.stdout)
         reordered = re.search(r"impairment_reordered=(\d+)", sender.stdout)
-        if not delayed or not reordered or int(delayed.group(1)) == 0 or int(reordered.group(1)) == 0:
-            raise RuntimeError(f"missing timed impairment evidence: {sender.stdout}")
+        if delay_mode == "timed":
+            if (
+                not delayed
+                or not reordered
+                or int(delayed.group(1)) == 0
+                or int(reordered.group(1)) == 0
+            ):
+                raise RuntimeError(
+                    f"missing timed impairment evidence: {sender.stdout}"
+                )
+        elif not delayed or int(delayed.group(1)) != 0:
+            raise RuntimeError(
+                f"zero-delay trace added sender delay: {sender.stdout}"
+            )
         if receiver_stdout.count("receiver_generation_complete") != 2:
             raise RuntimeError(f"missing per-generation evidence: {receiver_stdout}")
         if "receiver_complete generations=2" not in receiver_stdout:
@@ -132,14 +150,27 @@ def main():
         reverse_reordered = re.search(r"reverse_reordered=(\d+)", receiver_stdout)
         reverse_dropped = re.search(r"reverse_dropped=(\d+)", receiver_stdout)
         reverse_duplicated = re.search(r"reverse_duplicated=(\d+)", receiver_stdout)
-        reverse_counts = (
-            reverse_delayed,
-            reverse_reordered,
-            reverse_dropped,
-            reverse_duplicated,
-        )
-        if any(value is None or int(value.group(1)) == 0 for value in reverse_counts):
-            raise RuntimeError(f"missing reverse impairment evidence: {receiver_stdout}")
+        required_reverse = (reverse_dropped, reverse_duplicated)
+        if any(
+            value is None or int(value.group(1)) == 0
+            for value in required_reverse
+        ):
+            raise RuntimeError(
+                f"missing reverse impairment evidence: {receiver_stdout}"
+            )
+        if delay_mode == "timed":
+            timed_reverse = (reverse_delayed, reverse_reordered)
+            if any(
+                value is None or int(value.group(1)) == 0
+                for value in timed_reverse
+            ):
+                raise RuntimeError(
+                    f"missing reverse timing evidence: {receiver_stdout}"
+                )
+        elif not reverse_delayed or int(reverse_delayed.group(1)) != 0:
+            raise RuntimeError(
+                f"zero-delay trace added receiver delay: {receiver_stdout}"
+            )
         print(sender.stdout.strip())
         print(receiver_stdout.strip())
     finally:

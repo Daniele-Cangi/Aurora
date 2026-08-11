@@ -1,0 +1,35 @@
+{
+  "schema": "aurora-gcp-raw-matrix-plan-v1",
+  "matrix_id": "region-condition-2x2-v1",
+  "machine_type": "e2-micro",
+  "cells": [
+    {
+      "id": "us-east-west-timed",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "us-west1-b",
+      "condition_profile": "timed-replay-v2",
+      "samples": 2
+    },
+    {
+      "id": "us-east-west-zero-delay",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "us-west1-b",
+      "condition_profile": "zero-delay-replay-v1",
+      "samples": 2
+    },
+    {
+      "id": "us-east-europe-timed",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "europe-west1-b",
+      "condition_profile": "timed-replay-v2",
+      "samples": 2
+    },
+    {
+      "id": "us-east-europe-zero-delay",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "europe-west1-b",
+      "condition_profile": "zero-delay-replay-v1",
+      "samples": 2
+    }
+  ]
+}

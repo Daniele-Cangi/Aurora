@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** extend the same-commit raw-routed baseline into a controlled region/condition matrix and calibrate the end-to-end transport measurement boundary
+**Primary current task:** execute and analyze the checked-in 2×2 raw-routed region/condition matrix, then calibrate the end-to-end transport measurement boundary
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -289,6 +289,11 @@ apps/
 benchmarks/
   generation_scheduler_sweep_v2.csv Canonical scheduling-turn regression report
   end_to_end_transport_sweep_v1.csv Canonical complete-stack regression report
+  gcp_raw_region_condition_matrix_v1.json Fixed balanced 2×2 GCP matrix
+  process_zero_delay_*_v1.trace Same drop/duplicate actions without added delay
+tools/
+  gcp_raw_host_emulation.py Guarded single/campaign lifecycle harness
+  gcp_raw_host_matrix.py Plan, execute, validate and clean the fixed matrix
 src/core/
   AuroraSafetyMonitor.hpp    Legacy safety-state prototype
 tests/
@@ -503,6 +508,47 @@ The federated service account still needs narrowly scoped permissions for
 Compute Engine, firewall/network lifecycle, IAP tunnelling, and OS Login (or
 equivalent SSH access). A dispatch can incur small GCP charges even when the
 transport test fails.
+
+The next experiment is declared in
+[`benchmarks/gcp_raw_region_condition_matrix_v1.json`](benchmarks/gcp_raw_region_condition_matrix_v1.json).
+It is a balanced 2×2 factorial with two repetitions per cell: the existing
+`us-east1-b` → `us-west1-b` path and a `us-east1-b` → `europe-west1-b` path,
+each crossed with `timed-replay-v2` and `zero-delay-replay-v1`. The latter
+preserves the exact pass/drop/duplicate action sequences of the timed profile
+while setting every injected delay to zero. This controls one application
+impairment factor; it does not make either live public-Internet path itself
+controlled.
+
+`tools/gcp_raw_host_matrix.py` is plan-only by default. It rejects incomplete
+factor combinations, unequal samples per cell, unknown trace profiles, unsafe
+run IDs, and designs above 12 VM-pair lifecycles:
+
+```bash
+python3 tools/gcp_raw_host_matrix.py \
+  --matrix benchmarks/gcp_raw_region_condition_matrix_v1.json \
+  --project PROJECT_ID \
+  --run-prefix matrix-plan \
+  --source-commit "$(git rev-parse HEAD)" \
+  --evidence-root raw-host-evidence/matrix-plan
+```
+
+The manually dispatched `authenticated-gcp-raw-host-matrix` workflow fixes
+that checked-in plan rather than accepting arbitrary zones or sample counts.
+One protected approval gates all eight sequential lifecycles. Every sample
+gets a distinct exact run ID and topology; the runner requires one commit,
+machine type, runtime binary, authenticated workload and declared
+`application-controller-steady-v1` measurement boundary across the matrix.
+It recomputes the retained log hashes, reparses completion/authentication and
+replay evidence, reports descriptive timing distributions per cell and
+overall, and rejects a missing or incompletely torn-down sample. Cleanup runs
+inside each lifecycle, in an unconditional exact-run sweep, and again in an
+independent job.
+
+The matrix output remains emulation evidence with
+`calibrated_performance=false`, `field_evidence=false`, and
+`causal_region_effect=false`. Two repetitions per cell are an execution and
+measurement-boundary check, not adequate statistical power for a general
+regional or availability claim. A dispatch can incur GCP charges.
 
 For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP records supply historical single runs plus a controlled N=10 raw-routed campaign; none is physical-host or calibrated timing evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
@@ -759,4 +805,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; retained GCP evidence adds a manual run, the first automated run, and a same-commit N=10 campaign across non-peered cross-region VPCs over public IPv4. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. All 10 controlled lifecycles completed and fully tore down with one reproducible runtime binary. The next obligation is a controlled region/condition matrix and a calibrated end-to-end timing methodology before physical-host or hardware claims.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; retained GCP evidence adds a manual run, the first automated run, and a same-commit N=10 campaign across non-peered cross-region VPCs over public IPv4. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. All 10 controlled lifecycles completed and fully tore down with one reproducible runtime binary. A guarded balanced 2×2 region/condition matrix now makes the next experiment exact and auditable; the next obligation is to execute it, retain its descriptive evidence, and then calibrate the end-to-end timing methodology before physical-host or hardware claims.

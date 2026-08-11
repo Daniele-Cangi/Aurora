@@ -1,0 +1,4 @@
+AURORA_IMPAIRMENT_TRACE_V2
+name=process-zero-delay-forward-v1
+events=P@0,P@0,D@0,U@0,P@0
+checksum=ed831cf394389c7a

@@ -35,6 +35,36 @@ IAP_SOURCE_CIDR = "35.235.240.0/20"
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{2,30}$")
 PROJECT_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+MEASUREMENT_PROFILE = "application-controller-steady-v1"
+
+
+@dataclasses.dataclass(frozen=True)
+class ConditionProfile:
+    name: str
+    forward_trace: str
+    reverse_trace: str
+
+    @property
+    def forward_name(self) -> str:
+        return self.forward_trace.rsplit("/", 1)[-1]
+
+    @property
+    def reverse_name(self) -> str:
+        return self.reverse_trace.rsplit("/", 1)[-1]
+
+
+CONDITION_PROFILES = {
+    "timed-replay-v2": ConditionProfile(
+        name="timed-replay-v2",
+        forward_trace="benchmarks/process_timed_v2.trace",
+        reverse_trace="benchmarks/process_feedback_v2.trace",
+    ),
+    "zero-delay-replay-v1": ConditionProfile(
+        name="zero-delay-replay-v1",
+        forward_trace="benchmarks/process_zero_delay_forward_v1.trace",
+        reverse_trace="benchmarks/process_zero_delay_reverse_v1.trace",
+    ),
+}
 
 
 class HarnessError(RuntimeError):
@@ -92,6 +122,7 @@ class Config:
     sender_zone: str
     receiver_zone: str
     machine_type: str
+    condition_profile: str
     source_commit: str
     repository_url: str
     evidence_dir: Path
@@ -112,6 +143,8 @@ class Config:
             raise HarnessError("sender and receiver zones must differ")
         if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", self.machine_type):
             raise HarnessError("invalid machine type")
+        if self.condition_profile not in CONDITION_PROFILES:
+            raise HarnessError("unknown condition profile")
         if not self.repository_url.startswith("https://github.com/"):
             raise HarnessError("repository URL must use GitHub HTTPS")
 
@@ -200,6 +233,8 @@ def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
             raise HarnessError(f"{role} did not complete two generations")
         if fields.get("auth_profile") != "hmac-sha256-libsodium":
             raise HarnessError(f"{role} did not use libsodium HMAC")
+        if fields.get("auth_rejected") != "0":
+            raise HarnessError(f"{role} rejected authenticated evidence")
         require_positive(fields, "replay_rejected")
     if sender.get("feedback_applied") != "2":
         raise HarnessError("sender did not apply both feedback reports")
@@ -214,12 +249,25 @@ def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
 
 
 def build_plan(config: Config, names: Names) -> dict:
+    condition = CONDITION_PROFILES[config.condition_profile]
     return {
         "schema": "aurora-gcp-raw-plan-v1",
         "project": config.project,
         "run_id": config.run_id,
         "source_commit": config.source_commit,
         "topology": "two-cross-region-non-peered-vpcs-public-ipv4",
+        "machine_type": config.machine_type,
+        "condition": {
+            "profile": condition.name,
+            "forward_trace": condition.forward_name,
+            "reverse_trace": condition.reverse_name,
+        },
+        "measurement": {
+            "profile": MEASUREMENT_PROFILE,
+            "clock_relationship": "independent-unsynchronized-steady-clocks",
+            "provisioning_included": False,
+            "teardown_included": False,
+        },
         "sender": {
             "zone": config.sender_zone,
             "region": zone_region(config.sender_zone),
@@ -402,6 +450,7 @@ class GcpRawHarness:
 
     def prepare_runtime(self, temp: Path) -> str:
         n = self.names
+        condition = CONDITION_PROFILES[self.config.condition_profile]
         ssh_keygen = shutil.which("ssh-keygen")
         if not ssh_keygen:
             raise HarnessError("ssh-keygen was not found")
@@ -437,8 +486,8 @@ class GcpRawHarness:
             "mkdir -p /tmp/aurora-runtime; "
             "cp /tmp/aurora-build/bin/aurora_process_emulation "
             "/tmp/aurora-runtime/; "
-            "cp benchmarks/process_timed_v2.trace "
-            "benchmarks/process_feedback_v2.trace /tmp/aurora-runtime/"
+            f"cp {condition.forward_trace} {condition.reverse_trace} "
+            "/tmp/aurora-runtime/"
         )
         rx_setup = (
             "set -euo pipefail; "
@@ -463,12 +512,12 @@ class GcpRawHarness:
         runtime_dir = temp / "runtime"
         runtime_dir.mkdir()
         binary = runtime_dir / "aurora_process_emulation"
-        forward_trace = runtime_dir / "process_timed_v2.trace"
-        reverse_trace = runtime_dir / "process_feedback_v2.trace"
+        forward_trace = runtime_dir / condition.forward_name
+        reverse_trace = runtime_dir / condition.reverse_name
         for remote_name, local_path in (
             ("aurora_process_emulation", binary),
-            ("process_timed_v2.trace", forward_trace),
-            ("process_feedback_v2.trace", reverse_trace),
+            (condition.forward_name, forward_trace),
+            (condition.reverse_name, reverse_trace),
         ):
             self.scp(
                 f"{n.sender_instance}:/tmp/aurora-runtime/{remote_name}",
@@ -511,6 +560,7 @@ class GcpRawHarness:
         self, sender_ip: str, receiver_ip: str
     ) -> tuple[str, str, dict]:
         n = self.names
+        condition = CONDITION_PROFILES[self.config.condition_profile]
         evidence = self.config.evidence_dir
         evidence.mkdir(parents=True, exist_ok=True)
         receiver_log = evidence / "receiver.log"
@@ -522,7 +572,7 @@ class GcpRawHarness:
             "< /tmp/process-session.id); "
             "/tmp/aurora-runtime/aurora_process_emulation receiver "
             f"0.0.0.0 {FORWARD_PORT} {sender_ip} {REVERSE_PORT} 2 "
-            "/tmp/aurora-runtime/process_feedback_v2.trace "
+            f"/tmp/aurora-runtime/{condition.reverse_name} "
             "/tmp/process-auth.key \"${session}\" "
             f"{STARTUP_TIMEOUT_MS} {SERVICE_TIMEOUT_MS}"
         )
@@ -531,7 +581,7 @@ class GcpRawHarness:
             "< /tmp/process-session.id); "
             "/tmp/aurora-runtime/aurora_process_emulation sender "
             f"{receiver_ip} {FORWARD_PORT} 0.0.0.0 {REVERSE_PORT} "
-            "/tmp/aurora-runtime/process_timed_v2.trace "
+            f"/tmp/aurora-runtime/{condition.forward_name} "
             "/tmp/process-auth.key \"${session}\""
         )
         started_ns = time.perf_counter_ns()
@@ -698,6 +748,29 @@ class GcpRawHarness:
             "run_id": self.config.run_id,
             "source_commit": self.config.source_commit,
             "topology": "two-cross-region-non-peered-vpcs-public-ipv4",
+            "machine_type": self.config.machine_type,
+            "condition": {
+                "profile": self.config.condition_profile,
+                "forward_trace": CONDITION_PROFILES[
+                    self.config.condition_profile
+                ].forward_name,
+                "reverse_trace": CONDITION_PROFILES[
+                    self.config.condition_profile
+                ].reverse_name,
+            },
+            "workload": {
+                "generation_count": 2,
+                "startup_timeout_ms": STARTUP_TIMEOUT_MS,
+                "service_timeout_ms": SERVICE_TIMEOUT_MS,
+            },
+            "measurement": {
+                "profile": MEASUREMENT_PROFILE,
+                "clock_relationship": (
+                    "independent-unsynchronized-steady-clocks"
+                ),
+                "provisioning_included": False,
+                "teardown_included": False,
+            },
             "result": "failed",
         }
         self.config.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -789,6 +862,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--sender-zone", default="us-east1-b")
     result.add_argument("--receiver-zone", default="us-west1-b")
     result.add_argument("--machine-type", default="e2-micro")
+    result.add_argument(
+        "--condition-profile",
+        choices=sorted(CONDITION_PROFILES),
+        default="timed-replay-v2",
+    )
     result.add_argument("--source-commit", default=current_commit())
     result.add_argument(
         "--repository-url",
@@ -813,6 +891,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         sender_zone=args.sender_zone,
         receiver_zone=args.receiver_zone,
         machine_type=args.machine_type,
+        condition_profile=args.condition_profile,
         source_commit=args.source_commit,
         repository_url=args.repository_url,
         evidence_dir=evidence_dir,
