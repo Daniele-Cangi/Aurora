@@ -1,0 +1,94 @@
+evidence_version=1
+schema=aurora-raw-host-campaign-v1
+evidence_level=emulation
+result=passed
+collected_at_utc=2026-08-11T10:32:31Z
+provider=google-cloud
+project=aurora-dc-transport-20260810
+workflow_run=https://github.com/Daniele-Cangi/Aurora/actions/runs/31470344151
+workflow_trigger=manual-confirmed-CREATE_AND_DELETE
+source_commit=889aa1f4d21edc2246e755c7b934b27de89a4272
+samples_expected=10
+samples_observed=10
+sample_run_ids=gha-31470344151-1-s01,gha-31470344151-1-s02,gha-31470344151-1-s03,gha-31470344151-1-s04,gha-31470344151-1-s05,gha-31470344151-1-s06,gha-31470344151-1-s07,gha-31470344151-1-s08,gha-31470344151-1-s09,gha-31470344151-1-s10
+topology=two-cross-region-non-peered-vpcs-public-ipv4
+sender_zone=us-east1-b
+receiver_zone=us-west1-b
+machine_type=e2-micro
+forward_port=47001
+reverse_port=47002
+firewall_scope=peer-public-ipv4-32-per-direction
+ssh_scope=iap-35.235.240.0-20-only
+vm_max_run_duration_seconds=1800
+vm_termination_action=DELETE
+vm_service_accounts_attached=false
+github_authentication=oidc-workload-identity-federation
+gcp_user_managed_service_account_keys=0
+authentication_profile=hmac-sha256-libsodium
+runtime_binary_sha256=395616ec22db26c4f2360c8413d3fedc75c8134a1ceda0d89fce620bf8dea726
+sender_complete_generations_each=2
+receiver_complete_generations_each=2
+feedback_applied_each=2
+sender_replay_rejected_each=4
+receiver_replay_rejected_each=5
+sender_auth_rejected_each=0
+receiver_auth_rejected_each=0
+all_log_sha256_values_revalidated=true
+all_host_binary_sha256_values_match=true
+all_hosts_ntp_synchronized=true
+all_primary_teardowns_passed=true
+all_independent_teardowns_passed=true
+external_post_run_prefix_audit_empty=true
+post_run_instances=0
+post_run_disks=0
+post_run_addresses=0
+post_run_snapshots=0
+post_run_firewall_rules=0
+post_run_subnets=0
+post_run_networks=0
+timing_scope=application-and-controller-steady-clock
+calibrated_performance=false
+field_evidence=false
+
+[timing_summary_ms]
+metric,count,min,max,mean,median,sample_stddev
+sender_elapsed_ms,10,423.000,432.000,425.900,425.000,3.381
+receiver_service_elapsed_ms,10,1199.000,1206.000,1200.900,1200.000,2.601
+controller_receiver_ready_ms,10,2403.560,2804.308,2603.832,2603.814,133.524
+controller_sender_wall_ms,10,3467.255,4113.905,3837.799,3879.012,197.639
+controller_total_wall_ms,10,6887.034,7633.147,7247.408,7249.035,270.766
+
+[sample_timing_ms]
+sample,sender_elapsed,receiver_service,controller_receiver_ready,controller_sender_wall,controller_total_wall
+01,423,1199,2603.728,3467.255,6887.034
+02,427,1201,2603.801,3959.104,7378.363
+03,423,1199,2803.959,4013.452,7633.147
+04,431,1206,2603.803,3566.852,6936.553
+05,427,1201,2603.881,3919.844,7289.155
+06,423,1199,2603.824,4113.905,7533.623
+07,432,1205,2403.566,3786.162,7005.456
+08,423,1199,2403.560,3838.180,7058.042
+09,426,1201,2603.894,3789.809,7208.915
+10,424,1199,2804.308,3923.424,7543.790
+
+[validation]
+The workflow aggregator and an independent local rerun both observed exactly
+10 passed V2 manifests with unique run IDs, one source commit, one runtime
+binary hash, positive timing fields, and successful primary teardown.
+Independent validation recomputed every sender and receiver log SHA-256,
+checked both host binary hashes and NTP flags, parsed completion, feedback,
+authentication and replay counters, and found empty remaining-resource arrays
+in every primary and independent cleanup record. A separate authenticated GCP
+exact-prefix audit found no instances, disks, addresses, snapshots, firewall
+rules, subnets, or networks after the workflow completed.
+
+[limitations]
+These are 10 sequential repetitions of one topology, region pair, machine
+type, binary, workload, impairment profile, and day. They establish controlled
+reproducibility for that declared emulation configuration, not an independent
+condition matrix or a general availability estimate. Application and
+controller steady clocks do not establish synchronized one-way latency.
+VM provisioning, package installation, compilation, SSH setup, and teardown
+are outside the reported transport timing. No calibrated latency, goodput,
+availability, energy, cost, Internet-wide, physical-host, or field claim is
+made.
