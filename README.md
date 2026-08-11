@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** calibrate the end-to-end transport measurement boundary and predeclare a randomized, adequately repeated design before any causal region or condition comparison
+**Primary current task:** validate Measurement Contract V2 across CI topologies, then use its pre-registered 12-lifecycle randomized pilot to estimate variance before designing any powered comparison
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -56,10 +56,10 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
-| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained manual and automated GCP records exercise non-peered cross-region VPCs over public IPv4 with exact-name teardown, including a same-commit N=10 campaign and a balanced 2×2 region/condition matrix | Real HMAC requires `USE_SODIUM=ON`; the matrix has only two sequential repetitions per cell and does not establish calibrated timing, a causal condition effect, or a regional ranking; controlled physical hosts remain future work |
+| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; protocol V2 echoes the authenticated forward sequence so the sender records same-clock feedback RTT summaries; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained GCP records include a same-commit N=10 campaign and a balanced 2×2 matrix | Real HMAC requires `USE_SODIUM=ON`; feedback RTT includes application, impairment, network and polling service and is not network-only latency; the completed matrix has only two sequential repetitions per cell and establishes neither calibrated timing nor a causal or regional ranking |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
-| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
+| Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, authenticated feedback-sequence correlation, sender-clock RTT invariants, randomized-pilot integrity, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
 | Reproducible build | Dependency-light profile working | C++20 CMake build, explicit seeds, paired simulator-event/decision replay, replayable benchmark channel traces, Wilson confidence intervals, per-trial records and configure-time build/profile fingerprints | Provenance and checksum chains detect reproducibility failures and corruption but do not authenticate the producing build |
 
 ---
@@ -146,6 +146,16 @@ Secure claims apply only to builds explicitly using the real cryptographic backe
 ### 7. Process-separated transport emulation
 
 `aurora_process_emulation` runs sender and receiver roles in separate OS processes. The sender multiplexes two concurrent generations by interleaving their canonical descriptors and FEC symbols on one IPv4 UDP destination. The receiver keeps decoder-only state keyed by generation identity, without access to either source payload, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. Each successful terminal feedback is applied exactly once to the adaptive policy. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts. CI exercises them in distinct Docker network namespaces and on independent GitHub-hosted VMs over Tailscale; a retained manual record additionally exercises public IPv4 routing between non-peered GCP VPCs in different regions.
+
+Process protocol V2 adds `echoed_forward_sequence` to authenticated feedback.
+The sender records the first wire emission of each authenticated forward
+sequence and correlates it with the first monotonic feedback that echoes it.
+The resulting all-feedback and terminal-feedback min/mean/max values use only
+the sender's `steady_clock`; duplicate terminal feedback is excluded and an
+unknown echo fails the evidence contract. This removes cross-host clock
+subtraction, but the interval still includes receiver processing, configured
+reverse impairment, network service and sender polling. It is therefore an
+application feedback RTT, not network-only or one-way latency.
 
 Forward symbol attempts and reverse feedback attempts are driven by independent checked-in impairment traces. V1 binds cyclic `P` (pass), `D` (drop) and `U` (duplicate) actions to a scenario name and FNV-1a checksum. V2 uses `action@delay-ms` events, capped at 60 seconds. Events index their channel's attempt order; release time is ordered first and attempt index breaks ties. A delayed earlier event can therefore be overtaken by a later immediate event reproducibly. Forward descriptor retransmission remains outside impairment; the reverse trace covers descriptor acknowledgements, progress reports and repeated terminal reports.
 
@@ -290,8 +300,12 @@ benchmarks/
   generation_scheduler_sweep_v2.csv Canonical scheduling-turn regression report
   end_to_end_transport_sweep_v1.csv Canonical complete-stack regression report
   gcp_raw_region_condition_matrix_v1.json Fixed balanced 2×2 GCP matrix
+  gcp_raw_measurement_pilot_v2.json Randomized 12-lifecycle variance pilot
+  process_measurement_contract_v2.json Machine-readable clock/boundary rules
   raw_public_host_matrix_v1.txt Retained descriptive 2×2 GCP evidence
   process_zero_delay_*_v1.trace Same drop/duplicate actions without added delay
+include/aurora/emulation/
+  Measurement.hpp           Sender-clock feedback RTT correlation
 tools/
   gcp_raw_host_emulation.py Guarded single/campaign lifecycle harness
   gcp_raw_host_matrix.py Plan, execute, validate and clean the fixed matrix
@@ -435,12 +449,15 @@ delays the sender longer than the configured service budget and proves that
 startup does not consume service time; it also verifies the distinct startup
 timeout failure.
 
-The process completion records expose `sender_elapsed_ms` and
-`service_elapsed_ms`. The raw-host harness also records controller-observed
-receiver readiness, sender wall time, and total wall time, plus host kernel,
-UTC observation, NTP status, and binary hashes. These clocks delimit startup
-and application service on their respective hosts; they are not a synchronized
-one-way latency measurement and do not by themselves establish calibrated
+The process completion records expose `sender_elapsed_ms`,
+`service_elapsed_ms`, and sender-clock feedback RTT summaries in microseconds.
+Each RTT begins at the first actual wire emission after any configured forward
+delay and ends at the first accepted authenticated echo for that sequence.
+The raw-host harness also records controller-observed receiver readiness,
+sender wall time, and total wall time, plus host kernel, UTC observation, NTP
+status, and binary hashes. Metrics are comparable only within their declared
+sender, receiver or controller steady clock. Cross-clock subtraction is
+forbidden; none of these values is synchronized one-way latency or calibrated
 network performance.
 
 `tools/gcp_raw_host_emulation.py` makes the raw topology reproducible. Its
@@ -510,7 +527,7 @@ Compute Engine, firewall/network lifecycle, IAP tunnelling, and OS Login (or
 equivalent SSH access). A dispatch can incur small GCP charges even when the
 transport test fails.
 
-The next experiment is declared in
+The completed matrix experiment was declared in
 [`benchmarks/gcp_raw_region_condition_matrix_v1.json`](benchmarks/gcp_raw_region_condition_matrix_v1.json).
 It is a balanced 2×2 factorial with two repetitions per cell: the existing
 `us-east1-b` → `us-west1-b` path and a `us-east1-b` → `europe-west1-b` path,
@@ -533,11 +550,11 @@ python3 tools/gcp_raw_host_matrix.py \
   --evidence-root raw-host-evidence/matrix-plan
 ```
 
-The manually dispatched `authenticated-gcp-raw-host-matrix` workflow fixes
-that checked-in plan rather than accepting arbitrary zones or sample counts.
-One protected approval gates all eight sequential lifecycles. Every sample
-gets a distinct exact run ID and topology; the runner requires one commit,
-machine type, runtime binary, authenticated workload and declared
+The historical `authenticated-gcp-raw-host-matrix` run fixed that checked-in
+plan rather than accepting arbitrary zones or sample counts. One protected
+approval gated all eight sequential lifecycles. Every sample received a
+distinct exact run ID and topology; the runner required one commit, machine
+type, runtime binary, authenticated workload and the declared historical
 `application-controller-steady-v1` measurement boundary across the matrix.
 It recomputes the retained log hashes, reparses completion/authentication and
 replay evidence, reports descriptive timing distributions per cell and
@@ -579,7 +596,38 @@ regional, condition-effect or availability claim. The fixed run order,
 uncontrolled public paths and unsynchronized clocks also prevent causal or
 one-way-latency interpretation. A dispatch can incur GCP charges.
 
-For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP records supply historical single runs, a controlled N=10 raw-routed campaign and the completed 2×2 matrix; none is physical-host, calibrated timing or causal regional evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
+The current machine-readable boundary is
+[`benchmarks/process_measurement_contract_v2.json`](benchmarks/process_measurement_contract_v2.json).
+It binds process protocol V2, the authenticated echo correlation, each metric
+to one steady clock, exclusions, and explicit prohibitions on cross-clock,
+one-way, network-only, calibrated and causal claims. New raw-host manifests use
+`application-controller-steady-v2` and must carry positive sender-clock RTT
+summaries, exactly two first terminal samples, and zero unknown echoes.
+
+The next cloud experiment is pre-registered but has not been dispatched:
+[`benchmarks/gcp_raw_measurement_pilot_v2.json`](benchmarks/gcp_raw_measurement_pilot_v2.json).
+It contains three randomized complete blocks of all four region/condition
+cells, for 12 fresh VM-pair lifecycles. The checked-in order is derived by
+sorting each block with SHA-256 over the fixed seed, block number and cell ID;
+the plan loader recomputes and rejects any altered order. Its primary
+sender-clock diagnostic is terminal feedback RTT mean. The pilot is for
+measurement-boundary and variance estimation only; it cannot authorize a
+regional ranking, condition effect or powered comparison. The manual workflow
+now points to this plan while retaining the protected approval, literal
+`CREATE_AND_DELETE`, 12-lifecycle safety bound and three cleanup layers.
+
+Plan it locally without authentication or resource creation:
+
+```bash
+python3 tools/gcp_raw_host_matrix.py \
+  --matrix benchmarks/gcp_raw_measurement_pilot_v2.json \
+  --project PROJECT_ID \
+  --run-prefix pilot-plan \
+  --source-commit "$(git rev-parse HEAD)" \
+  --evidence-root raw-host-evidence/pilot-plan
+```
+
+For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale and retries bounded peer discovery through transient control-plane propagation; retained GCP records supply historical single runs, a controlled N=10 raw-routed campaign and the completed 2×2 matrix. Protocol V2 adds sender-clock feedback RTT evidence, but none of these records is physical-host, calibrated timing, network-only latency or causal regional evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:
 
@@ -834,4 +882,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; retained GCP evidence adds a manual run, the first automated run, a same-commit N=10 campaign and a completed balanced 2×2 region/condition matrix across non-peered cross-region VPCs over public IPv4. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. All eight matrix lifecycles completed with one reproducible runtime binary, and all primary, repeated and independent cleanup checks passed. The result is descriptive emulation evidence, not a calibrated or causal comparison; the next obligation is to calibrate the timing methodology and predeclare a randomized, adequately repeated design before physical-host, hardware, regional or condition-effect claims.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Protocol V2 correlates each accepted feedback with an authenticated forward sequence and reports feedback RTT entirely on the sender steady clock. CI demonstrates the transport across container namespaces and two independent GitHub-hosted Ubuntu VMs; retained GCP evidence adds a manual run, an automated run, a same-commit N=10 campaign and a completed balanced 2×2 matrix over non-peered cross-region VPCs. All eight historical matrix lifecycles and all cleanup layers passed. Measurement Contract V2 and a bounded 12-lifecycle randomized pilot are now checked in, but the pilot remains variance-estimation work, not a calibrated or causal comparison. The next obligation is to validate V2 across CI, execute that guarded pilot only with explicit approval, and use its variance to design a powered study before physical-host, hardware, regional or condition-effect claims.

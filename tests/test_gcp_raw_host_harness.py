@@ -126,15 +126,24 @@ def write_matrix_evidence(
         sender_elapsed = 400 + index
         receiver_elapsed = 1200 + index
         sender_text = (
-            "sender_complete generations=2 replay_rejected=4 "
+            "sender_complete generations=2 protocol_version=2 "
+            "replay_rejected=4 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
-            f"feedback_applied=2 sender_elapsed_ms={sender_elapsed}\n"
+            "feedback_rtt_samples=6 feedback_rtt_min_us=100 "
+            "feedback_rtt_mean_us=200 feedback_rtt_max_us=300 "
+            "terminal_feedback_rtt_samples=2 "
+            "terminal_feedback_rtt_min_us=150 "
+            "terminal_feedback_rtt_mean_us=250 "
+            "terminal_feedback_rtt_max_us=350 "
+            "unknown_feedback_echoes=0 feedback_applied=2 "
+            f"sender_elapsed_ms={sender_elapsed}\n"
         )
         receiver_text = (
             "receiver_ready startup_timeout_ms=60000 "
-            "service_timeout_ms=15000 "
+            "service_timeout_ms=15000 protocol_version=2 "
             "auth_profile=hmac-sha256-libsodium\n"
-            "receiver_complete generations=2 replay_rejected=5 "
+            "receiver_complete generations=2 protocol_version=2 "
+            "replay_rejected=5 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
             f"service_elapsed_ms={receiver_elapsed}\n"
         )
@@ -146,7 +155,7 @@ def write_matrix_evidence(
         )
         profile = harness.CONDITION_PROFILES[run.cell.condition_profile]
         value = {
-            "schema": "aurora-raw-host-evidence-v2",
+            "schema": harness.RAW_EVIDENCE_SCHEMA,
             "evidence_level": "emulation",
             "result": "passed",
             "project": context.project,
@@ -166,14 +175,7 @@ def write_matrix_evidence(
                 "startup_timeout_ms": harness.STARTUP_TIMEOUT_MS,
                 "service_timeout_ms": harness.SERVICE_TIMEOUT_MS,
             },
-            "measurement": {
-                "profile": harness.MEASUREMENT_PROFILE,
-                "clock_relationship": (
-                    "independent-unsynchronized-steady-clocks"
-                ),
-                "provisioning_included": False,
-                "teardown_included": False,
-            },
+            "measurement": harness.measurement_contract(),
             "sender": {
                 "zone": run.cell.sender_zone,
                 "binary_sha256": runtime_hash,
@@ -197,6 +199,15 @@ def write_matrix_evidence(
                 "receiver_service_elapsed_ms": receiver_elapsed,
                 "sender_replay_rejected": 4,
                 "receiver_replay_rejected": 5,
+                "feedback_rtt_samples": 6,
+                "feedback_rtt_min_us": 100,
+                "feedback_rtt_mean_us": 200,
+                "feedback_rtt_max_us": 300,
+                "terminal_feedback_rtt_samples": 2,
+                "terminal_feedback_rtt_min_us": 150,
+                "terminal_feedback_rtt_mean_us": 250,
+                "terminal_feedback_rtt_max_us": 350,
+                "unknown_feedback_echoes": 0,
                 "controller_receiver_ready_ms": 2500 + index,
                 "controller_sender_wall_ms": 3500 + index,
                 "controller_total_wall_ms": 7000 + index,
@@ -206,8 +217,10 @@ def write_matrix_evidence(
                 "calibrated_performance": False,
                 "field_evidence": False,
                 "timing_scope": (
-                    "application-and-controller-steady-clock"
+                    harness.TIMING_SCOPE
                 ),
+                "one_way_latency": False,
+                "feedback_rtt_network_only": False,
             },
         }
         (run.evidence_dir / "manifest.json").write_text(
@@ -253,22 +266,33 @@ class GcpRawHostHarnessTests(unittest.TestCase):
 
     def test_process_evidence_requires_timing_and_authentication(self):
         sender = (
-            "sender_complete generations=2 replay_rejected=4 "
+            "sender_complete generations=2 protocol_version=2 "
+            "replay_rejected=4 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
-            "feedback_applied=2 "
+            "feedback_applied=2 feedback_rtt_samples=6 "
+            "feedback_rtt_min_us=100 feedback_rtt_mean_us=200 "
+            "feedback_rtt_max_us=300 terminal_feedback_rtt_samples=2 "
+            "terminal_feedback_rtt_min_us=150 "
+            "terminal_feedback_rtt_mean_us=250 "
+            "terminal_feedback_rtt_max_us=350 "
+            "unknown_feedback_echoes=0 "
             "sender_elapsed_ms=1234\n"
         )
         receiver = (
             "receiver_ready startup_timeout_ms=60000 "
-            "service_timeout_ms=15000 "
+            "service_timeout_ms=15000 protocol_version=2 "
             "auth_profile=hmac-sha256-libsodium\n"
-            "receiver_complete generations=2 replay_rejected=5 "
+            "receiver_complete generations=2 protocol_version=2 "
+            "replay_rejected=5 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
             "service_elapsed_ms=987\n"
         )
         result = harness.verify_process_logs(sender, receiver)
         self.assertEqual(result["sender_elapsed_ms"], 1234)
         self.assertEqual(result["receiver_service_elapsed_ms"], 987)
+        self.assertEqual(result["feedback_rtt_samples"], 6)
+        self.assertEqual(result["terminal_feedback_rtt_samples"], 2)
+        self.assertEqual(result["terminal_feedback_rtt_mean_us"], 250)
 
     def test_instance_has_billing_and_credential_safety_guards(self):
         with tempfile.TemporaryDirectory() as name:
@@ -378,6 +402,56 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         self.assertTrue(result["safety"]["balanced_complete_factorial"])
         self.assertEqual(len(set(result["run_ids"])), 4)
         self.assertTrue(all(len(value) <= 31 for value in result["run_ids"]))
+
+    def test_measurement_v2_contract_and_randomized_pilot_are_predeclared(self):
+        contract = json.loads(
+            (ROOT / "benchmarks" / "process_measurement_contract_v2.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["profile"], harness.MEASUREMENT_PROFILE)
+        self.assertEqual(
+            contract["process_protocol_version"],
+            harness.PROCESS_PROTOCOL_VERSION,
+        )
+        self.assertTrue(contract["prohibitions"]["cross_clock_subtraction"])
+        self.assertTrue(contract["prohibitions"]["one_way_latency_claim"])
+
+        pilot_path = (
+            ROOT / "benchmarks" / "gcp_raw_measurement_pilot_v2.json"
+        )
+        pilot_value = json.loads(pilot_path.read_text(encoding="utf-8"))
+        spec = raw_matrix.MatrixSpec.load(pilot_path)
+        with tempfile.TemporaryDirectory() as name:
+            result = raw_matrix.build_plan(spec, matrix_context(Path(name)))
+            tampered = dict(pilot_value)
+            tampered["execution_order"] = list(pilot_value["execution_order"])
+            tampered["execution_order"][0], tampered["execution_order"][1] = (
+                tampered["execution_order"][1],
+                tampered["execution_order"][0],
+            )
+            invalid_path = Path(name) / "tampered-pilot.json"
+            invalid_path.write_text(json.dumps(tampered), encoding="utf-8")
+            with self.assertRaises(raw_matrix.MatrixError):
+                raw_matrix.MatrixSpec.load(invalid_path)
+
+        self.assertEqual(result["samples_total"], 12)
+        self.assertEqual(
+            result["measurement_profile"], harness.MEASUREMENT_PROFILE
+        )
+        self.assertEqual(
+            result["execution_cell_order"], pilot_value["execution_order"]
+        )
+        self.assertEqual(
+            result["randomization"]["method"],
+            "randomized-complete-blocks-sha256-v1",
+        )
+        for start in range(0, 12, 4):
+            self.assertEqual(
+                set(result["execution_cell_order"][start:start + 4]),
+                {cell.id for cell in spec.cells},
+            )
+        self.assertFalse(result["claims"]["causal_region_effect"])
+        self.assertFalse(result["claims"]["causal_condition_effect"])
 
     def test_matrix_rejects_incomplete_or_unbalanced_factorial(self):
         with tempfile.TemporaryDirectory() as name:

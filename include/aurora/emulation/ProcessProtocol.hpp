@@ -16,7 +16,7 @@
 
 namespace aurora::emulation {
 
-inline constexpr std::uint16_t process_protocol_version = 1;
+inline constexpr std::uint16_t process_protocol_version = 2;
 inline constexpr std::size_t maximum_datagram_bytes = 60'000;
 
 enum class FrameType : std::uint8_t {
@@ -28,6 +28,7 @@ enum class FrameType : std::uint8_t {
 struct FeedbackFrame {
     std::uint64_t descriptor_fingerprint = 0;
     transport::DecodeReport report;
+    std::uint64_t echoed_forward_sequence = 0;
 };
 
 namespace detail {
@@ -369,6 +370,7 @@ inline std::vector<std::uint8_t> encode_feedback(
     const auto& report = feedback.report;
     detail::Writer writer;
     writer.u64(feedback.descriptor_fingerprint);
+    writer.u64(feedback.echoed_forward_sequence);
     writer.string(report.generation_id);
     writer.u8(static_cast<std::uint8_t>(report.status));
     writer.size(report.source_bytes);
@@ -399,6 +401,7 @@ inline FeedbackFrame decode_feedback(std::span<const std::uint8_t> encoded) {
     detail::Reader reader(envelope_value.payload);
     FeedbackFrame feedback;
     feedback.descriptor_fingerprint = reader.u64();
+    feedback.echoed_forward_sequence = reader.u64();
     auto& report = feedback.report;
     report.generation_id = reader.string();
     const auto status = reader.u8();

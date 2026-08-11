@@ -1,0 +1,72 @@
+{
+  "schema": "aurora-gcp-raw-matrix-plan-v2",
+  "matrix_id": "measurement-pilot-region-condition-v2",
+  "machine_type": "e2-micro",
+  "measurement_contract": "benchmarks/process_measurement_contract_v2.json",
+  "purpose": "variance-estimation-and-measurement-boundary-pilot",
+  "randomization": {
+    "method": "randomized-complete-blocks-sha256-v1",
+    "seed": "aurora-measurement-pilot-v2-1701"
+  },
+  "execution_order": [
+    "us-east-west-timed",
+    "us-east-europe-zero-delay",
+    "us-east-west-zero-delay",
+    "us-east-europe-timed",
+    "us-east-west-timed",
+    "us-east-europe-timed",
+    "us-east-europe-zero-delay",
+    "us-east-west-zero-delay",
+    "us-east-europe-zero-delay",
+    "us-east-europe-timed",
+    "us-east-west-timed",
+    "us-east-west-zero-delay"
+  ],
+  "cells": [
+    {
+      "id": "us-east-west-timed",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "us-west1-b",
+      "condition_profile": "timed-replay-v2",
+      "samples": 3
+    },
+    {
+      "id": "us-east-west-zero-delay",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "us-west1-b",
+      "condition_profile": "zero-delay-replay-v1",
+      "samples": 3
+    },
+    {
+      "id": "us-east-europe-timed",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "europe-west1-b",
+      "condition_profile": "timed-replay-v2",
+      "samples": 3
+    },
+    {
+      "id": "us-east-europe-zero-delay",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "europe-west1-b",
+      "condition_profile": "zero-delay-replay-v1",
+      "samples": 3
+    }
+  ],
+  "analysis": {
+    "primary_sender_clock_metric": "terminal_feedback_rtt_mean_us",
+    "secondary_same_clock_metrics": [
+      "sender_elapsed_ms",
+      "receiver_service_elapsed_ms"
+    ],
+    "controller_metrics_are_orchestration_diagnostics": true,
+    "estimate_variance_only": true,
+    "powered_followup_required": true
+  },
+  "claims": {
+    "calibrated_performance": false,
+    "field_evidence": false,
+    "causal_region_effect": false,
+    "causal_condition_effect": false,
+    "regional_ranking": false
+  }
+}

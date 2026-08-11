@@ -65,6 +65,8 @@ def main():
             raise RuntimeError(f"wrong startup timeout: {ready_line}")
         if "service_timeout_ms=2000" not in ready_line:
             raise RuntimeError(f"wrong service timeout: {ready_line}")
+        if "protocol_version=2" not in ready_line:
+            raise RuntimeError(f"wrong process protocol version: {ready_line}")
 
         # This delay exceeds the service budget. Success proves that service
         # accounting begins at the first valid descriptor, not at bind time.
@@ -106,6 +108,17 @@ def main():
             )
         if not re.search(r"sender_elapsed_ms=[1-9][0-9]*", sender.stdout):
             raise RuntimeError(f"missing sender timing: {sender.stdout}")
+        if not re.search(
+            r"feedback_rtt_samples=([2-9]|[1-9][0-9]+)(?:\s|$)",
+            sender.stdout,
+        ):
+            raise RuntimeError(f"missing sender-clock RTT samples: {sender.stdout}")
+        if not re.search(
+            r"terminal_feedback_rtt_samples=2", sender.stdout
+        ):
+            raise RuntimeError(f"missing terminal RTT samples: {sender.stdout}")
+        if "unknown_feedback_echoes=0" not in sender.stdout:
+            raise RuntimeError(f"unbound feedback echo: {sender.stdout}")
         if not re.search(
             r"service_elapsed_ms=[1-9][0-9]*", receiver_stdout
         ):

@@ -1,4 +1,5 @@
 #include "aurora/control/TransportPolicy.hpp"
+#include "aurora/emulation/Measurement.hpp"
 #include "aurora/emulation/ProcessProtocol.hpp"
 #include "aurora/fec/GenerationCodec.hpp"
 #include "aurora/transport/GenerationManager.hpp"
@@ -65,17 +66,43 @@ int main() {
     assert(remote.decoder_rank == local.decoder_rank);
     assert(remote.required_rank == local.required_rank);
 
-    FeedbackFrame feedback{descriptor.descriptor_fingerprint, remote};
+    FeedbackFrame feedback{descriptor.descriptor_fingerprint, remote, 73};
     const auto feedback_frame = aurora::emulation::encode_feedback(feedback);
     assert(aurora::emulation::frame_type(feedback_frame) ==
            aurora::emulation::FrameType::FEEDBACK);
     const auto restored = aurora::emulation::decode_feedback(feedback_frame);
     assert(restored.descriptor_fingerprint ==
            descriptor.descriptor_fingerprint);
+    assert(restored.echoed_forward_sequence == 73);
     assert(restored.report.delivered());
     assert(restored.report.generation_id == descriptor.generation_id);
     assert(restored.report.decoder_rank == descriptor.total_source_symbols);
     assert(restored.report.payload.empty());
+
+    aurora::emulation::FeedbackRttTracker tracker;
+    using namespace std::chrono_literals;
+    const auto origin = aurora::emulation::FeedbackRttTracker::TimePoint{};
+    assert(tracker.record_sent(73, origin));
+    assert(!tracker.record_sent(73, origin + 1ms));
+    assert(tracker.observe(73, false, origin + 1500us) ==
+           aurora::emulation::FeedbackRttObservation::RECORDED);
+    assert(tracker.observe(73, false, origin + 2ms) ==
+           aurora::emulation::FeedbackRttObservation::DUPLICATE);
+    assert(tracker.observe(74, false, origin + 2ms) ==
+           aurora::emulation::FeedbackRttObservation::UNKNOWN_SEQUENCE);
+    assert(tracker.record_sent(75, origin + 2ms));
+    assert(tracker.observe(75, true, origin + 4500us) ==
+           aurora::emulation::FeedbackRttObservation::RECORDED);
+    const auto all_rtt = tracker.summary();
+    assert(all_rtt.count == 2);
+    assert(all_rtt.min_us == 1500);
+    assert(all_rtt.mean_us == 2000);
+    assert(all_rtt.max_us == 2500);
+    const auto terminal_rtt = tracker.terminal_summary();
+    assert(terminal_rtt.count == 1);
+    assert(terminal_rtt.min_us == 2500);
+    assert(terminal_rtt.mean_us == 2500);
+    assert(terminal_rtt.max_us == 2500);
 
     auto corrupted = descriptor_frame;
     corrupted.back() ^= 0x80U;

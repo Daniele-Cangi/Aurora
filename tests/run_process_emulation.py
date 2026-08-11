@@ -91,6 +91,37 @@ def main():
             raise RuntimeError(f"missing sender evidence: {sender.stdout}")
         if "generations=2" not in sender.stdout or "feedback_applied=2" not in sender.stdout:
             raise RuntimeError(f"reverse feedback was not applied: {sender.stdout}")
+        if "protocol_version=2" not in sender.stdout:
+            raise RuntimeError(f"wrong process protocol version: {sender.stdout}")
+        rtt = {
+            name: re.search(rf"{name}=(\d+)", sender.stdout)
+            for name in (
+                "feedback_rtt_samples",
+                "feedback_rtt_min_us",
+                "feedback_rtt_mean_us",
+                "feedback_rtt_max_us",
+                "terminal_feedback_rtt_samples",
+                "terminal_feedback_rtt_min_us",
+                "terminal_feedback_rtt_mean_us",
+                "terminal_feedback_rtt_max_us",
+                "unknown_feedback_echoes",
+            )
+        }
+        if any(value is None for value in rtt.values()):
+            raise RuntimeError(f"missing sender-clock RTT evidence: {sender.stdout}")
+        rtt_values = {name: int(value.group(1)) for name, value in rtt.items()}
+        if rtt_values["feedback_rtt_samples"] < 2:
+            raise RuntimeError(f"too few feedback RTT samples: {sender.stdout}")
+        if rtt_values["terminal_feedback_rtt_samples"] != 2:
+            raise RuntimeError(f"wrong terminal RTT sample count: {sender.stdout}")
+        if rtt_values["unknown_feedback_echoes"] != 0:
+            raise RuntimeError(f"unbound feedback echo accepted: {sender.stdout}")
+        for prefix in ("feedback_rtt", "terminal_feedback_rtt"):
+            minimum = rtt_values[f"{prefix}_min_us"]
+            mean = rtt_values[f"{prefix}_mean_us"]
+            maximum = rtt_values[f"{prefix}_max_us"]
+            if minimum <= 0 or not minimum <= mean <= maximum:
+                raise RuntimeError(f"invalid {prefix} summary: {sender.stdout}")
         stale_feedback = re.search(
             r"stale_feedback_datagrams=(\d+)", sender.stdout
         )
@@ -123,6 +154,10 @@ def main():
             raise RuntimeError(f"missing per-generation evidence: {receiver_stdout}")
         if "receiver_complete generations=2" not in receiver_stdout:
             raise RuntimeError(f"missing receiver evidence: {receiver_stdout}")
+        if receiver_stdout.count("protocol_version=2") < 2:
+            raise RuntimeError(
+                f"wrong receiver protocol version evidence: {receiver_stdout}"
+            )
         if "startup_timeout_ms=60000" not in receiver_stdout:
             raise RuntimeError(f"missing startup timeout evidence: {receiver_stdout}")
         if "service_timeout_ms=15000" not in receiver_stdout:
