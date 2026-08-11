@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** repeat the validated raw-routed VM harness across controlled samples and calibrate the transport measurement boundary
+**Primary current task:** extend the same-commit raw-routed baseline into a controlled region/condition matrix and calibrate the end-to-end transport measurement boundary
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -56,7 +56,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
-| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained manual and automated GCP records exercise non-peered cross-region VPCs over public IPv4 with exact-name teardown | Real HMAC requires `USE_SODIUM=ON`; the automated raw-routed result is one successful sample rather than calibrated timing/throughput evidence, and controlled physical hosts remain future work |
+| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained manual and automated GCP records exercise non-peered cross-region VPCs over public IPv4 with exact-name teardown, including a same-commit N=10 campaign | Real HMAC requires `USE_SODIUM=ON`; the repeated raw-routed campaign establishes controlled reproducibility for one topology, not calibrated timing/throughput evidence, and controlled physical hosts remain future work |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
@@ -394,11 +394,31 @@ separate post-run audit all found zero run-prefixed VM, disk, address,
 snapshot, firewall, subnet, or network resources. See
 [`benchmarks/raw_public_host_evidence_v2.txt`](benchmarks/raw_public_host_evidence_v2.txt).
 
-This record demonstrates one successful raw-routed emulation topology. It is
-not a latency, goodput, availability, cost, or field-performance claim. VM
-provisioning and SSH setup were outside the measurement. That historical run
-used concurrent launches because its receiver had one 15-second process
-timeout covering both startup and service.
+The guarded workflow then executed 10 sequential, independent lifecycles from
+commit `889aa1f4d21edc2246e755c7b934b27de89a4272`. Every sample recreated both
+VPCs and VMs, used the same runtime binary hash, completed two authenticated
+generations and two feedback applications, rejected four sender-side and five
+receiver-side replays, and passed primary plus independent exact-prefix
+teardown. A separate post-run GCP audit also found no run-prefixed resources.
+
+| Timing field (ms) | Mean | Median | Sample SD | Min–max |
+|---|---:|---:|---:|---:|
+| Sender application elapsed | 425.900 | 425.000 | 3.381 | 423.000–432.000 |
+| Receiver service elapsed | 1200.900 | 1200.000 | 2.601 | 1199.000–1206.000 |
+| Controller receiver readiness | 2603.832 | 2603.814 | 133.524 | 2403.560–2804.308 |
+| Controller sender wall | 3837.799 | 3879.012 | 197.639 | 3467.255–4113.905 |
+| Controller total wall | 7247.408 | 7249.035 | 270.766 | 6887.034–7633.147 |
+
+See
+[`benchmarks/raw_public_host_campaign_v1.txt`](benchmarks/raw_public_host_campaign_v1.txt)
+for the retained per-sample timings and validation boundary. This campaign
+demonstrates repeatable success for one declared raw-routed emulation topology.
+It is not a latency, goodput, availability, cost, or field-performance claim:
+the application and controller clocks are not synchronized one-way network
+measurements, and VM provisioning, package installation, compilation, SSH
+setup, and teardown remain outside the bounded application service timing.
+The earlier V2 run used concurrent launches because its receiver had one
+15-second process timeout covering both startup and service.
 
 Current receivers emit a flushed `receiver_ready` record after the socket,
 trace, and authenticator are ready. Startup and service use independent
@@ -484,7 +504,7 @@ Compute Engine, firewall/network lifecycle, IAP tunnelling, and OS Login (or
 equivalent SSH access). A dispatch can incur small GCP charges even when the
 transport test fails.
 
-For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP record supplies one raw-routed VM result; neither is physical-host or calibrated timing evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
+For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP records supply historical single runs plus a controlled N=10 raw-routed campaign; none is physical-host or calibrated timing evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:
 
@@ -739,4 +759,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; retained manual and automated GCP records add two successful cross-region, non-peered-VPC public-IPv4 runs. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. The guarded, keyless workflow has now reproduced and fully torn down that raw-routed topology once; the next obligation is a controlled repeated-run sample and calibrated end-to-end timing methodology before hardware work.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; retained GCP evidence adds a manual run, the first automated run, and a same-commit N=10 campaign across non-peered cross-region VPCs over public IPv4. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. All 10 controlled lifecycles completed and fully tore down with one reproducible runtime binary. The next obligation is a controlled region/condition matrix and a calibrated end-to-end timing methodology before physical-host or hardware claims.
