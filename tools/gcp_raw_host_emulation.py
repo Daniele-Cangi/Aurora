@@ -35,7 +35,41 @@ IAP_SOURCE_CIDR = "35.235.240.0/20"
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{2,30}$")
 PROJECT_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
-MEASUREMENT_PROFILE = "application-controller-steady-v1"
+RAW_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v3"
+PROCESS_PROTOCOL_VERSION = 2
+MEASUREMENT_PROFILE = "application-controller-steady-v2"
+TIMING_SCOPE = "application-controller-and-sender-feedback-steady-clocks"
+FEEDBACK_RTT_TIMING_FIELDS = (
+    "feedback_rtt_min_us",
+    "feedback_rtt_mean_us",
+    "feedback_rtt_max_us",
+    "terminal_feedback_rtt_min_us",
+    "terminal_feedback_rtt_mean_us",
+    "terminal_feedback_rtt_max_us",
+)
+
+
+def measurement_contract() -> dict:
+    return {
+        "profile": MEASUREMENT_PROFILE,
+        "process_protocol_version": PROCESS_PROTOCOL_VERSION,
+        "clock_relationship": "independent-unsynchronized-steady-clocks",
+        "same_clock_metrics": {
+            "sender_steady": [
+                "sender_elapsed_ms",
+                *FEEDBACK_RTT_TIMING_FIELDS,
+            ],
+            "receiver_steady": ["receiver_service_elapsed_ms"],
+            "controller_steady": [
+                "controller_receiver_ready_ms",
+                "controller_sender_wall_ms",
+                "controller_total_wall_ms",
+            ],
+        },
+        "cross_clock_subtraction_permitted": False,
+        "provisioning_included": False,
+        "teardown_included": False,
+    }
 
 
 @dataclasses.dataclass(frozen=True)
@@ -218,6 +252,16 @@ def require_positive(fields: dict[str, str], key: str) -> int:
     return value
 
 
+def require_nonnegative(fields: dict[str, str], key: str) -> int:
+    try:
+        value = int(fields[key])
+    except (KeyError, ValueError) as error:
+        raise HarnessError(f"invalid or missing {key}") from error
+    if value < 0:
+        raise HarnessError(f"{key} must be nonnegative")
+    return value
+
+
 def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
     ready = parse_record(receiver_text, "receiver_ready")
     sender = parse_record(sender_text, "sender_complete")
@@ -235,9 +279,32 @@ def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
             raise HarnessError(f"{role} did not use libsodium HMAC")
         if fields.get("auth_rejected") != "0":
             raise HarnessError(f"{role} rejected authenticated evidence")
+        if fields.get("protocol_version") != str(PROCESS_PROTOCOL_VERSION):
+            raise HarnessError(f"{role} process protocol version mismatch")
         require_positive(fields, "replay_rejected")
     if sender.get("feedback_applied") != "2":
         raise HarnessError("sender did not apply both feedback reports")
+    if ready.get("protocol_version") != str(PROCESS_PROTOCOL_VERSION):
+        raise HarnessError("receiver readiness protocol version mismatch")
+    feedback_samples = require_positive(sender, "feedback_rtt_samples")
+    terminal_samples = require_positive(
+        sender, "terminal_feedback_rtt_samples"
+    )
+    if terminal_samples != 2 or feedback_samples < terminal_samples:
+        raise HarnessError("sender feedback RTT sample counts are inconsistent")
+    if require_nonnegative(sender, "unknown_feedback_echoes") != 0:
+        raise HarnessError("sender observed an unbound feedback echo")
+    rtt_values = {
+        field: require_positive(sender, field)
+        for field in FEEDBACK_RTT_TIMING_FIELDS
+    }
+    for prefix in ("feedback_rtt", "terminal_feedback_rtt"):
+        if not (
+            rtt_values[f"{prefix}_min_us"]
+            <= rtt_values[f"{prefix}_mean_us"]
+            <= rtt_values[f"{prefix}_max_us"]
+        ):
+            raise HarnessError(f"invalid {prefix} summary")
     return {
         "sender_elapsed_ms": require_positive(sender, "sender_elapsed_ms"),
         "receiver_service_elapsed_ms": require_positive(
@@ -245,13 +312,17 @@ def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
         ),
         "sender_replay_rejected": int(sender["replay_rejected"]),
         "receiver_replay_rejected": int(receiver["replay_rejected"]),
+        "feedback_rtt_samples": feedback_samples,
+        **rtt_values,
+        "terminal_feedback_rtt_samples": terminal_samples,
+        "unknown_feedback_echoes": 0,
     }
 
 
 def build_plan(config: Config, names: Names) -> dict:
     condition = CONDITION_PROFILES[config.condition_profile]
     return {
-        "schema": "aurora-gcp-raw-plan-v1",
+        "schema": "aurora-gcp-raw-plan-v2",
         "project": config.project,
         "run_id": config.run_id,
         "source_commit": config.source_commit,
@@ -262,12 +333,7 @@ def build_plan(config: Config, names: Names) -> dict:
             "forward_trace": condition.forward_name,
             "reverse_trace": condition.reverse_name,
         },
-        "measurement": {
-            "profile": MEASUREMENT_PROFILE,
-            "clock_relationship": "independent-unsynchronized-steady-clocks",
-            "provisioning_included": False,
-            "teardown_included": False,
-        },
+        "measurement": measurement_contract(),
         "sender": {
             "zone": config.sender_zone,
             "region": zone_region(config.sender_zone),
@@ -295,6 +361,14 @@ def build_plan(config: Config, names: Names) -> dict:
             "vm_max_run_duration": "30m; automatic instance deletion",
             "cleanup": "exact names; instances and disks first; no wildcards",
             "project_deletion": False,
+        },
+        "claims": {
+            "calibrated_performance": False,
+            "field_evidence": False,
+            "one_way_latency": False,
+            "feedback_rtt_network_only": False,
+            "causal_region_effect": False,
+            "causal_condition_effect": False,
         },
     }
 
@@ -742,7 +816,7 @@ class GcpRawHarness:
 
     def execute(self) -> dict:
         manifest = {
-            "schema": "aurora-raw-host-evidence-v2",
+            "schema": RAW_EVIDENCE_SCHEMA,
             "evidence_level": "emulation",
             "project": self.config.project,
             "run_id": self.config.run_id,
@@ -763,14 +837,7 @@ class GcpRawHarness:
                 "startup_timeout_ms": STARTUP_TIMEOUT_MS,
                 "service_timeout_ms": SERVICE_TIMEOUT_MS,
             },
-            "measurement": {
-                "profile": MEASUREMENT_PROFILE,
-                "clock_relationship": (
-                    "independent-unsynchronized-steady-clocks"
-                ),
-                "provisioning_included": False,
-                "teardown_included": False,
-            },
+            "measurement": measurement_contract(),
             "result": "failed",
         }
         self.config.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -822,7 +889,9 @@ class GcpRawHarness:
                     "claims": {
                         "calibrated_performance": False,
                         "field_evidence": False,
-                        "timing_scope": "application-and-controller-steady-clock",
+                        "timing_scope": TIMING_SCOPE,
+                        "one_way_latency": False,
+                        "feedback_rtt_network_only": False,
                     },
                 }
             )

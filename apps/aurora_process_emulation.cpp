@@ -1,5 +1,6 @@
 #include "aurora/control/TransportPolicy.hpp"
 #include "aurora/emulation/ImpairmentTrace.hpp"
+#include "aurora/emulation/Measurement.hpp"
 #include "aurora/emulation/ProcessAuthentication.hpp"
 #include "aurora/emulation/ProcessProtocol.hpp"
 #include "aurora/fec/GenerationCodec.hpp"
@@ -311,6 +312,8 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
     std::uint32_t duplicated = 0;
     std::uint32_t delayed = 0;
     std::uint32_t reordered = 0;
+    std::uint32_t unknown_feedback_echoes = 0;
+    aurora::emulation::FeedbackRttTracker feedback_rtt;
 
     auto accept_feedback = [&](aurora::emulation::FeedbackFrame incoming) {
         for (auto& generation : generations) {
@@ -331,6 +334,14 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
                         ++stale_feedback_datagrams;
                         return;
                     }
+                }
+                const auto observation = feedback_rtt.observe(
+                    incoming.echoed_forward_sequence,
+                    incoming.report.delivered());
+                if (observation == aurora::emulation::
+                        FeedbackRttObservation::UNKNOWN_SEQUENCE) {
+                    ++unknown_feedback_echoes;
+                    return;
                 }
                 generation.feedback = std::move(incoming);
                 ++feedback_datagrams;
@@ -353,10 +364,12 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
             all_acknowledged = false;
             const auto descriptor = aurora::emulation::encode_descriptor(
                 generation.spawned.descriptor);
-            forward_socket.send(authenticator.seal(
+            const auto sequence = forward_auth_sequence++;
+            const auto frame = authenticator.seal(
                 aurora::emulation::ProcessDirection::FORWARD,
-                forward_auth_sequence++, descriptor),
-                forward_host, forward_port);
+                sequence, descriptor);
+            feedback_rtt.record_sent(sequence);
+            forward_socket.send(frame, forward_host, forward_port);
             ++forward_datagrams;
             poll_feedback();
         }
@@ -374,6 +387,7 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         std::chrono::steady_clock::time_point release;
         std::uint64_t attempt = 0;
         std::uint64_t order = 0;
+        std::uint64_t sequence = 0;
         std::vector<std::uint8_t> frame;
     };
     std::vector<PendingDatagram> pending;
@@ -401,6 +415,7 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
             highest_sent_attempt = std::max(
                 highest_sent_attempt, next->attempt);
             sent_any = true;
+            feedback_rtt.record_sent(next->sequence);
             forward_socket.send(
                 next->frame, forward_host, forward_port);
             ++forward_datagrams;
@@ -410,9 +425,10 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
     };
 
     auto send_symbol = [&](const ::fec::Pkt& packet) {
+        const auto sequence = forward_auth_sequence++;
         const auto frame = authenticator.seal(
             aurora::emulation::ProcessDirection::FORWARD,
-            forward_auth_sequence++,
+            sequence,
             aurora::emulation::encode_symbol(packet));
         const auto attempt = impairment_attempt++;
         const auto directive = trace.directive(attempt);
@@ -423,10 +439,12 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         if (directive.delay_ms > 0) ++delayed;
         const auto release = release_epoch +
             std::chrono::milliseconds(directive.delay_ms);
-        pending.push_back({release, attempt, enqueue_order++, frame});
+        pending.push_back(
+            {release, attempt, enqueue_order++, sequence, frame});
         if (directive.action ==
             aurora::emulation::ImpairmentAction::DUPLICATE) {
-            pending.push_back({release, attempt, enqueue_order++, frame});
+            pending.push_back(
+                {release, attempt, enqueue_order++, sequence, frame});
             ++duplicated;
         }
     };
@@ -476,8 +494,18 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         throw std::runtime_error(
             "process emulation: reverse feedback was not applied to policy");
     }
+    const auto rtt = feedback_rtt.summary();
+    const auto terminal_rtt = feedback_rtt.terminal_summary();
+    if (rtt.count < terminal_rtt.count ||
+        terminal_rtt.count != generations.size() ||
+        unknown_feedback_echoes != 0) {
+        throw std::runtime_error(
+            "process emulation: incomplete sender-clock feedback RTT evidence");
+    }
 
     std::cout << "sender_complete generations=" << generations.size()
+              << " protocol_version="
+              << aurora::emulation::process_protocol_version
               << " forward_port=" << forward_port
               << " feedback_port=" << feedback_port
               << " forward_datagrams=" << forward_datagrams
@@ -496,6 +524,15 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
               << " trace_name=" << trace.name()
               << " trace_fingerprint=" << trace.fingerprint()
               << " sender_elapsed_ms=" << elapsed_ms(started)
+              << " feedback_rtt_samples=" << rtt.count
+              << " feedback_rtt_min_us=" << rtt.min_us
+              << " feedback_rtt_mean_us=" << rtt.mean_us
+              << " feedback_rtt_max_us=" << rtt.max_us
+              << " terminal_feedback_rtt_samples=" << terminal_rtt.count
+              << " terminal_feedback_rtt_min_us=" << terminal_rtt.min_us
+              << " terminal_feedback_rtt_mean_us=" << terminal_rtt.mean_us
+              << " terminal_feedback_rtt_max_us=" << terminal_rtt.max_us
+              << " unknown_feedback_echoes=" << unknown_feedback_echoes
               << " feedback_applied=2\n";
     return 0;
 }
@@ -545,6 +582,8 @@ int run_receiver(std::string_view forward_bind_host,
     std::uint32_t replay_rejections = 0;
 
     std::cout << "receiver_ready forward_port=" << forward_port
+              << " protocol_version="
+              << aurora::emulation::process_protocol_version
               << " feedback_port=" << feedback_port
               << " startup_timeout_ms=" << startup_timeout_ms
               << " service_timeout_ms=" << service_timeout_ms
@@ -657,7 +696,8 @@ int run_receiver(std::string_view forward_bind_host,
                 const auto report = found->second->integrate(
                     {}, elapsed_ms(*service_started));
                 send_feedback(aurora::emulation::encode_feedback({
-                    descriptor.descriptor_fingerprint, report}));
+                    descriptor.descriptor_fingerprint, report,
+                    opened->sequence}));
                 continue;
             }
             if (type != aurora::emulation::FrameType::SYMBOL) {
@@ -670,7 +710,8 @@ int run_receiver(std::string_view forward_bind_host,
                 found->second->integrate({packet},
                                          elapsed_ms(*service_started));
             const auto feedback = aurora::emulation::encode_feedback({
-                found->second->descriptor().descriptor_fingerprint, report});
+                found->second->descriptor().descriptor_fingerprint, report,
+                opened->sequence});
             send_feedback(feedback);
             if (report.delivered()) {
                 // Repeat the terminal datagram to tolerate one lost reverse
@@ -686,6 +727,8 @@ int run_receiver(std::string_view forward_bind_host,
                     flush_feedback(true);
                     std::cout << "receiver_complete generations="
                               << completed.size()
+                              << " protocol_version="
+                              << aurora::emulation::process_protocol_version
                               << " forward_port=" << forward_port
                               << " feedback_port=" << feedback_port
                               << " reverse_attempts=" << reverse_attempts

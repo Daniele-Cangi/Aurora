@@ -1,0 +1,61 @@
+{
+  "schema": "aurora-process-measurement-contract-v2",
+  "profile": "application-controller-steady-v2",
+  "process_protocol_version": 2,
+  "clock_relationship": "independent-unsynchronized-steady-clocks",
+  "correlation": {
+    "field": "echoed_forward_sequence",
+    "integrity": "direction-and-session-bound-hmac-sha256-libsodium",
+    "sender_records_first_wire_emission": true,
+    "sender_accepts_first_monotonic_feedback_only": true
+  },
+  "metrics": {
+    "sender_elapsed_ms": {
+      "clock": "sender-steady",
+      "boundary": "sender-process-start-to-completion"
+    },
+    "feedback_rtt_us": {
+      "clock": "sender-steady",
+      "boundary": "forward-send-to-first-accepted-authenticated-feedback",
+      "quantization": "ceiling-to-positive-microseconds",
+      "includes": [
+        "forward-network-service",
+        "receiver-processing",
+        "configured-reverse-impairment",
+        "reverse-network-service",
+        "sender-polling"
+      ]
+    },
+    "receiver_service_elapsed_ms": {
+      "clock": "receiver-steady",
+      "boundary": "first-valid-descriptor-to-terminal-completion"
+    },
+    "controller_receiver_ready_ms": {
+      "clock": "controller-steady",
+      "boundary": "remote-launch-to-flushed-readiness-observation"
+    },
+    "controller_sender_wall_ms": {
+      "clock": "controller-steady",
+      "boundary": "sender-remote-command-start-to-return"
+    },
+    "controller_total_wall_ms": {
+      "clock": "controller-steady",
+      "boundary": "receiver-remote-launch-to-receiver-return"
+    }
+  },
+  "excluded": [
+    "vm-provisioning",
+    "package-installation",
+    "compilation",
+    "ssh-key-setup",
+    "teardown"
+  ],
+  "prohibitions": {
+    "cross_clock_subtraction": true,
+    "one_way_latency_claim": true,
+    "network_only_rtt_claim": true,
+    "calibrated_performance_claim": true,
+    "causal_region_claim": true,
+    "causal_condition_claim": true
+  }
+}

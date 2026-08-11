@@ -17,6 +17,16 @@ TIMING_FIELDS = (
     "controller_sender_wall_ms",
     "controller_total_wall_ms",
 )
+FEEDBACK_RTT_TIMING_FIELDS = (
+    "feedback_rtt_min_us",
+    "feedback_rtt_mean_us",
+    "feedback_rtt_max_us",
+    "terminal_feedback_rtt_min_us",
+    "terminal_feedback_rtt_mean_us",
+    "terminal_feedback_rtt_max_us",
+)
+LEGACY_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v2"
+CURRENT_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v3"
 
 
 class CampaignError(RuntimeError):
@@ -61,18 +71,30 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
 
     reference = manifests[0]
     identity_fields = (
+        "schema",
         "project",
         "source_commit",
         "topology",
         "runtime_binary_sha256",
         "authentication_profile",
+        "measurement",
     )
     run_ids: list[str] = []
-    metrics: dict[str, list[float]] = {field: [] for field in TIMING_FIELDS}
+    schema = reference.get("schema")
+    if schema not in (LEGACY_EVIDENCE_SCHEMA, CURRENT_EVIDENCE_SCHEMA):
+        raise CampaignError("unexpected evidence schema")
+    timing_fields = TIMING_FIELDS + (
+        FEEDBACK_RTT_TIMING_FIELDS
+        if schema == CURRENT_EVIDENCE_SCHEMA
+        else ()
+    )
+    metrics: dict[str, list[float]] = {
+        field: [] for field in timing_fields
+    }
     for manifest in manifests:
         path = manifest["_campaign_path"]
-        if manifest.get("schema") != "aurora-raw-host-evidence-v2":
-            raise CampaignError(f"{path}: unexpected evidence schema")
+        if manifest.get("schema") != schema:
+            raise CampaignError(f"{path}: mixed evidence schema")
         if manifest.get("result") != "passed":
             raise CampaignError(f"{path}: sample did not pass")
         if not manifest.get("teardown", {}).get("success"):
@@ -85,7 +107,7 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
             raise CampaignError(f"{path}: missing run id")
         run_ids.append(run_id)
         timing = manifest.get("timing", {})
-        for field in TIMING_FIELDS:
+        for field in timing_fields:
             value = timing.get(field)
             if not isinstance(value, (int, float)) or value <= 0:
                 raise CampaignError(f"{path}: invalid timing field {field}")
@@ -94,7 +116,11 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
         raise CampaignError("campaign run ids are not unique")
 
     return {
-        "schema": "aurora-raw-host-campaign-v1",
+        "schema": (
+            "aurora-raw-host-campaign-v2"
+            if schema == CURRENT_EVIDENCE_SCHEMA
+            else "aurora-raw-host-campaign-v1"
+        ),
         "evidence_level": "emulation",
         "result": "passed",
         "samples_expected": expected_samples,
@@ -112,7 +138,12 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
         "claims": {
             "calibrated_performance": False,
             "field_evidence": False,
-            "timing_scope": "application-and-controller-steady-clock",
+            "timing_scope": (
+                "application-controller-and-sender-feedback-steady-clocks"
+                if schema == CURRENT_EVIDENCE_SCHEMA
+                else "application-and-controller-steady-clock"
+            ),
+            "one_way_latency": False,
         },
     }
 

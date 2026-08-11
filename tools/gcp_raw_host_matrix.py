@@ -22,7 +22,8 @@ from summarize_gcp_raw_campaign import TIMING_FIELDS, metric_summary
 
 
 MATRIX_SCHEMA = "aurora-gcp-raw-matrix-plan-v1"
-EVIDENCE_SCHEMA = "aurora-raw-host-matrix-evidence-v1"
+MATRIX_SCHEMA_V2 = "aurora-gcp-raw-matrix-plan-v2"
+EVIDENCE_SCHEMA = "aurora-raw-host-matrix-evidence-v2"
 MAX_MATRIX_SAMPLES = 12
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{2,40}$")
 
@@ -49,9 +50,13 @@ class MatrixCell:
 
 @dataclasses.dataclass(frozen=True)
 class MatrixSpec:
+    schema: str
     matrix_id: str
     machine_type: str
     cells: tuple[MatrixCell, ...]
+    execution_order: tuple[str, ...] = ()
+    randomization_method: str | None = None
+    randomization_seed: str | None = None
 
     @staticmethod
     def load(path: Path) -> "MatrixSpec":
@@ -59,7 +64,8 @@ class MatrixSpec:
             value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise MatrixError(f"invalid matrix file: {path}") from error
-        if value.get("schema") != MATRIX_SCHEMA:
+        schema = value.get("schema")
+        if schema not in (MATRIX_SCHEMA, MATRIX_SCHEMA_V2):
             raise MatrixError("unexpected matrix schema")
         cells_value = value.get("cells")
         if not isinstance(cells_value, list):
@@ -80,10 +86,22 @@ class MatrixSpec:
                 raise MatrixError(f"cell {index} is incomplete") from error
             cells.append(cell)
         try:
+            execution_order = value.get("execution_order", [])
+            randomization = value.get("randomization", {})
+            if not isinstance(execution_order, list) or not all(
+                isinstance(item, str) for item in execution_order
+            ):
+                raise MatrixError("execution order must be a string list")
+            if not isinstance(randomization, dict):
+                raise MatrixError("randomization must be an object")
             result = MatrixSpec(
+                schema=schema,
                 matrix_id=value["matrix_id"],
                 machine_type=value["machine_type"],
                 cells=tuple(cells),
+                execution_order=tuple(execution_order),
+                randomization_method=randomization.get("method"),
+                randomization_seed=randomization.get("seed"),
             )
         except KeyError as error:
             raise MatrixError("matrix metadata is incomplete") from error
@@ -159,6 +177,39 @@ class MatrixSpec:
             raise MatrixError(
                 f"matrix exceeds the {MAX_MATRIX_SAMPLES}-sample safety bound"
             )
+        if self.schema == MATRIX_SCHEMA:
+            if self.execution_order or self.randomization_method or \
+                    self.randomization_seed:
+                raise MatrixError("v1 matrices cannot declare execution order")
+            return
+
+        if self.randomization_method != "randomized-complete-blocks-sha256-v1":
+            raise MatrixError("v2 matrix requires SHA-256 complete-block order")
+        if not isinstance(self.randomization_seed, str) or not ID_PATTERN.fullmatch(
+            self.randomization_seed
+        ):
+            raise MatrixError("v2 matrix requires a safe randomization seed")
+        if len(self.execution_order) != total_samples:
+            raise MatrixError("v2 execution order length mismatch")
+        samples_per_cell = next(iter(sample_counts))
+        cell_ids = [cell.id for cell in self.cells]
+        for block_index in range(1, samples_per_cell + 1):
+            start = (block_index - 1) * len(cell_ids)
+            observed = list(
+                self.execution_order[start:start + len(cell_ids)]
+            )
+            expected = sorted(
+                cell_ids,
+                key=lambda cell_id: hashlib.sha256(
+                    f"{self.randomization_seed}:{block_index}:{cell_id}".encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
+            )
+            if observed != expected:
+                raise MatrixError(
+                    f"v2 execution block {block_index} is not the declared order"
+                )
 
     @property
     def total_samples(self) -> int:
@@ -185,25 +236,37 @@ class PlannedRun:
 
 def planned_runs(spec: MatrixSpec, context: RunContext) -> list[PlannedRun]:
     result: list[PlannedRun] = []
-    for cell_index, cell in enumerate(spec.cells, start=1):
-        for sample_index in range(1, cell.samples + 1):
-            run_id = (
-                f"{context.run_prefix}-c{cell_index:02d}s{sample_index:02d}"
+    indexed_cells = {
+        cell.id: (index, cell)
+        for index, cell in enumerate(spec.cells, start=1)
+    }
+    sample_counts = {cell.id: 0 for cell in spec.cells}
+    cell_order = spec.execution_order or tuple(
+        cell.id
+        for cell in spec.cells
+        for _ in range(cell.samples)
+    )
+    for cell_id in cell_order:
+        cell_index, cell = indexed_cells[cell_id]
+        sample_counts[cell_id] += 1
+        sample_index = sample_counts[cell_id]
+        run_id = (
+            f"{context.run_prefix}-c{cell_index:02d}s{sample_index:02d}"
+        )
+        evidence_dir = (
+            context.evidence_root
+            / f"cell-{cell_index:02d}-{cell.id}"
+            / f"sample-{sample_index:02d}"
+        )
+        result.append(
+            PlannedRun(
+                cell_index=cell_index,
+                sample_index=sample_index,
+                cell=cell,
+                run_id=run_id,
+                evidence_dir=evidence_dir,
             )
-            evidence_dir = (
-                context.evidence_root
-                / f"cell-{cell_index:02d}-{cell.id}"
-                / f"sample-{sample_index:02d}"
-            )
-            result.append(
-                PlannedRun(
-                    cell_index=cell_index,
-                    sample_index=sample_index,
-                    cell=cell,
-                    run_id=run_id,
-                    evidence_dir=evidence_dir,
-                )
-            )
+        )
     return result
 
 
@@ -237,7 +300,11 @@ def build_plan(spec: MatrixSpec, context: RunContext) -> dict:
     validate_context(spec, context)
     runs = planned_runs(spec, context)
     return {
-        "schema": "aurora-gcp-raw-matrix-execution-plan-v1",
+        "schema": (
+            "aurora-gcp-raw-matrix-execution-plan-v2"
+            if spec.schema == MATRIX_SCHEMA_V2
+            else "aurora-gcp-raw-matrix-execution-plan-v1"
+        ),
         "matrix_id": spec.matrix_id,
         "project": context.project,
         "source_commit": context.source_commit,
@@ -254,6 +321,15 @@ def build_plan(spec: MatrixSpec, context: RunContext) -> dict:
         ],
         "samples_total": len(runs),
         "run_ids": [run.run_id for run in runs],
+        "execution_cell_order": [run.cell.id for run in runs],
+        "randomization": (
+            {
+                "method": spec.randomization_method,
+                "seed": spec.randomization_seed,
+            }
+            if spec.schema == MATRIX_SCHEMA_V2
+            else None
+        ),
         "measurement_profile": harness.MEASUREMENT_PROFILE,
         "safety": {
             "default_mode": "plan-only",
@@ -265,6 +341,8 @@ def build_plan(spec: MatrixSpec, context: RunContext) -> dict:
         "claims": {
             "calibrated_performance": False,
             "field_evidence": False,
+            "causal_region_effect": False,
+            "causal_condition_effect": False,
         },
     }
 
@@ -287,11 +365,12 @@ def _write_json(path: Path, value: dict) -> None:
 def summarize(spec: MatrixSpec, context: RunContext) -> dict:
     validate_context(spec, context)
     runs = planned_runs(spec, context)
+    timing_fields = TIMING_FIELDS + harness.FEEDBACK_RTT_TIMING_FIELDS
     metrics: dict[str, list[float]] = {
-        field: [] for field in TIMING_FIELDS
+        field: [] for field in timing_fields
     }
     cell_metrics: dict[str, dict[str, list[float]]] = {
-        cell.id: {field: [] for field in TIMING_FIELDS}
+        cell.id: {field: [] for field in timing_fields}
         for cell in spec.cells
     }
     cell_run_ids: dict[str, list[str]] = {cell.id: [] for cell in spec.cells}
@@ -301,7 +380,7 @@ def summarize(spec: MatrixSpec, context: RunContext) -> dict:
         path = run.evidence_dir / "manifest.json"
         manifest = _load_json(path)
         label = f"{run.cell.id}/sample-{run.sample_index:02d}"
-        if manifest.get("schema") != "aurora-raw-host-evidence-v2":
+        if manifest.get("schema") != harness.RAW_EVIDENCE_SCHEMA:
             raise MatrixError(f"{label}: unexpected evidence schema")
         if manifest.get("result") != "passed":
             raise MatrixError(f"{label}: transport did not pass")
@@ -335,12 +414,7 @@ def summarize(spec: MatrixSpec, context: RunContext) -> dict:
         }
         if manifest.get("workload") != expected_workload:
             raise MatrixError(f"{label}: workload mismatch")
-        expected_measurement = {
-            "profile": harness.MEASUREMENT_PROFILE,
-            "clock_relationship": "independent-unsynchronized-steady-clocks",
-            "provisioning_included": False,
-            "teardown_included": False,
-        }
+        expected_measurement = harness.measurement_contract()
         if manifest.get("measurement") != expected_measurement:
             raise MatrixError(f"{label}: measurement boundary mismatch")
         claims = manifest.get("claims", {})
@@ -392,7 +466,7 @@ def summarize(spec: MatrixSpec, context: RunContext) -> dict:
         for field, value in verified.items():
             if timing.get(field) != value:
                 raise MatrixError(f"{label}: log/manifest timing mismatch for {field}")
-        for field in TIMING_FIELDS:
+        for field in timing_fields:
             value = timing.get(field)
             if not isinstance(value, (int, float)) or value <= 0:
                 raise MatrixError(f"{label}: invalid timing field {field}")
@@ -452,7 +526,9 @@ def summarize(spec: MatrixSpec, context: RunContext) -> dict:
             "calibrated_performance": False,
             "field_evidence": False,
             "causal_region_effect": False,
-            "timing_scope": "application-and-controller-steady-clock",
+            "causal_condition_effect": False,
+            "one_way_latency": False,
+            "timing_scope": harness.TIMING_SCOPE,
         },
     }
 

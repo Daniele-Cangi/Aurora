@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: Type CREATE_AND_DELETE to authorize the fixed 2x2 GCP matrix
+        description: Type CREATE_AND_DELETE to authorize the randomized 2x2 measurement pilot
         required: true
         type: string
 
@@ -32,12 +32,12 @@ jobs:
   raw-host-matrix:
     needs: authorize
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 300
     env:
       AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
       AURORA_RUN_PREFIX: ghm-${{ github.run_id }}-${{ github.run_attempt }}
       AURORA_EVIDENCE_ROOT: raw-host-evidence/matrix-${{ github.run_id }}-${{ github.run_attempt }}
-      AURORA_MATRIX: benchmarks/gcp_raw_region_condition_matrix_v1.json
+      AURORA_MATRIX: benchmarks/gcp_raw_measurement_pilot_v2.json
     steps:
       - uses: actions/checkout@v4
 
@@ -52,7 +52,7 @@ jobs:
           test -n "${GCP_WORKLOAD_IDENTITY_PROVIDER}"
           test -n "${GCP_SERVICE_ACCOUNT}"
 
-      - name: Validate the fixed matrix plan before authentication
+      - name: Validate the fixed randomized pilot before authentication
         shell: bash
         run: |
           python3 tools/gcp_raw_host_matrix.py \
@@ -74,7 +74,7 @@ jobs:
         with:
           project_id: ${{ env.AURORA_GCP_PROJECT }}
 
-      - name: Run and aggregate the authenticated 2x2 matrix
+      - name: Run and aggregate the authenticated randomized 2x2 pilot
         shell: bash
         run: |
           python3 tools/gcp_raw_host_matrix.py \
@@ -117,7 +117,7 @@ jobs:
       AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
       AURORA_RUN_PREFIX: ghm-${{ github.run_id }}-${{ github.run_attempt }}
       AURORA_EVIDENCE_ROOT: raw-host-evidence/matrix-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
-      AURORA_MATRIX: benchmarks/gcp_raw_region_condition_matrix_v1.json
+      AURORA_MATRIX: benchmarks/gcp_raw_measurement_pilot_v2.json
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v3

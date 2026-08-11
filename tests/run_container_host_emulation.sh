@@ -72,6 +72,8 @@ forward_port=47001
 reverse_port=47002
 session_id=${session_id}
 authentication_profile=hmac-sha256-libsodium
+process_protocol_version=2
+measurement_profile=application-controller-steady-v2
 receiver_ready=${receiver_ready}
 startup_timeout_ms=60000
 service_timeout_ms=15000
@@ -85,10 +87,17 @@ grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=15000 '
   "${evidence_dir}/receiver.log"
 grep -q "sender_complete generations=2" "${evidence_dir}/sender.log"
 grep -q "feedback_applied=2" "${evidence_dir}/sender.log"
+grep -q "protocol_version=2" "${evidence_dir}/sender.log"
+grep -Eq "feedback_rtt_samples=([2-9]|[1-9][0-9]+)( |$)" \
+  "${evidence_dir}/sender.log"
+grep -q "terminal_feedback_rtt_samples=2" \
+  "${evidence_dir}/sender.log"
+grep -q "unknown_feedback_echoes=0" "${evidence_dir}/sender.log"
 grep -q "auth_profile=hmac-sha256-libsodium" \
   "${evidence_dir}/sender.log"
 grep -Eq "replay_rejected=[1-9][0-9]*" "${evidence_dir}/sender.log"
 grep -q "receiver_complete generations=2" "${evidence_dir}/receiver.log"
+grep -q "protocol_version=2" "${evidence_dir}/receiver.log"
 grep -q "auth_profile=hmac-sha256-libsodium" \
   "${evidence_dir}/receiver.log"
 grep -Eq "replay_rejected=[1-9][0-9]*" "${evidence_dir}/receiver.log"
