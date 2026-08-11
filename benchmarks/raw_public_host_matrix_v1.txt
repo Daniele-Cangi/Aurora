@@ -1,0 +1,129 @@
+evidence_version=1
+schema=aurora-raw-host-matrix-evidence-v1
+evidence_level=emulation
+result=passed
+collected_at_utc=2026-08-11T14:20:12Z
+provider=google-cloud
+project=aurora-dc-transport-20260810
+workflow_run=https://github.com/Daniele-Cangi/Aurora/actions/runs/31489259370
+workflow_trigger=manual-confirmed-CREATE_AND_DELETE
+source_commit=15c55f99924ed6be726d2a4388f21ffcd222dc52
+run_prefix=ghm-31489259370-1
+matrix_id=region-condition-2x2-v1
+matrix_plan=benchmarks/gcp_raw_region_condition_matrix_v1.json
+cells_expected=4
+cells_observed=4
+samples_per_cell=2
+samples_expected=8
+samples_observed=8
+balanced_complete_factorial=true
+topology=two-cross-region-non-peered-vpcs-public-ipv4
+sender_zone=us-east1-b
+receiver_zones=us-west1-b,europe-west1-b
+condition_profiles=timed-replay-v2,zero-delay-replay-v1
+machine_type=e2-micro
+authentication_profile=hmac-sha256-libsodium
+runtime_binary_sha256=395616ec22db26c4f2360c8413d3fedc75c8134a1ceda0d89fce620bf8dea726
+workload_generation_count=2
+workload_startup_timeout_ms=60000
+workload_service_timeout_ms=15000
+measurement_profile=application-controller-steady-v1
+clock_relationship=independent-unsynchronized-steady-clocks
+provisioning_included=false
+teardown_included=false
+matrix_manifest_artifact_sha256=6882de22ed028d1baf3aee4806cc2ed92c2d03cace89188a60f21a71f82c5ee6
+matrix_manifest_reaggregation_normalized_sha256=6882de22ed028d1baf3aee4806cc2ed92c2d03cace89188a60f21a71f82c5ee6
+matrix_manifest_reaggregation_semantic_match=true
+all_log_sha256_values_revalidated=true
+all_host_binary_sha256_values_match=true
+all_hosts_ntp_synchronized=true
+all_sender_auth_rejected_zero=true
+all_receiver_auth_rejected_zero=true
+all_samples_completed_two_generations=true
+all_samples_applied_two_feedback_reports=true
+all_samples_rejected_replays=true
+all_primary_lifecycle_teardowns_passed=true
+all_primary_sweep_teardowns_passed=true
+all_independent_teardowns_passed=true
+external_post_run_exact_prefix_audit_empty=true
+external_post_cleanup_aurora_prefix_audit_empty=true
+post_cleanup_instances=0
+post_cleanup_disks=0
+post_cleanup_addresses=0
+post_cleanup_snapshots=0
+post_cleanup_firewall_rules=0
+post_cleanup_subnets=0
+post_cleanup_networks=0
+post_cleanup_forwarding_rules=0
+post_cleanup_routers=0
+post_cleanup_vpn_tunnels=0
+post_cleanup_images=0
+post_cleanup_machine_images=0
+historical_aurora_network_objects_removed=6-firewalls,4-subnets,2-networks
+calibrated_performance=false
+field_evidence=false
+causal_region_effect=false
+causal_condition_effect=false
+
+[design]
+The checked-in plan is a complete balanced 2x2 region-pair by impairment-
+profile matrix with two sequential, freshly provisioned VM-pair lifecycles per
+cell. The zero-delay traces preserve the checked-in pass/drop/duplicate action
+sequences of their timed counterparts while setting injected delay to zero.
+The public-Internet paths, run order, cloud host placement, and background load
+were not randomized or controlled.
+
+[cell_timing_summary_ms]
+cell,receiver_zone,condition,count,sender_mean,sender_sample_stddev,receiver_service_mean,receiver_service_sample_stddev,controller_total_mean,controller_total_sample_stddev
+us-east-west-timed,us-west1-b,timed-replay-v2,2,425.500,2.121,1200.000,1.414,6783.323,282.978
+us-east-west-zero-delay,us-west1-b,zero-delay-replay-v1,2,336.000,21.213,201.000,1.414,6195.767,292.399
+us-east-europe-timed,europe-west1-b,timed-replay-v2,2,512.500,2.121,1250.000,1.414,7403.201,26.241
+us-east-europe-zero-delay,europe-west1-b,zero-delay-replay-v1,2,382.000,1.414,252.500,0.707,6132.197,168.953
+
+[sample_timing_ms]
+run_id,receiver_zone,condition,sender_elapsed,receiver_service,controller_receiver_ready,controller_sender_wall,controller_total,sender_replay_rejected,receiver_replay_rejected
+ghm-31489259370-1-c01s01,us-west1-b,timed-replay-v2,427,1201,3204.421,2913.372,6983.418,4,5
+ghm-31489259370-1-c01s02,us-west1-b,timed-replay-v2,424,1199,3003.785,2763.698,6583.227,4,5
+ghm-31489259370-1-c02s01,us-west1-b,zero-delay-replay-v1,351,202,3404.939,2997.266,6402.524,9,5
+ghm-31489259370-1-c02s02,us-west1-b,zero-delay-replay-v1,321,200,3204.654,2784.088,5989.010,9,5
+ghm-31489259370-1-c03s01,europe-west1-b,timed-replay-v2,514,1251,3405.141,3113.267,7384.646,4,5
+ghm-31489259370-1-c03s02,europe-west1-b,timed-replay-v2,511,1249,3605.576,3000.193,7421.757,4,5
+ghm-31489259370-1-c04s01,europe-west1-b,zero-delay-replay-v1,383,253,3004.459,3007.973,6012.729,9,5
+ghm-31489259370-1-c04s02,europe-west1-b,zero-delay-replay-v1,381,252,3405.303,2846.055,6251.664,9,5
+
+[validation]
+The workflow aggregator and an independent local rerun both observed exactly
+four declared cells and eight passed sample manifests with unique run IDs, one
+source commit, one runtime binary hash, the declared factors and workload, and
+successful lifecycle teardown. The regenerated matrix manifest is
+semantically identical to the retained artifact; its normalized SHA-256 is
+also identical after accounting for Windows newline conversion.
+
+Independent validation recomputed every sender and receiver log SHA-256,
+checked both host binary hashes, zones, NTP flags, measurement boundaries and
+trace names, and reparsed completion, feedback, drop, duplicate,
+authentication, replay and injected-delay counters. Timed samples contained
+forward and reverse injected delay; zero-delay samples reported zero injected
+delay while retaining drops, duplicates and replay rejection. Primary and
+independent cleanup manifests each covered all eight exact run IDs with empty
+remaining-resource arrays. Authenticated GCP audits found no exact-run
+resources after the workflow and no Aurora-prefixed Compute resources after
+removal of historical network-only objects.
+
+[interpretation]
+All eight declared emulation lifecycles completed and cleaned up. The retained
+numbers are descriptive observations of these eight runs. In both observed
+region pairs, the timed profile had a higher mean receiver service interval
+than the zero-delay profile; the magnitude is consistent with the declared
+trace difference but this small, sequential campaign does not isolate a
+causal effect. Differences between receiver zones are likewise descriptive
+and must not be treated as a regional ranking.
+
+[limitations]
+There are only two sequential repetitions per cell. Run order was fixed,
+public-Internet routing and cloud placement were not controlled, and the
+independent application/controller clocks do not establish synchronized
+one-way latency. Provisioning, package installation, compilation, SSH setup,
+and teardown are outside the reported timing. No calibrated latency, goodput,
+availability, energy, cost, regional, Internet-wide, physical-host, field, or
+causal performance claim is made.

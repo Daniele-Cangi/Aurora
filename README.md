@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** execute and analyze the checked-in 2×2 raw-routed region/condition matrix, then calibrate the end-to-end transport measurement boundary
+**Primary current task:** calibrate the end-to-end transport measurement boundary and predeclare a randomized, adequately repeated design before any causal region or condition comparison
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -56,7 +56,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
-| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained manual and automated GCP records exercise non-peered cross-region VPCs over public IPv4 with exact-name teardown, including a same-commit N=10 campaign | Real HMAC requires `USE_SODIUM=ON`; the repeated raw-routed campaign establishes controlled reproducibility for one topology, not calibrated timing/throughput evidence, and controlled physical hosts remain future work |
+| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained manual and automated GCP records exercise non-peered cross-region VPCs over public IPv4 with exact-name teardown, including a same-commit N=10 campaign and a balanced 2×2 region/condition matrix | Real HMAC requires `USE_SODIUM=ON`; the matrix has only two sequential repetitions per cell and does not establish calibrated timing, a causal condition effect, or a regional ranking; controlled physical hosts remain future work |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
@@ -290,6 +290,7 @@ benchmarks/
   generation_scheduler_sweep_v2.csv Canonical scheduling-turn regression report
   end_to_end_transport_sweep_v1.csv Canonical complete-stack regression report
   gcp_raw_region_condition_matrix_v1.json Fixed balanced 2×2 GCP matrix
+  raw_public_host_matrix_v1.txt Retained descriptive 2×2 GCP evidence
   process_zero_delay_*_v1.trace Same drop/duplicate actions without added delay
 tools/
   gcp_raw_host_emulation.py Guarded single/campaign lifecycle harness
@@ -544,13 +545,41 @@ overall, and rejects a missing or incompletely torn-down sample. Cleanup runs
 inside each lifecycle, in an unconditional exact-run sweep, and again in an
 independent job.
 
+That exact plan completed from commit
+`15c55f99924ed6be726d2a4388f21ffcd222dc52` in
+[GitHub Actions run 31489259370](https://github.com/Daniele-Cangi/Aurora/actions/runs/31489259370).
+All eight fresh VM-pair lifecycles passed with one runtime binary, two terminal
+generations and two feedback applications per sample, zero authentication
+rejects, and positive replay rejection. The timed samples recorded injected
+delay in both directions; the zero-delay samples recorded none while still
+exercising drops, duplicates and replay rejection.
+
+| Cell (two samples each) | Sender application mean (ms) | Receiver service mean (ms) | Controller total mean (ms) |
+|---|---:|---:|---:|
+| `us-east1-b` → `us-west1-b`, timed | 425.500 | 1200.000 | 6783.323 |
+| `us-east1-b` → `us-west1-b`, zero delay | 336.000 | 201.000 | 6195.767 |
+| `us-east1-b` → `europe-west1-b`, timed | 512.500 | 1250.000 | 7403.201 |
+| `us-east1-b` → `europe-west1-b`, zero delay | 382.000 | 252.500 | 6132.197 |
+
+An independent local aggregation reproduced the retained manifest
+semantically and with the same SHA-256 after newline normalization. A separate
+validator recomputed all 16 transport-log hashes and checked factors, commit,
+binary, workload, clock declarations, host NTP state, trace profiles, transport
+counters and all three teardown layers. Exact-run and final project-wide
+Aurora-prefix audits found no remaining Compute resources after historical
+network-only objects were removed. See
+[`benchmarks/raw_public_host_matrix_v1.txt`](benchmarks/raw_public_host_matrix_v1.txt)
+for the per-sample record and validation boundary.
+
 The matrix output remains emulation evidence with
 `calibrated_performance=false`, `field_evidence=false`, and
 `causal_region_effect=false`. Two repetitions per cell are an execution and
 measurement-boundary check, not adequate statistical power for a general
-regional or availability claim. A dispatch can incur GCP charges.
+regional, condition-effect or availability claim. The fixed run order,
+uncontrolled public paths and unsynchronized clocks also prevent causal or
+one-way-latency interpretation. A dispatch can incur GCP charges.
 
-For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP records supply historical single runs plus a controlled N=10 raw-routed campaign; none is physical-host or calibrated timing evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
+For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale, and the retained GCP records supply historical single runs, a controlled N=10 raw-routed campaign and the completed 2×2 matrix; none is physical-host, calibrated timing or causal regional evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:
 
@@ -805,4 +834,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; retained GCP evidence adds a manual run, the first automated run, and a same-commit N=10 campaign across non-peered cross-region VPCs over public IPv4. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. All 10 controlled lifecycles completed and fully tore down with one reproducible runtime binary. A guarded balanced 2×2 region/condition matrix now makes the next experiment exact and auditable; the next obligation is to execute it, retain its descriptive evidence, and then calibrate the end-to-end timing methodology before physical-host or hardware claims.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. CI demonstrates that path both across container namespaces on one Docker host and across two independent GitHub-hosted Ubuntu VMs over a declared Tailscale path; retained GCP evidence adds a manual run, the first automated run, a same-commit N=10 campaign and a completed balanced 2×2 region/condition matrix across non-peered cross-region VPCs over public IPv4. Receiver readiness is explicit and remote-launch time is separated from the bounded service interval. All eight matrix lifecycles completed with one reproducible runtime binary, and all primary, repeated and independent cleanup checks passed. The result is descriptive emulation evidence, not a calibrated or causal comparison; the next obligation is to calibrate the timing methodology and predeclare a randomized, adequately repeated design before physical-host, hardware, regional or condition-effect claims.
