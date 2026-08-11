@@ -7,6 +7,11 @@ on:
         description: Type CREATE_AND_DELETE to authorize the ephemeral GCP run
         required: true
         type: string
+      samples:
+        description: Number of independent sequential topology samples (1-10)
+        required: true
+        default: 1
+        type: number
 
 permissions:
   contents: read
@@ -25,16 +30,23 @@ jobs:
         shell: bash
         env:
           AURORA_CONFIRM: ${{ inputs.confirm }}
-        run: test "${AURORA_CONFIRM}" = CREATE_AND_DELETE
+          AURORA_SAMPLES: ${{ inputs.samples }}
+        run: |
+          set -euo pipefail
+          test "${AURORA_CONFIRM}" = CREATE_AND_DELETE
+          [[ "${AURORA_SAMPLES}" =~ ^[0-9]+$ ]]
+          test "${AURORA_SAMPLES}" -ge 1
+          test "${AURORA_SAMPLES}" -le 10
 
   raw-host-emulation:
     needs: authorize
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 240
     env:
       AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
-      AURORA_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
-      AURORA_EVIDENCE_DIR: raw-host-evidence/gha-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_RUN_PREFIX: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_EVIDENCE_ROOT: raw-host-evidence/gha-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_SAMPLES: ${{ inputs.samples }}
     steps:
       - uses: actions/checkout@v4
 
@@ -65,32 +77,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 tools/gcp_raw_host_emulation.py \
-            --project "${AURORA_GCP_PROJECT}" \
-            --run-id "${AURORA_RUN_ID}" \
-            --source-commit "${GITHUB_SHA}" \
-            --evidence-dir "${AURORA_EVIDENCE_DIR}" \
-            --execute \
-            --acknowledge-billing-and-teardown
+          for sample in $(seq 1 "${AURORA_SAMPLES}"); do
+            suffix="$(printf '%02d' "${sample}")"
+            python3 tools/gcp_raw_host_emulation.py \
+              --project "${AURORA_GCP_PROJECT}" \
+              --run-id "${AURORA_RUN_PREFIX}-s${suffix}" \
+              --source-commit "${GITHUB_SHA}" \
+              --evidence-dir "${AURORA_EVIDENCE_ROOT}/sample-${suffix}" \
+              --execute \
+              --acknowledge-billing-and-teardown
+          done
+
+      - name: Validate and aggregate campaign evidence
+        shell: bash
+        run: |
+          python3 tools/summarize_gcp_raw_campaign.py \
+            --evidence-root "${AURORA_EVIDENCE_ROOT}" \
+            --expected-samples "${AURORA_SAMPLES}"
 
       - name: Repeat exact-name cleanup and audit
         if: always()
         shell: bash
         run: |
-          python3 tools/gcp_raw_host_emulation.py \
-            --project "${AURORA_GCP_PROJECT}" \
-            --run-id "${AURORA_RUN_ID}" \
-            --source-commit "${GITHUB_SHA}" \
-            --evidence-dir "${AURORA_EVIDENCE_DIR}" \
-            --cleanup-only \
-            --acknowledge-billing-and-teardown
+          status=0
+          for sample in $(seq 1 "${AURORA_SAMPLES}"); do
+            suffix="$(printf '%02d' "${sample}")"
+            python3 tools/gcp_raw_host_emulation.py \
+              --project "${AURORA_GCP_PROJECT}" \
+              --run-id "${AURORA_RUN_PREFIX}-s${suffix}" \
+              --source-commit "${GITHUB_SHA}" \
+              --evidence-dir "${AURORA_EVIDENCE_ROOT}/cleanup-${suffix}" \
+              --cleanup-only \
+              --acknowledge-billing-and-teardown || status=$?
+          done
+          exit "${status}"
 
       - name: Retain transport and teardown evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: authenticated-gcp-raw-host-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.AURORA_EVIDENCE_DIR }}
+          path: ${{ env.AURORA_EVIDENCE_ROOT }}
           if-no-files-found: warn
           retention-days: 14
 
@@ -98,11 +125,12 @@ jobs:
     needs: raw-host-emulation
     if: always() && needs.raw-host-emulation.result != 'skipped'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
     env:
       AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
-      AURORA_RUN_ID: gha-${{ github.run_id }}-${{ github.run_attempt }}
-      AURORA_EVIDENCE_DIR: raw-host-evidence/cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_RUN_PREFIX: gha-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_EVIDENCE_ROOT: raw-host-evidence/cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+      AURORA_SAMPLES: ${{ inputs.samples }}
     steps:
       - uses: actions/checkout@v4
       - uses: google-github-actions/auth@v3
@@ -116,17 +144,22 @@ jobs:
       - name: Independently repeat exact-name cleanup and audit
         shell: bash
         run: |
-          python3 tools/gcp_raw_host_emulation.py \
-            --project "${AURORA_GCP_PROJECT}" \
-            --run-id "${AURORA_RUN_ID}" \
-            --source-commit "${GITHUB_SHA}" \
-            --evidence-dir "${AURORA_EVIDENCE_DIR}" \
-            --cleanup-only \
-            --acknowledge-billing-and-teardown
+          status=0
+          for sample in $(seq 1 "${AURORA_SAMPLES}"); do
+            suffix="$(printf '%02d' "${sample}")"
+            python3 tools/gcp_raw_host_emulation.py \
+              --project "${AURORA_GCP_PROJECT}" \
+              --run-id "${AURORA_RUN_PREFIX}-s${suffix}" \
+              --source-commit "${GITHUB_SHA}" \
+              --evidence-dir "${AURORA_EVIDENCE_ROOT}/sample-${suffix}" \
+              --cleanup-only \
+              --acknowledge-billing-and-teardown || status=$?
+          done
+          exit "${status}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: authenticated-gcp-cleanup-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.AURORA_EVIDENCE_DIR }}
+          path: ${{ env.AURORA_EVIDENCE_ROOT }}
           if-no-files-found: warn
           retention-days: 14

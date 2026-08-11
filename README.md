@@ -469,7 +469,12 @@ an approval rule, and configure these non-secret repository variables:
 - `GCP_SERVICE_ACCOUNT`
 
 Dispatch additionally requires the literal confirmation
-`CREATE_AND_DELETE`. The workflow performs cleanup in the harness `finally`
+`CREATE_AND_DELETE`. Its `samples` input accepts 1 through 10 independent,
+sequential topology lifecycles under one approval. Each sample receives an
+exact run ID, evidence directory, key/session material, VMs and teardown; the
+campaign aggregator rejects missing, failed, mixed-commit, mixed-binary or
+incompletely torn-down samples before reporting timing distributions. The
+workflow performs cleanup in the harness `finally`
 path, in an `always()` step, and again from an independent job. Resource names
 are derived from the GitHub run ID; no wildcard or project deletion is used.
 Only the initial authorization job uses the protected Environment, so its one

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import gcp_raw_host_emulation as harness  # noqa: E402
+import summarize_gcp_raw_campaign as campaign  # noqa: E402
 
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"
@@ -25,6 +26,38 @@ def config(temp: Path, run_id="test-run-001"):
         source_commit=COMMIT,
         repository_url="https://github.com/Daniele-Cangi/Aurora.git",
         evidence_dir=temp / "evidence",
+    )
+
+
+def write_campaign_sample(
+    root: Path,
+    index: int,
+    *,
+    commit: str = COMMIT,
+    teardown: bool = True,
+) -> None:
+    sample = root / f"sample-{index:02d}"
+    sample.mkdir(parents=True, exist_ok=True)
+    value = {
+        "schema": "aurora-raw-host-evidence-v2",
+        "result": "passed",
+        "project": "aurora-raw-test-12345",
+        "source_commit": commit,
+        "topology": "two-cross-region-non-peered-vpcs-public-ipv4",
+        "runtime_binary_sha256": "a" * 64,
+        "authentication_profile": "hmac-sha256-libsodium",
+        "run_id": f"campaign-s{index:02d}",
+        "teardown": {"success": teardown},
+        "timing": {
+            "sender_elapsed_ms": 390 + index * 10,
+            "receiver_service_elapsed_ms": 1180 + index * 10,
+            "controller_receiver_ready_ms": 2900 + index * 100,
+            "controller_sender_wall_ms": 2800 + index * 100,
+            "controller_total_wall_ms": 6500 + index * 100,
+        },
+    }
+    (sample / "manifest.json").write_text(
+        json.dumps(value), encoding="utf-8"
     )
 
 
@@ -151,6 +184,33 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         self.assertEqual(first[1:4], ["compute", "instances", "delete"])
         for command in fake.commands:
             self.assertIn(f"--project={cfg.project}", command)
+
+    def test_campaign_summary_requires_common_identity_and_teardown(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            for index in range(1, 4):
+                write_campaign_sample(root, index)
+            result = campaign.summarize(root, 3)
+            self.assertEqual(result["samples_observed"], 3)
+            self.assertEqual(
+                result["timing"]["sender_elapsed_ms"],
+                {
+                    "count": 3,
+                    "min": 400.0,
+                    "max": 420.0,
+                    "mean": 410.0,
+                    "median": 410.0,
+                    "sample_stddev": 10.0,
+                },
+            )
+
+            write_campaign_sample(root, 2, commit="f" * 40)
+            with self.assertRaises(campaign.CampaignError):
+                campaign.summarize(root, 3)
+
+            write_campaign_sample(root, 2, teardown=False)
+            with self.assertRaises(campaign.CampaignError):
+                campaign.summarize(root, 3)
 
 
 if __name__ == "__main__":
