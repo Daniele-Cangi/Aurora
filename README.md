@@ -42,7 +42,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** validate Measurement Contract V2 across CI topologies, then use its pre-registered 12-lifecycle randomized pilot to estimate variance before designing any powered comparison
+**Primary current task:** use the completed Measurement Contract V2 randomized pilot as a descriptive variance input, then pre-register and power the next comparison before making any regional or condition-effect claim
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -56,7 +56,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
-| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; protocol V2 echoes the authenticated forward sequence so the sender records same-clock feedback RTT summaries; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained GCP records include a same-commit N=10 campaign and a balanced 2×2 matrix | Real HMAC requires `USE_SODIUM=ON`; feedback RTT includes application, impairment, network and polling service and is not network-only latency; the completed matrix has only two sequential repetitions per cell and establishes neither calibrated timing nor a causal or regional ranking |
+| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; protocol V2 echoes the authenticated forward sequence so the sender records same-clock feedback RTT summaries; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained GCP records include a same-commit N=10 campaign, a historical balanced 2×2 matrix and the completed randomized 12-lifecycle Measurement Contract V2 pilot | Real HMAC requires `USE_SODIUM=ON`; feedback RTT includes application, impairment, network and polling service and is not network-only latency; three pilot observations per cell provide descriptive variance inputs, not calibrated timing, adequate power, a causal effect or a regional ranking |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, authenticated feedback-sequence correlation, sender-clock RTT invariants, randomized-pilot integrity, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
@@ -303,6 +303,7 @@ benchmarks/
   gcp_raw_measurement_pilot_v2.json Randomized 12-lifecycle variance pilot
   process_measurement_contract_v2.json Machine-readable clock/boundary rules
   raw_public_host_matrix_v1.txt Retained descriptive 2×2 GCP evidence
+  raw_public_host_measurement_pilot_v2.txt Randomized V2 pilot evidence
   process_zero_delay_*_v1.trace Same drop/duplicate actions without added delay
 include/aurora/emulation/
   Measurement.hpp           Sender-clock feedback RTT correlation
@@ -604,19 +605,40 @@ one-way, network-only, calibrated and causal claims. New raw-host manifests use
 `application-controller-steady-v2` and must carry positive sender-clock RTT
 summaries, exactly two first terminal samples, and zero unknown echoes.
 
-The next cloud experiment is pre-registered but has not been dispatched:
-[`benchmarks/gcp_raw_measurement_pilot_v2.json`](benchmarks/gcp_raw_measurement_pilot_v2.json).
-It contains three randomized complete blocks of all four region/condition
-cells, for 12 fresh VM-pair lifecycles. The checked-in order is derived by
-sorting each block with SHA-256 over the fixed seed, block number and cell ID;
-the plan loader recomputes and rejects any altered order. Its primary
-sender-clock diagnostic is terminal feedback RTT mean. The pilot is for
-measurement-boundary and variance estimation only; it cannot authorize a
-regional ranking, condition effect or powered comparison. The manual workflow
-now points to this plan while retaining the protected approval, literal
-`CREATE_AND_DELETE`, 12-lifecycle safety bound and three cleanup layers.
+The pre-registered Measurement Contract V2 pilot in
+[`benchmarks/gcp_raw_measurement_pilot_v2.json`](benchmarks/gcp_raw_measurement_pilot_v2.json)
+completed from commit `08c3faeb55ed5798d9dcf0823ebdae850854da1c` in
+[GitHub Actions run 31534131277](https://github.com/Daniele-Cangi/Aurora/actions/runs/31534131277).
+All 12 fresh VM-pair lifecycles passed. The plan contained three randomized
+complete blocks of all four region/condition cells; the checked-in SHA-256
+order was revalidated against every sample and both sweep cleanup manifests.
+One V2 runtime binary was used throughout, all 24 log digests were recomputed,
+all log pairs were reparsed, and every sample reported two terminal feedback
+RTT observations with no unknown echo. Lifecycle, primary sweep and
+independent cleanup all passed, and an authenticated exact-prefix GCP audit
+found no remaining resources.
 
-Plan it locally without authentication or resource creation:
+The pre-registered primary diagnostic is terminal feedback RTT mean, measured
+entirely on the sender steady clock:
+
+| Cell (three observations each) | Mean (µs) | Sample standard deviation (µs) |
+|---|---:|---:|
+| `us-east1-b` → `us-west1-b`, timed | 128223.333 | 747.049 |
+| `us-east1-b` → `us-west1-b`, zero delay | 70392.333 | 586.628 |
+| `us-east1-b` → `europe-west1-b`, timed | 149831.000 | 154.971 |
+| `us-east1-b` → `europe-west1-b`, zero delay | 91593.333 | 121.430 |
+
+These are descriptive observations under the declared emulation profiles.
+Three samples per cell are too few to treat the standard deviations as stable
+or to infer a region ranking or injected-condition effect. Randomized blocking
+reduces deterministic order imbalance but does not control public routing,
+host placement or background load. The retained result, per-sample values,
+artifact digests and validation boundary are in
+[`benchmarks/raw_public_host_measurement_pilot_v2.txt`](benchmarks/raw_public_host_measurement_pilot_v2.txt).
+The next cloud study must use these variance estimates to state an effect size,
+power target, stopping rule and analysis plan before dispatch.
+
+Revalidate the checked-in plan locally without authentication or resource creation:
 
 ```bash
 python3 tools/gcp_raw_host_matrix.py \
@@ -627,7 +649,7 @@ python3 tools/gcp_raw_host_matrix.py \
   --evidence-root raw-host-evidence/pilot-plan
 ```
 
-For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale and retries bounded peer discovery through transient control-plane propagation; retained GCP records supply historical single runs, a controlled N=10 raw-routed campaign and the completed 2×2 matrix. Protocol V2 adds sender-clock feedback RTT evidence, but none of these records is physical-host, calibrated timing, network-only latency or causal regional evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
+For two independently managed hosts, provision the same secret 32-byte key file and fresh 16-hex-digit session ID out of band, bind the receiver forward socket and sender feedback socket to `0.0.0.0` (or a specific local interface), and use the peer's IPv4 literal as each destination. Wait for `receiver_ready` before starting the sender. UDP/firewall rules must allow both declared ports, and no DNS resolution is performed. Command-line arguments carry only paths and the non-secret session ID, not the key bytes. The checked-in workflow supplies independent ephemeral-VM evidence over Tailscale and retries bounded peer discovery through transient control-plane propagation; retained GCP records supply historical single runs, a controlled N=10 raw-routed campaign, the completed historical 2×2 matrix and the randomized V2 variance pilot. Protocol V2 adds sender-clock feedback RTT evidence, but none of these records is physical-host, calibrated timing, network-only latency or causal regional evidence. The regression profiles use actual UDP datagrams and process boundaries; they do not inherit the simulator's contact, energy or HAL models.
 
 Record and independently replay safety decisions:
 
@@ -882,4 +904,4 @@ See [`LICENSE`](LICENSE).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Protocol V2 correlates each accepted feedback with an authenticated forward sequence and reports feedback RTT entirely on the sender steady clock. CI demonstrates the transport across container namespaces and two independent GitHub-hosted Ubuntu VMs; retained GCP evidence adds a manual run, an automated run, a same-commit N=10 campaign and a completed balanced 2×2 matrix over non-peered cross-region VPCs. All eight historical matrix lifecycles and all cleanup layers passed. Measurement Contract V2 and a bounded 12-lifecycle randomized pilot are now checked in, but the pilot remains variance-estimation work, not a calibrated or causal comparison. The next obligation is to validate V2 across CI, execute that guarded pilot only with explicit approval, and use its variance to design a powered study before physical-host, hardware, regional or condition-effect claims.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Protocol V2 correlates each accepted feedback with an authenticated forward sequence and reports feedback RTT entirely on the sender steady clock. CI demonstrates the transport across container namespaces and two independent GitHub-hosted Ubuntu VMs; retained GCP evidence adds a manual run, an automated run, a same-commit N=10 campaign, a historical balanced 2×2 matrix and a completed randomized 12-lifecycle Measurement Contract V2 pilot over non-peered cross-region VPCs. All 12 pilot lifecycles and every cleanup layer passed, while the retained per-cell standard deviations remain descriptive estimates from only three observations. The next obligation is to pre-register a powered comparison using those variance inputs before physical-host, hardware, regional or condition-effect claims.
