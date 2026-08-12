@@ -3,8 +3,21 @@ name: authenticated-gcp-raw-host-matrix
 on:
   workflow_dispatch:
     inputs:
+      campaign:
+        description: Select one pre-registered powered-study campaign
+        required: true
+        type: choice
+        options:
+          - powered-v3-campaign-01
+          - powered-v3-campaign-02
+          - powered-v3-campaign-03
+          - powered-v3-campaign-04
+      study_commit:
+        description: Exact 40-character merged commit frozen before campaign 01
+        required: true
+        type: string
       confirm:
-        description: Type CREATE_AND_DELETE to authorize the randomized 2x2 measurement pilot
+        description: Type CREATE_AND_DELETE to authorize this eight-lifecycle campaign
         required: true
         type: string
 
@@ -25,9 +38,12 @@ jobs:
         shell: bash
         env:
           AURORA_CONFIRM: ${{ inputs.confirm }}
+          AURORA_STUDY_COMMIT: ${{ inputs.study_commit }}
         run: |
           set -euo pipefail
           test "${AURORA_CONFIRM}" = CREATE_AND_DELETE
+          [[ "${AURORA_STUDY_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+          test "${AURORA_STUDY_COMMIT}" = "${GITHUB_SHA}"
 
   raw-host-matrix:
     needs: authorize
@@ -37,9 +53,22 @@ jobs:
       AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
       AURORA_RUN_PREFIX: ghm-${{ github.run_id }}-${{ github.run_attempt }}
       AURORA_EVIDENCE_ROOT: raw-host-evidence/matrix-${{ github.run_id }}-${{ github.run_attempt }}
-      AURORA_MATRIX: benchmarks/gcp_raw_measurement_pilot_v2.json
+      AURORA_CAMPAIGN: ${{ inputs.campaign }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve the pre-registered campaign
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${AURORA_CAMPAIGN}" in
+            powered-v3-campaign-01) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_01.json ;;
+            powered-v3-campaign-02) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_02.json ;;
+            powered-v3-campaign-03) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_03.json ;;
+            powered-v3-campaign-04) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_04.json ;;
+            *) exit 64 ;;
+          esac
+          echo "AURORA_MATRIX=${matrix}" >> "${GITHUB_ENV}"
 
       - name: Validate keyless GCP configuration
         shell: bash
@@ -52,7 +81,7 @@ jobs:
           test -n "${GCP_WORKLOAD_IDENTITY_PROVIDER}"
           test -n "${GCP_SERVICE_ACCOUNT}"
 
-      - name: Validate the fixed randomized pilot before authentication
+      - name: Validate the fixed randomized campaign before authentication
         shell: bash
         run: |
           python3 tools/gcp_raw_host_matrix.py \
@@ -74,7 +103,7 @@ jobs:
         with:
           project_id: ${{ env.AURORA_GCP_PROJECT }}
 
-      - name: Run and aggregate the authenticated randomized 2x2 pilot
+      - name: Run and aggregate the authenticated randomized 2x2 campaign
         shell: bash
         run: |
           python3 tools/gcp_raw_host_matrix.py \
@@ -117,9 +146,21 @@ jobs:
       AURORA_GCP_PROJECT: ${{ vars.GCP_RAW_PROJECT_ID }}
       AURORA_RUN_PREFIX: ghm-${{ github.run_id }}-${{ github.run_attempt }}
       AURORA_EVIDENCE_ROOT: raw-host-evidence/matrix-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
-      AURORA_MATRIX: benchmarks/gcp_raw_measurement_pilot_v2.json
+      AURORA_CAMPAIGN: ${{ inputs.campaign }}
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve the pre-registered campaign
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${AURORA_CAMPAIGN}" in
+            powered-v3-campaign-01) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_01.json ;;
+            powered-v3-campaign-02) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_02.json ;;
+            powered-v3-campaign-03) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_03.json ;;
+            powered-v3-campaign-04) matrix=benchmarks/gcp_raw_powered_condition_v3_campaign_04.json ;;
+            *) exit 64 ;;
+          esac
+          echo "AURORA_MATRIX=${matrix}" >> "${GITHUB_ENV}"
       - uses: google-github-actions/auth@v3
         with:
           project_id: ${{ env.AURORA_GCP_PROJECT }}

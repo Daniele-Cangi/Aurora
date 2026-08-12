@@ -1,0 +1,51 @@
+{
+  "schema": "aurora-gcp-raw-matrix-plan-v2",
+  "matrix_id": "powered-condition-v3-campaign-03",
+  "machine_type": "e2-micro",
+  "measurement_contract": "benchmarks/process_measurement_contract_v2.json",
+  "purpose": "powered-condition-study-blocks-05-06",
+  "randomization": {
+    "method": "randomized-complete-blocks-sha256-v1",
+    "seed": "aurora-powered-condition-v3-c03-1701"
+  },
+  "execution_order": [
+    "us-east-europe-timed",
+    "us-east-west-timed",
+    "us-east-west-zero-delay",
+    "us-east-europe-zero-delay",
+    "us-east-europe-zero-delay",
+    "us-east-europe-timed",
+    "us-east-west-zero-delay",
+    "us-east-west-timed"
+  ],
+  "cells": [
+    {
+      "id": "us-east-west-timed",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "us-west1-b",
+      "condition_profile": "timed-replay-v2",
+      "samples": 2
+    },
+    {
+      "id": "us-east-west-zero-delay",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "us-west1-b",
+      "condition_profile": "zero-delay-replay-v1",
+      "samples": 2
+    },
+    {
+      "id": "us-east-europe-timed",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "europe-west1-b",
+      "condition_profile": "timed-replay-v2",
+      "samples": 2
+    },
+    {
+      "id": "us-east-europe-zero-delay",
+      "sender_zone": "us-east1-b",
+      "receiver_zone": "europe-west1-b",
+      "condition_profile": "zero-delay-replay-v1",
+      "samples": 2
+    }
+  ]
+}

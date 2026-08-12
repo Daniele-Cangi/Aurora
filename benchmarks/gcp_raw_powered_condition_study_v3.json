@@ -1,0 +1,123 @@
+{
+  "schema": "aurora-gcp-powered-condition-study-v3",
+  "study_id": "powered-injected-delay-condition-v3",
+  "status": "pre-registered-not-dispatched",
+  "purpose": "confirmatory-declared-impairment-condition-comparison",
+  "pilot_plan": "benchmarks/gcp_raw_measurement_pilot_v2.json",
+  "pilot_evidence": "benchmarks/raw_public_host_measurement_pilot_v2.txt",
+  "measurement_contract": "benchmarks/process_measurement_contract_v2.json",
+  "design": {
+    "type": "randomized-complete-blocks",
+    "block_contents": "all-four-region-condition-cells-on-fresh-vm-pairs",
+    "primary_outcome": "terminal_feedback_rtt_mean_us",
+    "primary_outcome_clock": "sender-steady",
+    "treatment_contrast": "timed-replay-v2-minus-zero-delay-replay-v1",
+    "block_contrast": "mean-of-the-two-within-region-treatment-contrasts",
+    "region_role": "fixed-blocking-factor-not-a-randomized-treatment",
+    "experimental_unit": "fresh-vm-pair-lifecycle",
+    "analysis_unit": "complete-four-cell-block"
+  },
+  "power": {
+    "method": "fixed-seed-normal-paired-t-monte-carlo-v1",
+    "test": "two-sided-one-sample-t-on-block-contrasts",
+    "alpha": 0.05,
+    "target_power": 0.9,
+    "minimum_relevant_effect_us": 5000,
+    "design_standard_deviation_us": 3500,
+    "variance_policy": "design-sd-exceeds-pilot-one-sided-95-percent-sigma-upper-bound",
+    "candidate_blocks": [6, 7, 8],
+    "blocks_required": 8,
+    "monte_carlo_trials": 100000,
+    "monte_carlo_seed": 20260812,
+    "power_gate": "one-sided-95-percent-wilson-lower-bound-at-least-target"
+  },
+  "campaigns": [
+    {
+      "id": "powered-v3-campaign-01",
+      "matrix": "benchmarks/gcp_raw_powered_condition_v3_campaign_01.json",
+      "blocks": 2,
+      "lifecycles": 8
+    },
+    {
+      "id": "powered-v3-campaign-02",
+      "matrix": "benchmarks/gcp_raw_powered_condition_v3_campaign_02.json",
+      "blocks": 2,
+      "lifecycles": 8
+    },
+    {
+      "id": "powered-v3-campaign-03",
+      "matrix": "benchmarks/gcp_raw_powered_condition_v3_campaign_03.json",
+      "blocks": 2,
+      "lifecycles": 8
+    },
+    {
+      "id": "powered-v3-campaign-04",
+      "matrix": "benchmarks/gcp_raw_powered_condition_v3_campaign_04.json",
+      "blocks": 2,
+      "lifecycles": 8
+    }
+  ],
+  "schedule": {
+    "minimum_distinct_utc_dates": 4,
+    "maximum_campaigns_per_utc_date": 1,
+    "minimum_hours_between_campaign_starts": 18,
+    "same_source_commit_required": true,
+    "same_runtime_binary_required": true,
+    "source_commit_binding": "freeze-the-merged-study-commit-before-first-dispatch",
+    "campaign_order": [
+      "powered-v3-campaign-01",
+      "powered-v3-campaign-02",
+      "powered-v3-campaign-03",
+      "powered-v3-campaign-04"
+    ]
+  },
+  "analysis": {
+    "primary_test": "two-sided-one-sample-t-test-of-eight-block-contrasts-against-zero",
+    "primary_confidence_interval": "two-sided-95-percent-student-t",
+    "direction_expected": "timed-greater-than-zero-delay",
+    "minimum_relevant_effect_role": "prospective-power-alternative-not-a-post-hoc-decision-threshold",
+    "scientific_relevance_interpretation": "report-estimate-and-confidence-interval-relative-to-5000-us",
+    "confirmatory_success": "p-below-0.05-and-confidence-interval-excludes-zero-and-point-estimate-is-positive",
+    "region_specific_contrasts": "secondary-descriptive-with-95-percent-intervals-no-multiplicity-adjusted-claim",
+    "region-by-condition-interaction": "exploratory-only",
+    "interim_analysis": false,
+    "early_stopping": false,
+    "primary_outcome_analysis_before-final-freeze": false
+  },
+  "exclusion_and_stopping": {
+    "complete_block_required": true,
+    "exclude_entire_block_if_any_cell_missing_or_invalid": true,
+    "technical_validity": [
+      "declared-source-commit-and-runtime-binary",
+      "measurement-contract-v2",
+      "authenticated-process-protocol-v2",
+      "two-terminal-feedback-samples",
+      "zero-unknown-feedback-echoes",
+      "zero-authentication-rejections",
+      "successful-exact-run-teardown"
+    ],
+    "replacement_blocks": false,
+    "incomplete_study_policy": "stop-and-pre-register-an-amendment-before-collecting-more-data",
+    "final_sample_size": "exactly-eight-valid-complete-blocks",
+    "maximum_planned_lifecycles": 32
+  },
+  "safety": {
+    "workflow_dispatch_only": true,
+    "literal_confirmation": "CREATE_AND_DELETE",
+    "protected_environment": "gcp-raw-emulation",
+    "maximum_lifecycles_per_dispatch": 8,
+    "cleanup_layers": 3,
+    "no_resources_created_by_preregistration": true
+  },
+  "claims": {
+    "calibrated_performance": false,
+    "field_evidence": false,
+    "one_way_latency": false,
+    "network_only_rtt": false,
+    "causal_region_effect": false,
+    "regional_ranking": false,
+    "general_internet_effect": false,
+    "condition_result_before-study-completion": false,
+    "narrow_declared_condition_inference_requires_all_confirmatory_gates": true
+  }
+}
