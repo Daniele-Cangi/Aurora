@@ -1,0 +1,151 @@
+evidence_version=2
+schema=aurora-raw-host-measurement-pilot-v2
+evidence_level=emulation
+result=passed
+collected_at_utc=2026-08-12T00:07:22Z
+provider=google-cloud
+project=aurora-dc-transport-20260810
+workflow_run=https://github.com/Daniele-Cangi/Aurora/actions/runs/31534131277
+workflow_trigger=manual-confirmed-CREATE_AND_DELETE
+source_commit=08c3faeb55ed5798d9dcf0823ebdae850854da1c
+run_prefix=ghm-31534131277-1
+matrix_id=measurement-pilot-region-condition-v2
+matrix_plan=benchmarks/gcp_raw_measurement_pilot_v2.json
+randomization_method=randomized-complete-blocks-sha256-v1
+randomization_seed=aurora-measurement-pilot-v2-1701
+randomized_complete_blocks=3
+cells_expected=4
+cells_observed=4
+samples_per_cell=3
+samples_expected=12
+samples_observed=12
+balanced_complete_factorial=true
+topology=two-cross-region-non-peered-vpcs-public-ipv4
+sender_zone=us-east1-b
+receiver_zones=us-west1-b,europe-west1-b
+condition_profiles=timed-replay-v2,zero-delay-replay-v1
+machine_type=e2-micro
+authentication_profile=hmac-sha256-libsodium
+runtime_binary_sha256=ae129eff764508cbfaf4a8147f15b15afd4ca19749dd55a6a15cd360ade94d36
+workload_generation_count=2
+workload_startup_timeout_ms=60000
+workload_service_timeout_ms=15000
+measurement_profile=application-controller-steady-v2
+process_protocol_version=2
+clock_relationship=independent-unsynchronized-steady-clocks
+primary_sender_clock_metric=terminal_feedback_rtt_mean_us
+provisioning_included=false
+teardown_included=false
+matrix_artifact_digest=sha256:a62faa5a892a5e11ba9016ae96eda1a9c33ac62343c65a60e8b046ddd7669cd2
+cleanup_artifact_digest=sha256:49a5b321297e2f125c636ffa0cad546649727e496ba5d8b77cdf12d370659bb5
+matrix_manifest_artifact_sha256=401da8263340f03145f7c976460d0644c88f0aee9de3fade2c6579a9c7b28a09
+matrix_manifest_local_reaggregation_sha256=3bae73860568986c7e62fad3f0c6fca6309b973e2ad8f8bacd1de381fc8eaf86
+matrix_manifest_reaggregation_semantic_match=true
+all_log_sha256_values_revalidated=true
+all_process_logs_reparsed=true
+all_host_binary_sha256_values_match=true
+all_hosts_ntp_synchronized=true
+all_samples_completed_two_terminal_generations=true
+all_samples_terminal_feedback_samples_two=true
+all_samples_unknown_feedback_echoes_zero=true
+all_samples_rejected_replays=true
+all_primary_lifecycle_teardowns_passed=true
+all_primary_sweep_teardowns_passed=true
+all_independent_teardowns_passed=true
+external_post_run_exact_prefix_audit_empty=true
+post_run_instances=0
+post_run_disks=0
+post_run_addresses=0
+post_run_snapshots=0
+post_run_firewall_rules=0
+post_run_subnets=0
+post_run_networks=0
+calibrated_performance=false
+field_evidence=false
+causal_region_effect=false
+causal_condition_effect=false
+regional_ranking=false
+one_way_latency=false
+
+[design]
+The pre-registered plan consists of three randomized complete blocks. Each
+block contains every region/condition cell exactly once. The plan loader
+recomputes the SHA-256 order from the fixed seed, block number and cell ID and
+rejects an altered order. Every observation used a newly provisioned VM pair
+and exact-run teardown. The campaign was designed to exercise Measurement
+Contract V2 and estimate within-cell variance, not to test a powered regional
+or condition effect.
+
+[execution_order]
+block,position,cell,run_id
+1,1,us-east-west-timed,ghm-31534131277-1-c01s01
+1,2,us-east-europe-zero-delay,ghm-31534131277-1-c04s01
+1,3,us-east-west-zero-delay,ghm-31534131277-1-c02s01
+1,4,us-east-europe-timed,ghm-31534131277-1-c03s01
+2,1,us-east-west-timed,ghm-31534131277-1-c01s02
+2,2,us-east-europe-timed,ghm-31534131277-1-c03s02
+2,3,us-east-europe-zero-delay,ghm-31534131277-1-c04s02
+2,4,us-east-west-zero-delay,ghm-31534131277-1-c02s02
+3,1,us-east-europe-zero-delay,ghm-31534131277-1-c04s03
+3,2,us-east-europe-timed,ghm-31534131277-1-c03s03
+3,3,us-east-west-timed,ghm-31534131277-1-c01s03
+3,4,us-east-west-zero-delay,ghm-31534131277-1-c02s03
+
+[cell_same_clock_summary]
+cell,count,terminal_feedback_rtt_mean_us_mean,terminal_feedback_rtt_mean_us_sample_stddev,sender_elapsed_ms_mean,sender_elapsed_ms_sample_stddev,receiver_service_elapsed_ms_mean,receiver_service_elapsed_ms_sample_stddev
+us-east-west-timed,3,128223.333,747.049,432.000,1.000,1206.667,0.577
+us-east-west-zero-delay,3,70392.333,586.628,344.000,13.528,209.667,0.577
+us-east-europe-timed,3,149831.000,154.971,512.333,1.528,1250.000,1.000
+us-east-europe-zero-delay,3,91593.333,121.430,378.667,1.528,252.333,1.155
+
+[sample_same_clock_timing]
+run_id,terminal_feedback_rtt_mean_us,sender_elapsed_ms,receiver_service_elapsed_ms,sender_replay_rejected,receiver_replay_rejected
+ghm-31534131277-1-c01s01,128447,432,1206,4,5
+ghm-31534131277-1-c04s01,91542,377,253,9,5
+ghm-31534131277-1-c02s01,69822,343,209,9,5
+ghm-31534131277-1-c03s01,149655,511,1250,4,5
+ghm-31534131277-1-c01s02,127390,431,1207,4,5
+ghm-31534131277-1-c03s02,149891,512,1249,4,5
+ghm-31534131277-1-c04s02,91732,380,253,9,5
+ghm-31534131277-1-c02s02,70361,331,210,9,5
+ghm-31534131277-1-c04s03,91506,379,251,9,5
+ghm-31534131277-1-c03s03,149947,514,1251,4,5
+ghm-31534131277-1-c01s03,128833,433,1207,4,5
+ghm-31534131277-1-c02s03,70994,358,210,9,5
+
+[overall_primary_metric]
+metric,count,min,max,mean,median,sample_stddev
+terminal_feedback_rtt_mean_us,12,69822,149947,110010.000,109561.000,32305.916
+
+[validation]
+The workflow completed its authorization, matrix and independent-cleanup jobs
+successfully. An independent local summarize-only run observed the same four
+cells and 12 manifests and reproduced the artifact manifest semantically; the
+raw SHA-256 differs because the local rewrite used the platform newline form.
+A separate validator recomputed all 24 transport-log digests, reparsed all 12
+sender/receiver log pairs, checked the pre-registered randomized order,
+factors, commit, workload, Measurement Contract V2 fields, one runtime binary,
+NTP flags, feedback correlation counters and exact run IDs. It also checked
+every lifecycle teardown plus both sweep cleanup manifests against the same
+randomized order and found every remaining-resource array empty. A separate
+authenticated GCP exact-prefix audit found no resources for this run.
+
+[interpretation]
+The campaign supplies descriptive within-cell variance estimates for the
+declared primary and secondary same-clock metrics. The three primary-metric
+standard deviations per cell range from 121.430 to 747.049 microseconds in
+these observations. With only three observations per cell, those estimates
+are themselves uncertain and are design inputs for a powered follow-up, not
+evidence of a regional ranking or an injected-condition effect.
+
+[limitations]
+There are three observations per cell on one campaign day. Public-Internet
+routing, GCP host placement and background load were not controlled. Blocking
+reduces deterministic order imbalance but does not by itself identify a
+causal effect. Independent application/controller clocks prohibit cross-clock
+subtraction and one-way latency claims. Feedback RTT includes application,
+declared impairment, network and polling service, so it is not network-only
+latency. Provisioning, package installation, compilation, SSH setup and
+teardown are excluded. No calibrated latency, goodput, availability, energy,
+cost, regional, condition-effect, Internet-wide, physical-host, field or
+causal performance claim is made.
