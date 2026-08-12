@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import gcp_raw_host_emulation as harness  # noqa: E402
 import gcp_raw_host_matrix as raw_matrix  # noqa: E402
+import gcp_raw_power_analysis as power_analysis  # noqa: E402
 import summarize_gcp_raw_campaign as campaign  # noqa: E402
 
 
@@ -452,6 +453,61 @@ class GcpRawHostHarnessTests(unittest.TestCase):
             )
         self.assertFalse(result["claims"]["causal_region_effect"])
         self.assertFalse(result["claims"]["causal_condition_effect"])
+
+    def test_powered_condition_study_is_preregistered_and_bounded(self):
+        study_path = (
+            ROOT / "benchmarks" / "gcp_raw_powered_condition_study_v3.json"
+        )
+        study = json.loads(study_path.read_text(encoding="utf-8"))
+        report = power_analysis.evaluate_study(study_path)
+
+        self.assertEqual(
+            report["pilot"]["block_contrasts_us"],
+            [58369.0, 57594.0, 58140.0],
+        )
+        self.assertEqual(report["design"]["required_blocks"], 8)
+        self.assertEqual(report["design"]["total_lifecycles"], 32)
+        self.assertLess(
+            report["simulations"][1]["one_sided_95_percent_wilson_lower"],
+            study["power"]["target_power"],
+        )
+        self.assertGreaterEqual(
+            report["simulations"][2]["one_sided_95_percent_wilson_lower"],
+            study["power"]["target_power"],
+        )
+        self.assertFalse(study["analysis"]["interim_analysis"])
+        self.assertFalse(study["analysis"]["early_stopping"])
+        self.assertFalse(study["exclusion_and_stopping"]["replacement_blocks"])
+        self.assertEqual(study["schedule"]["minimum_distinct_utc_dates"], 4)
+        self.assertEqual(study["safety"]["maximum_lifecycles_per_dispatch"], 8)
+        self.assertTrue(study["claims"]["causal_region_effect"] is False)
+
+        total_samples = 0
+        for campaign in study["campaigns"]:
+            matrix_path = ROOT / campaign["matrix"]
+            spec = raw_matrix.MatrixSpec.load(matrix_path)
+            with tempfile.TemporaryDirectory() as name:
+                plan = raw_matrix.build_plan(spec, matrix_context(Path(name)))
+            self.assertEqual(plan["samples_total"], 8)
+            self.assertEqual(campaign["blocks"], 2)
+            self.assertEqual(campaign["lifecycles"], 8)
+            for start in (0, 4):
+                self.assertEqual(
+                    set(plan["execution_cell_order"][start:start + 4]),
+                    {cell.id for cell in spec.cells},
+                )
+            total_samples += plan["samples_total"]
+        self.assertEqual(total_samples, 32)
+
+        workflow = (
+            ROOT / ".github" / "workflows" / "gcp-raw-host-matrix.yml"
+        ).read_text(encoding="utf-8")
+        for campaign in study["campaigns"]:
+            self.assertIn(campaign["id"], workflow)
+            self.assertIn(campaign["matrix"], workflow)
+        self.assertIn("CREATE_AND_DELETE", workflow)
+        self.assertIn('test "${AURORA_STUDY_COMMIT}" = "${GITHUB_SHA}"', workflow)
+        self.assertNotIn("gcp_raw_measurement_pilot_v2.json", workflow)
 
     def test_matrix_rejects_incomplete_or_unbalanced_factorial(self):
         with tempfile.TemporaryDirectory() as name:
