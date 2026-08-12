@@ -1,5 +1,7 @@
 # Aurora-X
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 > Bio-inspired adaptive transport and cross-layer control research engine for resilient heterogeneous networks.
 
 Aurora-X is an ambitious systems research project exploring a long-term goal:
@@ -939,9 +941,16 @@ Primary metrics:
 
 ## License
 
-Aurora-X is source-available under the repository's custom evaluation, research, and demonstration license. Commercial, industrial, production, redistribution, and modification rights are restricted unless separately authorized.
+Aurora-X's first-party material is open source under the
+[Apache License 2.0](LICENSE). The license permits use, modification and
+redistribution, including commercial use, subject to its attribution, notice
+and other conditions. It also includes an express patent grant from
+contributors for the patent claims covered by their contributions.
 
-See [`LICENSE`](LICENSE).
+Third-party components and optional dependencies retain their own licenses;
+see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Contributions are
+accepted under Apache-2.0 with Developer Certificate of Origin sign-off as
+described in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
