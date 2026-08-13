@@ -1,8 +1,16 @@
-# Aurora-X
-
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+# Aurora
 
 > Bio-inspired adaptive transport and cross-layer control research engine for resilient heterogeneous networks.
+
+<p align="center">
+  <img src="docs/images/aurora-architecture-overview.png" alt="Aurora architecture overview showing adaptive FEC, cross-layer control, and heterogeneous links." width="100%">
+</p>
+
+<p align="center">
+  <em>Adaptive FEC, cross-layer control, and heterogeneous links in one feedback-driven networking system.</em>
+</p>
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 Aurora-X is an ambitious systems research project exploring a long-term goal:
 
@@ -928,14 +936,6 @@ Primary metrics:
 - adaptation settling time;
 - overshoot and oscillation;
 - false panic and delayed recovery rates.
-
----
-
-## Visual concept
-
-<img width="2816" height="1536" alt="Aurora-X conceptual visualization" src="https://github.com/user-attachments/assets/f7726fd8-7921-44e1-9533-207cf81e6458" />
-
-*Conceptual visualization of the Aurora-X research direction. It represents the intended autonomous and resilient network substrate; it is not a diagram of currently deployed hardware.*
 
 ---
 
