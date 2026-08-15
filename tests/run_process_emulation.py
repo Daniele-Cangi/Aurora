@@ -3,6 +3,8 @@ import subprocess
 import sys
 import re
 
+from policy_pilot_evidence import verify_case
+
 
 def free_port(excluded=None):
     while True:
@@ -14,11 +16,12 @@ def free_port(excluded=None):
 
 
 def main():
-    if not 6 <= len(sys.argv) <= 10:
+    if not 6 <= len(sys.argv) <= 11:
         raise SystemExit(
             "usage: run_process_emulation.py <emulator> <forward-trace> "
             "<reverse-trace> <key-file> <session-id-hex> "
-            "[timed|zero-delay] [policy-id workload-id generation-count]"
+            "[timed|zero-delay] [policy-id workload-id generation-count "
+            "[timed-replay-v2|regime-change-v1]]"
         )
 
     executable = sys.argv[1]
@@ -32,6 +35,9 @@ def main():
     policy_id = sys.argv[7] if len(sys.argv) >= 8 else None
     workload_id = sys.argv[8] if len(sys.argv) >= 9 else None
     expected_generations = int(sys.argv[9]) if len(sys.argv) >= 10 else 2
+    condition_id = sys.argv[10] if len(sys.argv) >= 11 else "timed-replay-v2"
+    if condition_id not in ("timed-replay-v2", "regime-change-v1"):
+        raise SystemExit("unknown policy pilot condition")
     if (policy_id is None) != (workload_id is None):
         raise SystemExit("policy-id and workload-id must be supplied together")
     service_timeout_ms = 120000 if workload_id == "policy-pilot-v1" else 15000
@@ -51,6 +57,8 @@ def main():
         ]
     if workload_id == "policy-pilot-v1":
         receiver_command.extend(["60000", str(service_timeout_ms)])
+        if condition_id == "regime-change-v1":
+            receiver_command.extend(["--outage-generation", "2"])
     receiver = subprocess.Popen(
         receiver_command,
         stdout=subprocess.PIPE,
@@ -234,6 +242,12 @@ def main():
             )
             if len(generation_records) != expected_generations:
                 raise RuntimeError("missing per-generation sender outcomes")
+            verify_case(
+                sender.stdout,
+                receiver_stdout,
+                policy_id,
+                condition_id,
+            )
         reverse_delayed = re.search(r"reverse_delayed=(\d+)", receiver_stdout)
         reverse_reordered = re.search(r"reverse_reordered=(\d+)", receiver_stdout)
         reverse_dropped = re.search(r"reverse_dropped=(\d+)", receiver_stdout)

@@ -73,12 +73,14 @@ jobs:
               aurora-process-emulation:ci \
               "process-policy-evidence/timed/${policy}" \
               "${policy}" policy-pilot-v1 8 \
-              process_timed_v2.trace process_feedback_v2.trace
+              process_timed_v2.trace process_feedback_v2.trace \
+              timed-replay-v2
             bash tests/run_container_host_emulation.sh \
               aurora-process-emulation:ci \
-              "process-policy-evidence/feedback-stall/${policy}" \
+              "process-policy-evidence/regime-change/${policy}" \
               "${policy}" policy-pilot-v1 8 \
-              process_zero_delay_forward_v1.trace process_feedback_v2.trace
+              process_timed_v2.trace process_feedback_v2.trace \
+              regime-change-v1 2
           done
       - name: Upload container-host evidence
         if: always()

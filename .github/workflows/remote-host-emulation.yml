@@ -162,16 +162,21 @@ jobs:
           session="$(cat process-session.id)"
           : > receiver.log
           status=0
-          for condition in timed feedback-stall; do
+          for condition in timed-replay-v2 regime-change-v1; do
             for policy in fixed-minimum fixed-class-aware biological-adaptive; do
               echo "remote_case condition=${condition} policy=${policy}" \
                 >> receiver.log
               case_status=0
+              outage_args=()
+              if [ "${condition}" = regime-change-v1 ]; then
+                outage_args=(--outage-generation 2)
+              fi
               timeout 120s remote-bundle/aurora_process_emulation \
                   receiver 0.0.0.0 47001 \
                   "${{ steps.peer.outputs.peer_ip }}" 47002 8 \
                   remote-bundle/process_feedback_v2.trace \
                   process-auth.key "${session}" 60000 120000 \
+                  "${outage_args[@]}" \
                   >> receiver.log 2>&1 || case_status=$?
               if [ "${case_status}" -ne 0 ]; then
                 status="${case_status}"
@@ -207,12 +212,8 @@ jobs:
           sleep 8
           : > sender.log
           status=0
-          for condition in timed feedback-stall; do
-            if [ "${condition}" = timed ]; then
-              forward_trace=remote-bundle/process_timed_v2.trace
-            else
-              forward_trace=remote-bundle/process_zero_delay_forward_v1.trace
-            fi
+          for condition in timed-replay-v2 regime-change-v1; do
+            forward_trace=remote-bundle/process_timed_v2.trace
             for policy in fixed-minimum fixed-class-aware biological-adaptive; do
               sleep 2
               echo "remote_case condition=${condition} policy=${policy}" \
@@ -261,6 +262,7 @@ jobs:
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: aurora-*-evidence
@@ -321,6 +323,9 @@ jobs:
           sender_sha="$(sed -n 's/^binary_sha256=//p' sender-manifest.txt)"
           test -n "${receiver_sha}"
           test "${receiver_sha}" = "${sender_sha}"
+
+          python3 ../tests/policy_pilot_evidence.py \
+            --sender sender.log --receiver receiver.log --combined
 
           tar -czf ../authenticated-remote-host-evidence.tar.gz .
       - uses: actions/upload-artifact@v4

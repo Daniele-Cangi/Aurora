@@ -90,6 +90,7 @@ class ConditionProfile:
     name: str
     forward_trace: str
     reverse_trace: str
+    outage_generation_index: int | None = None
 
     @property
     def forward_name(self) -> str:
@@ -115,6 +116,12 @@ CONDITION_PROFILES = {
         name="feedback-stall-v2",
         forward_trace="benchmarks/process_zero_delay_forward_v1.trace",
         reverse_trace="benchmarks/process_feedback_v2.trace",
+    ),
+    "regime-change-v1": ConditionProfile(
+        name="regime-change-v1",
+        forward_trace="benchmarks/process_timed_v2.trace",
+        reverse_trace="benchmarks/process_feedback_v2.trace",
+        outage_generation_index=2,
     ),
 }
 
@@ -294,6 +301,7 @@ def verify_process_logs(
     expected_policy_id: str | None = None,
     expected_workload_id: str | None = None,
     expected_service_timeout_ms: int = SERVICE_TIMEOUT_MS,
+    expected_outage_generation_index: int | None = None,
 ) -> dict:
     ready = parse_record(receiver_text, "receiver_ready")
     sender = parse_record(sender_text, "sender_complete")
@@ -302,6 +310,15 @@ def verify_process_logs(
         raise HarnessError("receiver startup timeout evidence mismatch")
     if ready.get("service_timeout_ms") != str(expected_service_timeout_ms):
         raise HarnessError("receiver service timeout evidence mismatch")
+    if ready.get("deadline_semantics") != \
+            "descriptor-relative-receiver-steady":
+        raise HarnessError("receiver deadline semantics mismatch")
+    expected_outage = (
+        str(expected_outage_generation_index)
+        if expected_outage_generation_index is not None else "none"
+    )
+    if ready.get("regime_outage_generation_index") != expected_outage:
+        raise HarnessError("receiver regime schedule mismatch")
     if ready.get("auth_profile") != "hmac-sha256-libsodium":
         raise HarnessError("receiver readiness is not authenticated")
     for role, fields in (("sender", sender), ("receiver", receiver)):
@@ -417,6 +434,7 @@ def build_plan(config: Config, names: Names) -> dict:
             "profile": condition.name,
             "forward_trace": condition.forward_name,
             "reverse_trace": condition.reverse_name,
+            "outage_generation_index": condition.outage_generation_index,
         },
         "measurement": measurement_contract(),
         "sender": {
@@ -737,6 +755,11 @@ class GcpRawHarness:
             f"{STARTUP_TIMEOUT_MS} "
             f"{workload_service_timeout_ms(self.config.workload_id)}"
         )
+        if condition.outage_generation_index is not None:
+            receiver_command += (
+                " --outage-generation "
+                f"{condition.outage_generation_index}"
+            )
         sender_command = (
             "set -euo pipefail; session=$(tr -d '\\r\\n' "
             "< /tmp/process-session.id); "
@@ -800,6 +823,8 @@ class GcpRawHarness:
             expected_service_timeout_ms=workload_service_timeout_ms(
                 self.config.workload_id
             ),
+            expected_outage_generation_index=
+                condition.outage_generation_index,
         )
         verified.update(
             {

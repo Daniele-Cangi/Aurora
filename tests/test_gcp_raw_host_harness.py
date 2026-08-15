@@ -143,6 +143,8 @@ def write_matrix_evidence(
         receiver_text = (
             "receiver_ready startup_timeout_ms=60000 "
             "service_timeout_ms=15000 protocol_version=2 "
+            "deadline_semantics=descriptor-relative-receiver-steady "
+            "regime_outage_generation_index=none "
             "auth_profile=hmac-sha256-libsodium\n"
             "receiver_complete generations=2 protocol_version=2 "
             "replay_rejected=5 "
@@ -327,6 +329,8 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         receiver = (
             "receiver_ready startup_timeout_ms=60000 "
             "service_timeout_ms=15000 protocol_version=2 "
+            "deadline_semantics=descriptor-relative-receiver-steady "
+            "regime_outage_generation_index=none "
             "auth_profile=hmac-sha256-libsodium\n"
             "receiver_complete generations=2 protocol_version=2 "
             "replay_rejected=5 "

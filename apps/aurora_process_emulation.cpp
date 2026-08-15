@@ -221,6 +221,16 @@ std::size_t parse_generation_count(const char* value) {
     return static_cast<std::size_t>(parsed);
 }
 
+std::size_t parse_generation_index(const char* value) {
+    std::size_t consumed = 0;
+    const auto parsed = std::stoul(value, &consumed, 10);
+    if (value[consumed] != '\0' || parsed > 1023) {
+        throw std::invalid_argument(
+            "process emulation: invalid generation index");
+    }
+    return static_cast<std::size_t>(parsed);
+}
+
 std::uint64_t parse_timeout_ms(const char* value) {
     std::size_t consumed = 0;
     const auto parsed = std::stoull(value, &consumed, 10);
@@ -285,6 +295,8 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
     aurora::emulation::ReplayWindow reverse_replay_window;
     struct SenderGeneration {
         aurora::transport::GenerationSpawnResult spawned;
+        std::optional<aurora::control::BiologicalFlowState>
+            adaptive_state_at_plan;
         std::optional<aurora::emulation::FeedbackFrame> feedback;
         bool policy_feedback_applied = false;
         std::uint64_t repair_symbols_requested = 0;
@@ -448,6 +460,10 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
             contract,
             "process-emulation-" + std::to_string(generation_index),
             payload, workload.symbol_size, elapsed_ms(started));
+        if (const auto adaptive = std::dynamic_pointer_cast<
+                aurora::control::BiologicalAdaptivePolicy>(policy)) {
+            state.adaptive_state_at_plan = adaptive->flow_state(profile);
+        }
         generations.push_back(std::move(state));
         auto& generation = generations.back();
         const auto& descriptor = generation.spawned.descriptor;
@@ -536,18 +552,57 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         if (has_critical && generation.feedback->report.critical_complete) {
             ++critical_delivered_before_deadline;
         }
+        std::optional<aurora::control::BiologicalFlowState>
+            adaptive_state_after_terminal;
+        if (const auto adaptive = std::dynamic_pointer_cast<
+                aurora::control::BiologicalAdaptivePolicy>(policy)) {
+            adaptive_state_after_terminal = adaptive->flow_state(profile);
+        }
+        const aurora::control::BiologicalFlowState empty_adaptive_state{};
+        const auto& adaptive_at_plan = generation.adaptive_state_at_plan
+            .value_or(empty_adaptive_state);
+        const auto& adaptive_after_terminal = adaptive_state_after_terminal
+            .value_or(empty_adaptive_state);
         std::cout << "sender_generation_complete index=" << generation_index
                   << " generation=" << descriptor.generation_id
                   << " policy_id=" << descriptor.policy_id
                   << " policy_version=" << descriptor.policy_version
                   << " delivered="
                   << (generation.feedback->report.delivered() ? 1 : 0)
+                  << " terminal_failure="
+                  << (generation.feedback->report.terminal_failure() ? 1 : 0)
                   << " critical_before_deadline="
                   << (has_critical &&
                       generation.feedback->report.critical_complete ? 1 : 0)
                   << " source_symbols=" << descriptor.total_source_symbols
                   << " initial_symbols="
                   << generation.spawned.packets.size()
+                  << " critical_protection_factor="
+                  << generation.spawned.protection.critical_overhead
+                  << " important_protection_factor="
+                  << generation.spawned.protection.important_overhead
+                  << " elastic_protection_factor="
+                  << generation.spawned.protection.elastic_overhead
+                  << " adaptive_state_present="
+                  << (generation.adaptive_state_at_plan ? 1 : 0)
+                  << " adaptive_generation_count_at_plan="
+                  << adaptive_at_plan.generation_count
+                  << " adaptive_success_count_at_plan="
+                  << adaptive_at_plan.success_count
+                  << " adaptive_failure_count_at_plan="
+                  << adaptive_at_plan.failure_count
+                  << " adaptive_panic_boost_at_plan="
+                  << adaptive_at_plan.panic_boost
+                  << " adaptive_critical_overhead_at_plan="
+                  << adaptive_at_plan.critical_overhead
+                  << " adaptive_important_overhead_at_plan="
+                  << adaptive_at_plan.important_overhead
+                  << " adaptive_success_count_after_terminal="
+                  << adaptive_after_terminal.success_count
+                  << " adaptive_failure_count_after_terminal="
+                  << adaptive_after_terminal.failure_count
+                  << " adaptive_panic_boost_after_terminal="
+                  << adaptive_after_terminal.panic_boost
                   << " repair_requested="
                   << generation.repair_symbols_requested
                   << " repair_emitted="
@@ -641,7 +696,13 @@ int run_receiver(std::string_view forward_bind_host,
                  const std::string& key_path,
                  std::uint64_t session_id,
                  std::uint64_t startup_timeout_ms,
-                 std::uint64_t service_timeout_ms) {
+                 std::uint64_t service_timeout_ms,
+                 std::optional<std::size_t> outage_generation_index) {
+    if (outage_generation_index &&
+        *outage_generation_index >= expected_generations) {
+        throw std::invalid_argument(
+            "process emulation: outage generation is outside the workload");
+    }
     UdpSocket forward_socket(forward_bind_host, forward_port);
     UdpSocket feedback_socket("0.0.0.0", 0);
     aurora::fec::ExperimentalLtLikeCodec codec;
@@ -651,11 +712,16 @@ int run_receiver(std::string_view forward_bind_host,
     struct ReceiverObservation {
         std::optional<std::uint64_t> critical_completed_at_ms;
         std::uint32_t last_feedback_rank = 0;
+        std::size_t generation_index = 0;
+        std::uint64_t descriptor_received_at_ms = 0;
+        bool regime_outage = false;
+        std::uint64_t suppressed_symbols = 0;
     };
     std::unordered_map<std::string, ReceiverObservation> observations;
     std::uint64_t delivered_generations = 0;
     std::uint64_t critical_generations = 0;
     std::uint64_t critical_delivered_before_deadline = 0;
+    std::uint64_t regime_suppressed_symbols = 0;
     const auto readiness_started = std::chrono::steady_clock::now();
     std::optional<std::chrono::steady_clock::time_point> service_started;
     const auto reverse_trace =
@@ -690,6 +756,11 @@ int run_receiver(std::string_view forward_bind_host,
               << " feedback_port=" << feedback_port
               << " startup_timeout_ms=" << startup_timeout_ms
               << " service_timeout_ms=" << service_timeout_ms
+              << " deadline_semantics=descriptor-relative-receiver-steady"
+              << " regime_outage_generation_index="
+              << (outage_generation_index
+                      ? std::to_string(*outage_generation_index)
+                      : std::string("none"))
               << " auth_profile="
               << aurora::emulation::ProcessAuthenticator::profile()
               << std::endl;
@@ -750,12 +821,13 @@ int run_receiver(std::string_view forward_bind_host,
 
     auto integrate_report = [&] (
         const std::string& generation_id,
-        const aurora::transport::GenerationDescriptor& descriptor,
+        const aurora::transport::GenerationReceiver& receiver,
         const aurora::transport::DecodeReport& report,
         std::uint64_t receiver_now_ms,
         std::uint64_t echoed_forward_sequence,
         bool force_feedback) {
         auto& observation = observations.at(generation_id);
+        const auto& descriptor = receiver.descriptor();
         const bool newly_critical = report.critical_complete &&
             !observation.critical_completed_at_ms;
         if (newly_critical) {
@@ -780,38 +852,59 @@ int run_receiver(std::string_view forward_bind_host,
         send_feedback(feedback);
         send_feedback(feedback);
         if (terminal_generations.insert(generation_id).second) {
-            std::optional<std::uint64_t> critical_deadline_ms;
+            std::optional<std::uint64_t> critical_deadline_duration_ms;
+            std::optional<std::uint64_t> critical_deadline_at_ms;
             for (const auto& segment : descriptor.segments) {
                 if (segment.importance != aurora::transport::
                         TransportImportance::CRITICAL) {
                     continue;
                 }
-                critical_deadline_ms = critical_deadline_ms
-                    ? std::min(*critical_deadline_ms, segment.expires_at_ms)
-                    : segment.expires_at_ms;
+                critical_deadline_duration_ms = critical_deadline_duration_ms
+                    ? std::min(*critical_deadline_duration_ms,
+                               segment.deadline_ms)
+                    : segment.deadline_ms;
+                const auto local_deadline = receiver.segment_expires_at_ms(
+                    segment.segment_id);
+                critical_deadline_at_ms = critical_deadline_at_ms
+                    ? std::min(*critical_deadline_at_ms, local_deadline)
+                    : local_deadline;
             }
             const bool critical_before_deadline =
-                critical_deadline_ms &&
+                critical_deadline_at_ms &&
                 observation.critical_completed_at_ms &&
                 *observation.critical_completed_at_ms <=
-                    *critical_deadline_ms;
+                    *critical_deadline_at_ms;
             if (report.delivered()) ++delivered_generations;
             if (critical_before_deadline) {
                 ++critical_delivered_before_deadline;
             }
-            std::cout << "receiver_generation_complete generation="
-                      << generation_id
+            std::cout << "receiver_generation_complete index="
+                      << observation.generation_index
+                      << " generation=" << generation_id
                       << " bytes=" << report.recovered_bytes
                       << " delivered=" << (report.delivered() ? 1 : 0)
+                      << " terminal_failure="
+                      << (report.terminal_failure() ? 1 : 0)
                       << " critical_before_deadline="
                       << (critical_before_deadline ? 1 : 0)
                       << " critical_completed_at_ms="
                       << observation.critical_completed_at_ms.value_or(0)
-                      << " critical_deadline_ms="
-                      << critical_deadline_ms.value_or(0)
+                      << " descriptor_received_at_ms="
+                      << observation.descriptor_received_at_ms
+                      << " critical_deadline_duration_ms="
+                      << critical_deadline_duration_ms.value_or(0)
+                      << " critical_deadline_at_ms="
+                      << critical_deadline_at_ms.value_or(0)
                       << " terminal_at_ms=" << receiver_now_ms
-                      << " generation_deadline_ms="
-                      << descriptor.expires_at_ms
+                      << " generation_deadline_duration_ms="
+                      << receiver.generation_deadline_duration_ms()
+                      << " generation_deadline_at_ms="
+                      << receiver.generation_expires_at_ms()
+                      << " deadline_clock=receiver-steady-descriptor-relative"
+                      << " regime_outage="
+                      << (observation.regime_outage ? 1 : 0)
+                      << " regime_suppressed_symbols="
+                      << observation.suppressed_symbols
                       << " symbols_observed=" << report.symbols_observed
                       << '\n';
         }
@@ -825,6 +918,13 @@ int run_receiver(std::string_view forward_bind_host,
                   << " critical_generations=" << critical_generations
                   << " critical_delivered_before_deadline="
                   << critical_delivered_before_deadline
+                  << " deadline_semantics=descriptor-relative-receiver-steady"
+                  << " regime_outage_generation_index="
+                  << (outage_generation_index
+                          ? std::to_string(*outage_generation_index)
+                          : std::string("none"))
+                  << " regime_suppressed_symbols="
+                  << regime_suppressed_symbols
                   << " protocol_version="
                   << aurora::emulation::process_protocol_version
                   << " forward_port=" << forward_port
@@ -881,13 +981,26 @@ int run_receiver(std::string_view forward_bind_host,
             if (type == aurora::emulation::FrameType::DESCRIPTOR) {
                 const auto descriptor =
                     aurora::emulation::decode_descriptor(datagram);
+                if (!service_started) {
+                    service_started = std::chrono::steady_clock::now();
+                }
+                const auto receiver_now_ms = elapsed_ms(*service_started);
                 auto found = receivers.find(descriptor.generation_id);
                 if (found == receivers.end()) {
+                    const auto generation_index = receivers.size();
                     found = receivers.emplace(descriptor.generation_id,
                         std::make_unique<aurora::transport::GenerationReceiver>(
-                            descriptor, codec, true)).first;
+                            descriptor, codec, true, receiver_now_ms)).first;
                     observations.emplace(
-                        descriptor.generation_id, ReceiverObservation{});
+                        descriptor.generation_id,
+                        ReceiverObservation{
+                            std::nullopt,
+                            0,
+                            generation_index,
+                            receiver_now_ms,
+                            outage_generation_index &&
+                                generation_index == *outage_generation_index,
+                            0});
                     if (std::any_of(
                             descriptor.segments.begin(),
                             descriptor.segments.end(),
@@ -903,14 +1016,10 @@ int run_receiver(std::string_view forward_bind_host,
                     throw std::invalid_argument(
                         "process emulation: conflicting descriptor");
                 }
-                if (!service_started) {
-                    service_started = std::chrono::steady_clock::now();
-                }
-                const auto receiver_now_ms = elapsed_ms(*service_started);
                 const auto report = found->second->integrate(
                     {}, receiver_now_ms);
                 if (integrate_report(
-                        descriptor.generation_id, descriptor, report,
+                        descriptor.generation_id, *found->second, report,
                         receiver_now_ms, opened->sequence, true)) {
                     return 0;
                 }
@@ -922,12 +1031,19 @@ int run_receiver(std::string_view forward_bind_host,
             const auto packet = aurora::emulation::decode_symbol(datagram);
             const auto found = receivers.find(packet.generation_id);
             if (found == receivers.end()) continue;
-            const auto report =
-                found->second->integrate({packet},
-                                         elapsed_ms(*service_started));
             const auto receiver_now_ms = elapsed_ms(*service_started);
+            auto& observation = observations.at(packet.generation_id);
+            std::vector<::fec::Pkt> accepted_packets;
+            if (observation.regime_outage) {
+                ++observation.suppressed_symbols;
+                ++regime_suppressed_symbols;
+            } else {
+                accepted_packets.push_back(packet);
+            }
+            const auto report = found->second->integrate(
+                accepted_packets, receiver_now_ms);
             if (integrate_report(
-                    packet.generation_id, found->second->descriptor(), report,
+                    packet.generation_id, *found->second, report,
                     receiver_now_ms, opened->sequence, false)) {
                 return 0;
             }
@@ -945,12 +1061,15 @@ int main(int argc, char* argv[]) {
         const bool sender_arguments =
             role == "sender" && (argc == 9 || argc == 13);
         const bool receiver_arguments =
-            role == "receiver" && (argc == 10 || argc == 12);
+            role == "receiver" &&
+            (argc == 10 || argc == 12 || argc == 14);
         const bool sender_runtime_options = argc != 13 ||
             (std::string_view(argv[9]) == "--policy" &&
              std::string_view(argv[11]) == "--workload");
+        const bool receiver_runtime_options = argc != 14 ||
+            std::string_view(argv[12]) == "--outage-generation";
         if ((!sender_arguments && !receiver_arguments) ||
-            !sender_runtime_options) {
+            !sender_runtime_options || !receiver_runtime_options) {
             std::cerr << "usage: aurora_process_emulation "
                          "sender <forward-host> <forward-port> "
                          "<feedback-bind-host> <feedback-port> <trace-file> "
@@ -963,7 +1082,8 @@ int main(int argc, char* argv[]) {
                          "<feedback-host> <feedback-port> <generation-count> "
                          "<reverse-trace-file> <key-file> "
                          "<session-id-hex> [startup-timeout-ms "
-                         "service-timeout-ms]\n";
+                         "service-timeout-ms [--outage-generation "
+                         "<zero-based-index>]]\n";
             return 2;
         }
         SocketRuntime runtime;
@@ -989,14 +1109,18 @@ int main(int argc, char* argv[]) {
         if (role == "receiver") {
             const auto count = parse_generation_count(argv[6]);
             const auto startup_timeout_ms =
-                argc == 12 ? parse_timeout_ms(argv[10]) : 60'000;
+                argc >= 12 ? parse_timeout_ms(argv[10]) : 60'000;
             const auto service_timeout_ms =
-                argc == 12 ? parse_timeout_ms(argv[11]) : 15'000;
+                argc >= 12 ? parse_timeout_ms(argv[11]) : 15'000;
+            const auto outage_generation_index = argc == 14
+                ? std::optional<std::size_t>(parse_generation_index(argv[13]))
+                : std::nullopt;
             return run_receiver(argv[2], forward_port, argv[4],
                                 feedback_port, count, argv[7], argv[8],
                                 aurora::emulation::ProcessAuthenticator::
                                     parse_session_id(argv[9]),
-                                startup_timeout_ms, service_timeout_ms);
+                                startup_timeout_ms, service_timeout_ms,
+                                outage_generation_index);
         }
         throw std::invalid_argument("process emulation: unknown role");
     } catch (const std::exception& error) {

@@ -8,6 +8,8 @@ workload_id="${4:-smoke-v2}"
 generation_count="${5:-2}"
 forward_trace="${6:-process_timed_v2.trace}"
 reverse_trace="${7:-process_feedback_v2.trace}"
+condition_id="${8:-timed-replay-v2}"
+outage_generation_index="${9:-}"
 service_timeout_ms=15000
 sender_timeout_seconds=45
 if [ "${workload_id}" = policy-pilot-v1 ]; then
@@ -33,11 +35,17 @@ trap cleanup EXIT
 docker network create --driver bridge --subnet 172.30.44.0/24 \
   "${network}" >/dev/null
 
+outage_args=()
+if [ -n "${outage_generation_index}" ]; then
+  outage_args=(--outage-generation "${outage_generation_index}")
+fi
+
 docker run --detach --name "${receiver}" \
   --network "${network}" --ip "${receiver_ip}" \
   "${image}" receiver 0.0.0.0 47001 "${sender_ip}" 47002 \
   "${generation_count}" "${reverse_trace}" process_auth_test.key \
   "${session_id}" 60000 "${service_timeout_ms}" \
+  "${outage_args[@]}" \
   >/dev/null
 
 receiver_ready=false
@@ -89,6 +97,8 @@ process_protocol_version=2
 measurement_profile=application-controller-steady-v2
 policy_id=${policy_id}
 workload_id=${workload_id}
+condition_id=${condition_id}
+outage_generation_index=${outage_generation_index:-none}
 generation_count=${generation_count}
 receiver_ready=${receiver_ready}
 startup_timeout_ms=60000
@@ -121,6 +131,14 @@ grep -q "protocol_version=2" "${evidence_dir}/receiver.log"
 grep -q "auth_profile=hmac-sha256-libsodium" \
   "${evidence_dir}/receiver.log"
 grep -Eq "replay_rejected=[1-9][0-9]*" "${evidence_dir}/receiver.log"
+
+if [ "${workload_id}" = policy-pilot-v1 ]; then
+  python3 tests/policy_pilot_evidence.py \
+    --sender "${evidence_dir}/sender.log" \
+    --receiver "${evidence_dir}/receiver.log" \
+    --policy "${policy_id}" \
+    --condition "${condition_id}"
+fi
 
 cat "${evidence_dir}/sender.log"
 cat "${evidence_dir}/receiver.log"

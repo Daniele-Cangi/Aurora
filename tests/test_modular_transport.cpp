@@ -3,6 +3,7 @@
 #include "../include/aurora/emulation/ProcessWorkload.hpp"
 #include "../include/aurora/fec/GenerationCodec.hpp"
 #include "../include/aurora/transport/GenerationManager.hpp"
+#include "../include/aurora/transport/GenerationReceiver.hpp"
 
 #include <cassert>
 #include <cstdint>
@@ -161,6 +162,20 @@ int main() {
     assert(expired.status == aurora::transport::DecodeStatus::EXPIRED);
     assert(policy->observations == 2);
 
+    const auto sender_clock_descriptor = manager.spawn(
+        contract, "receiver-local-deadline", bytes, 32, 10'000);
+    aurora::transport::GenerationReceiver receiver_local_deadline(
+        sender_clock_descriptor.descriptor, *codec, true, 50);
+    const auto locally_expired = receiver_local_deadline.integrate({}, 151);
+    assert(locally_expired.status ==
+           aurora::transport::DecodeStatus::EXPIRED);
+    assert(receiver_local_deadline.deadline_origin_ms() == 50);
+    assert(receiver_local_deadline.generation_deadline_duration_ms() == 100);
+    assert(receiver_local_deadline.generation_expires_at_ms() == 150);
+    assert(locally_expired.segment_reports.size() == 1);
+    assert(locally_expired.segment_reports[0].expires_at_ms == 150);
+    assert(sender_clock_descriptor.descriptor.expires_at_ms == 10'100);
+
     aurora::AlienFountainOrganism compatibility;
     const auto legacy = compatibility.spawn(contract, "compatibility", bytes, 32, 0);
     assert(legacy.descriptor.codec_id == "experimental-lt-like");
@@ -176,6 +191,37 @@ int main() {
     assert(injected_generation.descriptor.codec_id == "test-codec");
     assert(injected_generation.descriptor.policy_id == "injected-fixed");
     assert(!injected.flow_state(injected.build_profile(contract)).has_value());
+
+    aurora::transport::DecodeReport causal_failure;
+    causal_failure.generation_id = "causal-failure";
+    causal_failure.status = aurora::transport::DecodeStatus::EXPIRED;
+    causal_failure.coverage = 0.0;
+    for (const auto policy_id : aurora::control::transport_policy_ids) {
+        auto selected = aurora::control::make_transport_policy(policy_id);
+        const auto selected_profile = selected->profile_for(pilot_contract);
+        const auto before_failure = selected->plan(pilot_contract);
+        selected->observe(selected_profile, causal_failure);
+        const auto after_failure = selected->plan(pilot_contract);
+        if (policy_id == "biological-adaptive") {
+            assert(after_failure.critical_overhead !=
+                       before_failure.critical_overhead ||
+                   after_failure.important_overhead !=
+                       before_failure.important_overhead);
+            const auto biological = std::dynamic_pointer_cast<
+                aurora::control::BiologicalAdaptivePolicy>(selected);
+            const auto state = biological->flow_state(selected_profile);
+            assert(state.has_value());
+            assert(state->failure_count == 1);
+            assert(state->panic_boost == 2);
+        } else {
+            assert(after_failure.critical_overhead ==
+                   before_failure.critical_overhead);
+            assert(after_failure.important_overhead ==
+                   before_failure.important_overhead);
+            assert(after_failure.elastic_overhead ==
+                   before_failure.elastic_overhead);
+        }
+    }
 
     aurora::control::AdaptivePolicyConfig adaptive_config;
     adaptive_config.panic_boost_generations = 3;

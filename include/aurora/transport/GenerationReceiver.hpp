@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -24,9 +25,13 @@ class GenerationReceiver {
 public:
     GenerationReceiver(GenerationDescriptor descriptor,
                        const aurora::fec::GenerationCodec& codec,
-                       bool require_payload_integrity = true)
+                       bool require_payload_integrity = true,
+                       std::optional<std::uint64_t> receiver_deadline_origin_ms =
+                           std::nullopt)
         : descriptor_(std::move(descriptor)),
-          require_payload_integrity_(require_payload_integrity) {
+          require_payload_integrity_(require_payload_integrity),
+          deadline_origin_ms_(receiver_deadline_origin_ms.value_or(
+              descriptor_.created_at_ms)) {
         if (const auto error = descriptor_.validation_error()) {
             throw std::invalid_argument(
                 "generation receiver: invalid descriptor: " + *error);
@@ -42,12 +47,35 @@ public:
                 "generation receiver: codec identity does not match descriptor");
         }
         for (const auto& segment : descriptor_.segments) {
-            segments_.emplace_back(segment, codec, descriptor_.symbol_size);
+            segments_.emplace_back(
+                segment, codec, descriptor_.symbol_size,
+                saturating_add(deadline_origin_ms_, segment.deadline_ms));
         }
     }
 
     [[nodiscard]] const GenerationDescriptor& descriptor() const {
         return descriptor_;
+    }
+
+    [[nodiscard]] std::uint64_t deadline_origin_ms() const {
+        return deadline_origin_ms_;
+    }
+
+    [[nodiscard]] std::uint64_t generation_deadline_duration_ms() const {
+        return descriptor_.expires_at_ms - descriptor_.created_at_ms;
+    }
+
+    [[nodiscard]] std::uint64_t generation_expires_at_ms() const {
+        return saturating_add(
+            deadline_origin_ms_, generation_deadline_duration_ms());
+    }
+
+    [[nodiscard]] std::uint64_t segment_expires_at_ms(
+        std::uint32_t segment_id) const {
+        if (segment_id >= segments_.size()) {
+            throw std::out_of_range("generation receiver: invalid segment id");
+        }
+        return segments_[segment_id].expires_at_ms;
     }
 
     DecodeReport integrate(const std::vector<::fec::Pkt>& received_packets,
@@ -56,7 +84,7 @@ public:
         if (terminal_report_) return *terminal_report_;
 
         auto report = make_report();
-        if (now_ms > descriptor_.expires_at_ms) {
+        if (now_ms > generation_expires_at_ms()) {
             report.status = DecodeStatus::EXPIRED;
             report.failure_reason = "generation expired before full recovery";
             terminal_report_ = finish_timing(std::move(report), started);
@@ -164,14 +192,17 @@ public:
 private:
     struct SegmentState {
         GenerationSegmentDescriptor descriptor;
+        std::uint64_t expires_at_ms = 0;
         std::unique_ptr<aurora::fec::SymbolDecoder> decoder;
         std::optional<std::vector<std::uint8_t>> recovered;
         bool expired = false;
 
         SegmentState(const GenerationSegmentDescriptor& value,
                      const aurora::fec::GenerationCodec& codec,
-                     std::size_t symbol_size)
+                     std::size_t symbol_size,
+                     std::uint64_t local_expires_at_ms)
             : descriptor(value),
+              expires_at_ms(local_expires_at_ms),
               decoder(codec.make_decoder(
                   value.source_symbol_count, symbol_size, value.length)) {}
 
@@ -219,7 +250,7 @@ private:
     void expire_segments(std::uint64_t now_ms) {
         for (auto& segment : segments_) {
             if (!segment.recovered &&
-                now_ms > segment.descriptor.expires_at_ms) {
+                now_ms > segment.expires_at_ms) {
                 segment.expired = true;
             }
         }
@@ -254,7 +285,7 @@ private:
                 rank,
                 segment.descriptor.source_symbol_count,
                 segment.recovered ? segment.descriptor.length : 0,
-                segment.descriptor.expires_at_ms,
+                segment.expires_at_ms,
                 segment.descriptor.target_reliability,
                 segment.recovered.has_value()});
             if (segment.expired) ++report.expired_segments;
@@ -291,8 +322,17 @@ private:
         return report;
     }
 
+    static std::uint64_t saturating_add(std::uint64_t left,
+                                        std::uint64_t right) {
+        if (right > std::numeric_limits<std::uint64_t>::max() - left) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        return left + right;
+    }
+
     GenerationDescriptor descriptor_;
     bool require_payload_integrity_ = true;
+    std::uint64_t deadline_origin_ms_ = 0;
     std::vector<SegmentState> segments_;
     std::unordered_set<PacketKey, PacketKeyHash> seen_packets_;
     std::uint32_t symbols_observed_ = 0;
