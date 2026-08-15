@@ -299,9 +299,9 @@ jobs:
           test "$(grep -c 'sender_complete generations=8' sender.log)" -eq 6
           test "$(grep -c 'feedback_applied=8' sender.log)" -eq 6
           test "$(grep -c 'workload_id=policy-pilot-v1' sender.log)" -eq 6
-          test "$(grep -c 'policy_id=fixed-minimum' sender.log)" -eq 2
-          test "$(grep -c 'policy_id=fixed-class-aware' sender.log)" -eq 2
-          test "$(grep -c 'policy_id=biological-adaptive' sender.log)" -eq 2
+          test "$(grep -c '^sender_complete .*policy_id=fixed-minimum ' sender.log)" -eq 2
+          test "$(grep -c '^sender_complete .*policy_id=fixed-class-aware ' sender.log)" -eq 2
+          test "$(grep -c '^sender_complete .*policy_id=biological-adaptive ' sender.log)" -eq 2
           grep -Eq 'feedback_rtt_samples=([2-9]|[1-9][0-9]+)( |$)' sender.log
           grep -q 'terminal_feedback_rtt_samples=8' sender.log
           grep -q 'unknown_feedback_echoes=0' sender.log
