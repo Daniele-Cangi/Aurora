@@ -162,9 +162,12 @@ jobs:
           session="$(cat process-session.id)"
           : > receiver.log
           status=0
+          case_index=0
           for condition in timed-replay-v2 regime-change-v1; do
             for policy in fixed-minimum fixed-class-aware biological-adaptive; do
-              echo "remote_case condition=${condition} policy=${policy}" \
+              forward_port=$((47001 + case_index * 2))
+              feedback_port=$((forward_port + 1))
+              echo "remote_case condition=${condition} policy=${policy} forward_port=${forward_port} feedback_port=${feedback_port}" \
                 >> receiver.log
               case_status=0
               outage_args=()
@@ -172,8 +175,9 @@ jobs:
                 outage_args=(--outage-generation 2)
               fi
               timeout 120s remote-bundle/aurora_process_emulation \
-                  receiver 0.0.0.0 47001 \
-                  "${{ steps.peer.outputs.peer_ip }}" 47002 8 \
+                  receiver 0.0.0.0 "${forward_port}" \
+                  "${{ steps.peer.outputs.peer_ip }}" \
+                  "${feedback_port}" 8 \
                   remote-bundle/process_feedback_v2.trace \
                   process-auth.key "${session}" 60000 120000 \
                   "${outage_args[@]}" \
@@ -182,6 +186,7 @@ jobs:
                 status="${case_status}"
                 break 2
               fi
+              case_index=$((case_index + 1))
             done
           done
           {
@@ -190,8 +195,8 @@ jobs:
             echo "topology=github-hosted-distinct-vms-over-tailscale"
             echo "own_ip=${{ steps.peer.outputs.own_ip }}"
             echo "peer_ip=${{ steps.peer.outputs.peer_ip }}"
-            echo "forward_port=47001"
-            echo "reverse_port=47002"
+            echo "forward_port_schedule=47001,47003,47005,47007,47009,47011"
+            echo "reverse_port_schedule=47002,47004,47006,47008,47010,47012"
             echo "authentication_profile=hmac-sha256-libsodium"
             echo "process_protocol_version=2"
             echo "measurement_profile=application-controller-steady-v2"
@@ -212,22 +217,27 @@ jobs:
           sleep 8
           : > sender.log
           status=0
+          case_index=0
           for condition in timed-replay-v2 regime-change-v1; do
             forward_trace=remote-bundle/process_timed_v2.trace
             for policy in fixed-minimum fixed-class-aware biological-adaptive; do
+              forward_port=$((47001 + case_index * 2))
+              feedback_port=$((forward_port + 1))
               sleep 2
-              echo "remote_case condition=${condition} policy=${policy}" \
+              echo "remote_case condition=${condition} policy=${policy} forward_port=${forward_port} feedback_port=${feedback_port}" \
                 >> sender.log
               case_status=0
               timeout 120s remote-bundle/aurora_process_emulation \
-                  sender "${{ steps.peer.outputs.peer_ip }}" 47001 0.0.0.0 \
-                  47002 "${forward_trace}" process-auth.key "${session}" \
+                  sender "${{ steps.peer.outputs.peer_ip }}" \
+                  "${forward_port}" 0.0.0.0 "${feedback_port}" \
+                  "${forward_trace}" process-auth.key "${session}" \
                   --policy "${policy}" --workload policy-pilot-v1 \
                   >> sender.log 2>&1 || case_status=$?
               if [ "${case_status}" -ne 0 ]; then
                 status="${case_status}"
                 break 2
               fi
+              case_index=$((case_index + 1))
             done
           done
           {
@@ -236,8 +246,8 @@ jobs:
             echo "topology=github-hosted-distinct-vms-over-tailscale"
             echo "own_ip=${{ steps.peer.outputs.own_ip }}"
             echo "peer_ip=${{ steps.peer.outputs.peer_ip }}"
-            echo "forward_port=47001"
-            echo "reverse_port=47002"
+            echo "forward_port_schedule=47001,47003,47005,47007,47009,47011"
+            echo "reverse_port_schedule=47002,47004,47006,47008,47010,47012"
             echo "authentication_profile=hmac-sha256-libsodium"
             echo "process_protocol_version=2"
             echo "measurement_profile=application-controller-steady-v2"
