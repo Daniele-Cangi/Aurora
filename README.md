@@ -52,7 +52,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 **Stage:** advanced cross-layer research prototype and simulator  
 **Language:** C++20, with optional Python dashboard tooling  
-**Primary current task:** execute the now pre-registered eight-block condition study only after freezing one merged commit and its four-date schedule; no regional, calibrated or field claim is authorized
+**Primary current task:** preserve and review the completed eight-block condition study and its frozen evidence; no regional, calibrated, hardware or field claim is authorized
 
 | Area | Current state | What is already present | Important limitation |
 |---|---|---|---|
@@ -66,7 +66,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 | Energy, channel, RIS and link models | Implemented simulation | Battery state, harvesting, contract-configured simulation-time duty accounting, LBT, fading/PER functions, geometry, RIS phases, RF/IR/backscatter costs | These are research models, not calibrated physical hardware implementations; realtime HAL duty remains a separate path |
 | Hardware abstraction | Interface and mocks | Radio, IR, backscatter, RIS, SPI, I²C and GPIO facade; build provenance labels this path `field-experimental` and keeps `hardware_validated=false` | `FIELD_BUILD` currently still uses stubbed device operations and cannot produce field-evidence claims |
 | Cryptographic payload integrity | Optional real path | Ed25519 through libsodium when explicitly enabled | Standalone builds without libsodium use a deterministic placeholder and must not be treated as secure |
-| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; protocol V2 echoes the authenticated forward sequence so the sender records same-clock feedback RTT summaries; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained GCP records include a same-commit N=10 campaign, a historical balanced 2×2 matrix and the completed randomized 12-lifecycle Measurement Contract V2 pilot | Real HMAC requires `USE_SODIUM=ON`; feedback RTT includes application, impairment, network and polling service and is not network-only latency; three pilot observations per cell remain descriptive, while the powered eight-block follow-up is pre-registered but has not been dispatched |
+| Process emulation | Implemented authenticated independent-VM slice | Separate sender/receiver processes multiplex two generations over direction/session-bound process frames, replay independent forward and reverse impairment traces, reject replays with a reorder-tolerant window, expose independent IPv4 endpoints, and apply monotonic policy feedback; protocol V2 echoes the authenticated forward sequence so the sender records same-clock feedback RTT summaries; CI exercises distinct Docker namespaces and two fresh GitHub-hosted Ubuntu VMs, while retained GCP records include a same-commit N=10 campaign, a historical balanced 2×2 matrix, the randomized 12-lifecycle Measurement Contract V2 pilot and the completed powered eight-block follow-up | Real HMAC requires `USE_SODIUM=ON`; feedback RTT includes application, impairment, network and polling service and is not network-only latency; the powered result supports only the declared emulation-condition contrast and does not authorize regional, calibrated, hardware or field claims |
 | Telemetry and replay | Implemented prototype | Deterministic `(time, phase, sequence)` event kernel, JSONL telemetry, V6 decision traces, V7 simulator event ledgers, canonical contact and V2 generation-arrival schedules, benchmark channel traces, and a strict-vs-fair scheduler harness; paired replay reconstructs causal planning, turns and effective service | The current transport model still schedules a periodic 1000 ms quantum and requires arrivals on that boundary; the fairness bound applies to turns, not effective service; concurrent/mobile nodes and imported emulation traces remain outside the model |
 | Interactive dashboard | Visual monitoring prototype | Dash/Plotly process launcher, health plots, KPI cards, and parameter controls | The engine currently does not reload the configuration file written by the sliders |
 | Automated tests | Registered with CTest and GitHub Actions | Contract semantics, deterministic repair emission, panic bounds, rolling windows, HAL/duty/contact refusal, critical scheduling, proposal/RNG/UCB replay, concurrent scheduled arrivals, simulator/contact event replay, stale-health expiry, supervisory transition replay, channel-trace integrity, process-protocol corruption rejection, authenticated feedback-sequence correlation, sender-clock RTT invariants, randomized-pilot integrity, two-process loopback emulation, isolated baselines, external Wirehair correctness and end-to-end benchmark determinism | Property fuzzing and calibrated hardware tests are still missing |
@@ -648,8 +648,12 @@ reduces deterministic order imbalance but does not control public routing,
 host placement or background load. The retained result, per-sample values,
 artifact digests and validation boundary are in
 [`benchmarks/raw_public_host_measurement_pilot_v2.txt`](benchmarks/raw_public_host_measurement_pilot_v2.txt).
-The powered follow-up is now pre-registered in
+The powered follow-up was pre-registered in
 [`benchmarks/gcp_raw_powered_condition_study_v3.json`](benchmarks/gcp_raw_powered_condition_study_v3.json).
+It completed on the frozen source tag and is documented in
+[`docs/powered-condition-v3-final-results.md`](docs/powered-condition-v3-final-results.md),
+with immutable evidence and analysis assets in the
+[`powered-condition-v3-study-v1` release](https://github.com/Daniele-Cangi/Aurora/releases/tag/powered-condition-v3-study-v1).
 Its experimental unit is one fresh VM-pair lifecycle. Each complete block
 contains all four region/condition cells, and its primary observation is the
 mean of the two within-region `timed − zero-delay` contrasts. Region remains a
@@ -675,6 +679,15 @@ all four must use the same source commit and runtime binary. There is no
 interim outcome analysis, early stopping or automatic replacement of an
 invalid block. If a block is incomplete, collection stops until an amendment
 is pre-registered without inspecting the primary outcome.
+
+All four scheduled campaigns completed with the frozen source and runtime,
+yielding exactly eight valid complete blocks and 32 lifecycles. The final
+preregistered estimate for `timed − zero-delay` was 51.570 ms, with a two-sided
+95% Student-t interval of [50.778, 52.362] ms, `t(7) = 154.024`, and
+`p = 1.283075 × 10^-13`. The registered confirmatory criterion was met. This is
+evidence for the narrow declared emulation condition, not calibrated field
+performance, network-only latency, a causal region effect or a regional
+ranking.
 
 Recompute and validate the power decision without cloud authentication:
 
@@ -954,4 +967,4 @@ described in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Protocol V2 correlates each accepted feedback with an authenticated forward sequence and reports feedback RTT entirely on the sender steady clock. CI demonstrates the transport across container namespaces and two independent GitHub-hosted Ubuntu VMs; retained GCP evidence adds a manual run, an automated run, a same-commit N=10 campaign, a historical balanced 2×2 matrix and a completed randomized 12-lifecycle Measurement Contract V2 pilot over non-peered cross-region VPCs. All 12 pilot lifecycles and every cleanup layer passed. Their variance now feeds a pre-registered eight-block, 32-lifecycle condition study split across four UTC dates; it remains undispatched, protected by explicit billing confirmation and unable to authorize regional, calibrated, hardware or field claims.
+Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Protocol V2 correlates each accepted feedback with an authenticated forward sequence and reports feedback RTT entirely on the sender steady clock. CI demonstrates the transport across container namespaces and two independent GitHub-hosted Ubuntu VMs; retained GCP evidence adds a manual run, an automated run, a same-commit N=10 campaign, a historical balanced 2×2 matrix, a completed randomized 12-lifecycle Measurement Contract V2 pilot and the completed preregistered eight-block, 32-lifecycle condition study over four UTC dates. The final study met its registered confirmatory criterion for the narrow declared emulation-condition contrast; it does not authorize regional, calibrated, hardware or field claims.
