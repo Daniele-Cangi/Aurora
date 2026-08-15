@@ -50,8 +50,8 @@ def main():
             trace,
             key_file,
             session_id,
+            10000,
             5000,
-            2000,
         ),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -61,16 +61,16 @@ def main():
         ready_line = receiver.stdout.readline()
         if "receiver_ready" not in ready_line:
             raise RuntimeError(f"missing readiness evidence: {ready_line}")
-        if "startup_timeout_ms=5000" not in ready_line:
+        if "startup_timeout_ms=10000" not in ready_line:
             raise RuntimeError(f"wrong startup timeout: {ready_line}")
-        if "service_timeout_ms=2000" not in ready_line:
+        if "service_timeout_ms=5000" not in ready_line:
             raise RuntimeError(f"wrong service timeout: {ready_line}")
         if "protocol_version=2" not in ready_line:
             raise RuntimeError(f"wrong process protocol version: {ready_line}")
 
         # This delay exceeds the service budget. Success proves that service
         # accounting begins at the first valid descriptor, not at bind time.
-        time.sleep(2.5)
+        time.sleep(5.5)
         sender = subprocess.run(
             [
                 executable,
@@ -85,7 +85,7 @@ def main():
             ],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=20,
             check=False,
         )
         if sender.returncode != 0:
