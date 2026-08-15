@@ -1,5 +1,6 @@
 #include "../aurora_organism.hpp"
 #include "../include/aurora/control/TransportPolicy.hpp"
+#include "../include/aurora/emulation/ProcessWorkload.hpp"
 #include "../include/aurora/fec/GenerationCodec.hpp"
 #include "../include/aurora/transport/GenerationManager.hpp"
 
@@ -73,6 +74,34 @@ public:
 } // namespace
 
 int main() {
+    for (const auto policy_id : aurora::control::transport_policy_ids) {
+        const auto selected =
+            aurora::control::make_transport_policy(policy_id);
+        assert(selected->id() == policy_id);
+        assert(selected->version() == 1);
+    }
+    bool unknown_policy_rejected = false;
+    try {
+        (void)aurora::control::make_transport_policy("unknown");
+    } catch (const std::invalid_argument&) {
+        unknown_policy_rejected = true;
+    }
+    assert(unknown_policy_rejected);
+
+    const auto pilot_workload =
+        aurora::emulation::process_workload("policy-pilot-v1");
+    assert(pilot_workload.generation_count == 8);
+    assert(pilot_workload.symbol_size == 64);
+    assert(pilot_workload.payload_bytes(0) == 2560);
+    assert(pilot_workload.payload_bytes(7) == 2560);
+    const auto pilot_contract =
+        aurora::transport::TransportContract::parse(
+            std::string(pilot_workload.contract));
+    assert(pilot_contract.segments.size() == 2);
+    assert(pilot_contract.segments[0].importance ==
+           aurora::transport::TransportImportance::CRITICAL);
+    assert(pilot_contract.segments[0].deadline_ms == 10'000);
+
     auto codec = std::make_shared<TaggedCodec>();
     auto policy = std::make_shared<RecordingPolicy>();
     aurora::transport::GenerationManager manager(codec, policy, 2);

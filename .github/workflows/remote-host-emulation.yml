@@ -7,6 +7,7 @@ on:
       - ".github/workflows/remote-host-emulation.yml"
       - "apps/aurora_process_emulation.cpp"
       - "include/aurora/emulation/**"
+      - "include/aurora/control/**"
       - "include/aurora/transport/**"
       - "benchmarks/process_*.trace"
       - "CMakeLists.txt"
@@ -45,6 +46,7 @@ jobs:
           cp build-remote/bin/aurora_process_emulation remote-bundle/
           cp benchmarks/process_timed_v2.trace remote-bundle/
           cp benchmarks/process_feedback_v2.trace remote-bundle/
+          cp benchmarks/process_zero_delay_forward_v1.trace remote-bundle/
           git rev-parse HEAD > remote-bundle/source-commit.txt
           sha256sum remote-bundle/aurora_process_emulation \
             > remote-bundle/binary.sha256
@@ -158,13 +160,25 @@ jobs:
         run: |
           set -euo pipefail
           session="$(cat process-session.id)"
-          set +e
-          timeout 90s remote-bundle/aurora_process_emulation \
-            receiver 0.0.0.0 47001 "${{ steps.peer.outputs.peer_ip }}" \
-            47002 2 remote-bundle/process_feedback_v2.trace \
-            process-auth.key "${session}" > receiver.log 2>&1
-          status=$?
-          set -e
+          : > receiver.log
+          status=0
+          for condition in timed feedback-stall; do
+            for policy in fixed-minimum fixed-class-aware biological-adaptive; do
+              echo "remote_case condition=${condition} policy=${policy}" \
+                >> receiver.log
+              case_status=0
+              timeout 120s remote-bundle/aurora_process_emulation \
+                  receiver 0.0.0.0 47001 \
+                  "${{ steps.peer.outputs.peer_ip }}" 47002 8 \
+                  remote-bundle/process_feedback_v2.trace \
+                  process-auth.key "${session}" 60000 120000 \
+                  >> receiver.log 2>&1 || case_status=$?
+              if [ "${case_status}" -ne 0 ]; then
+                status="${case_status}"
+                break 2
+              fi
+            done
+          done
           {
             echo "evidence_version=1"
             echo "role=receiver"
@@ -178,7 +192,7 @@ jobs:
             echo "measurement_profile=application-controller-steady-v2"
             echo "receiver_ready=$(grep -c '^receiver_ready ' receiver.log)"
             echo "startup_timeout_ms=60000"
-            echo "service_timeout_ms=15000"
+            echo "service_timeout_ms=120000"
             echo "source_commit=$(cat remote-bundle/source-commit.txt)"
             echo "binary_sha256=$(cut -d ' ' -f 1 remote-bundle/binary.sha256)"
             echo "exit_status=${status}"
@@ -191,13 +205,30 @@ jobs:
           set -euo pipefail
           session="$(cat process-session.id)"
           sleep 8
-          set +e
-          timeout 70s remote-bundle/aurora_process_emulation \
-            sender "${{ steps.peer.outputs.peer_ip }}" 47001 0.0.0.0 \
-            47002 remote-bundle/process_timed_v2.trace \
-            process-auth.key "${session}" > sender.log 2>&1
-          status=$?
-          set -e
+          : > sender.log
+          status=0
+          for condition in timed feedback-stall; do
+            if [ "${condition}" = timed ]; then
+              forward_trace=remote-bundle/process_timed_v2.trace
+            else
+              forward_trace=remote-bundle/process_zero_delay_forward_v1.trace
+            fi
+            for policy in fixed-minimum fixed-class-aware biological-adaptive; do
+              sleep 2
+              echo "remote_case condition=${condition} policy=${policy}" \
+                >> sender.log
+              case_status=0
+              timeout 120s remote-bundle/aurora_process_emulation \
+                  sender "${{ steps.peer.outputs.peer_ip }}" 47001 0.0.0.0 \
+                  47002 "${forward_trace}" process-auth.key "${session}" \
+                  --policy "${policy}" --workload policy-pilot-v1 \
+                  >> sender.log 2>&1 || case_status=$?
+              if [ "${case_status}" -ne 0 ]; then
+                status="${case_status}"
+                break 2
+              fi
+            done
+          done
           {
             echo "evidence_version=1"
             echo "role=sender"
@@ -259,16 +290,20 @@ jobs:
             receiver-manifest.txt
           grep -q '^measurement_profile=application-controller-steady-v2$' \
             sender-manifest.txt
-          grep -q '^receiver_ready=1$' receiver-manifest.txt
+          grep -q '^receiver_ready=6$' receiver-manifest.txt
           grep -q '^startup_timeout_ms=60000$' receiver-manifest.txt
-          grep -q '^service_timeout_ms=15000$' receiver-manifest.txt
-          grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=15000 ' \
+          grep -q '^service_timeout_ms=120000$' receiver-manifest.txt
+          grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=120000 ' \
             receiver.log
-          grep -q 'receiver_complete generations=2' receiver.log
-          grep -q 'sender_complete generations=2' sender.log
-          grep -q 'feedback_applied=2' sender.log
+          test "$(grep -c 'receiver_complete generations=8' receiver.log)" -eq 6
+          test "$(grep -c 'sender_complete generations=8' sender.log)" -eq 6
+          test "$(grep -c 'feedback_applied=8' sender.log)" -eq 6
+          test "$(grep -c 'workload_id=policy-pilot-v1' sender.log)" -eq 6
+          test "$(grep -c 'policy_id=fixed-minimum' sender.log)" -eq 2
+          test "$(grep -c 'policy_id=fixed-class-aware' sender.log)" -eq 2
+          test "$(grep -c 'policy_id=biological-adaptive' sender.log)" -eq 2
           grep -Eq 'feedback_rtt_samples=([2-9]|[1-9][0-9]+)( |$)' sender.log
-          grep -q 'terminal_feedback_rtt_samples=2' sender.log
+          grep -q 'terminal_feedback_rtt_samples=8' sender.log
           grep -q 'unknown_feedback_echoes=0' sender.log
           grep -q 'auth_profile=hmac-sha256-libsodium' receiver.log
           grep -q 'auth_profile=hmac-sha256-libsodium' sender.log

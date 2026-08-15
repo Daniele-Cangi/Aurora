@@ -1,0 +1,139 @@
+{
+  "schema": "aurora-gcp-raw-host-policy-pilot-plan-v1",
+  "pilot_id": "raw-host-policy-pilot-v1",
+  "purpose": "bounded-policy-discrimination-pilot",
+  "confirmatory": false,
+  "topology": {
+    "id": "us-east1-to-us-west1-public-raw-host-v1",
+    "kind": "two-cross-region-non-peered-vpcs-public-ipv4",
+    "sender_zone": "us-east1-b",
+    "receiver_zone": "us-west1-b",
+    "machine_type": "e2-micro"
+  },
+  "workload": {
+    "id": "policy-pilot-v1",
+    "generation_count": 8,
+    "service": "sequential-plan-after-terminal-feedback",
+    "symbol_size_bytes": 64,
+    "payload_bytes_per_generation": 2560,
+    "contract": "deadline:30s;reliability:0.99;duty:0.1;rf:on;optical:on;backscatter:on;ris:4;importance:elastic;reserve:0.05;max_repair_amplification:4;min_critical_overhead:1.5;segment:0-1023,critical,10s,0.999;segment:1024-2047,important,20s,0.99;seed:1701"
+  },
+  "policies": [
+    {
+      "id": "fixed-minimum",
+      "version": 1,
+      "critical_overhead": 1.0,
+      "important_overhead": 1.0,
+      "elastic_overhead": 1.0,
+      "contract_floors_and_caps_apply": true
+    },
+    {
+      "id": "fixed-class-aware",
+      "version": 1,
+      "critical_overhead": 2.5,
+      "important_overhead": 1.5,
+      "elastic_overhead": 1.1,
+      "contract_floors_and_caps_apply": true
+    },
+    {
+      "id": "biological-adaptive",
+      "version": 1,
+      "alpha_up": 0.1,
+      "alpha_down": 0.02,
+      "panic_boost_generations": 3,
+      "gland_base_critical_overhead": 2.5,
+      "gland_base_important_overhead": 1.5,
+      "contract_floors_and_caps_apply": true
+    }
+  ],
+  "conditions": [
+    {
+      "id": "timed-replay-v2",
+      "description": "periodic forward loss, duplication and delay with adverse delayed reverse feedback",
+      "forward_trace": "benchmarks/process_timed_v2.trace",
+      "forward_trace_sha256": "b08cda6df8e6d8826db728b91bdfd9eac7974276bfc82927b929f59b59da25e5",
+      "reverse_trace": "benchmarks/process_feedback_v2.trace",
+      "reverse_trace_sha256": "a502ba8f93721d1dd8c2284ae5554713858c20f5747d116787ccdcf4dd9d9c05"
+    },
+    {
+      "id": "feedback-stall-v2",
+      "description": "periodic forward loss and duplication without configured forward delay, plus the same adverse delayed reverse feedback",
+      "forward_trace": "benchmarks/process_zero_delay_forward_v1.trace",
+      "forward_trace_sha256": "422c742b5c57833e6cdcc60d68f1441fae9cc6fcf724ccab138a552a412e667c",
+      "reverse_trace": "benchmarks/process_feedback_v2.trace",
+      "reverse_trace_sha256": "a502ba8f93721d1dd8c2284ae5554713858c20f5747d116787ccdcf4dd9d9c05"
+    }
+  ],
+  "blocks": 2,
+  "cells": [
+    {"id": "timed-fixed-minimum", "condition": "timed-replay-v2", "policy": "fixed-minimum"},
+    {"id": "timed-fixed-class-aware", "condition": "timed-replay-v2", "policy": "fixed-class-aware"},
+    {"id": "timed-biological-adaptive", "condition": "timed-replay-v2", "policy": "biological-adaptive"},
+    {"id": "feedback-stall-fixed-minimum", "condition": "feedback-stall-v2", "policy": "fixed-minimum"},
+    {"id": "feedback-stall-fixed-class-aware", "condition": "feedback-stall-v2", "policy": "fixed-class-aware"},
+    {"id": "feedback-stall-biological-adaptive", "condition": "feedback-stall-v2", "policy": "biological-adaptive"}
+  ],
+  "randomization": {
+    "method": "randomized-complete-blocks-sha256-v1",
+    "seed": "aurora-raw-policy-pilot-v1-1701"
+  },
+  "execution_order": [
+    "feedback-stall-biological-adaptive",
+    "timed-fixed-minimum",
+    "timed-biological-adaptive",
+    "feedback-stall-fixed-minimum",
+    "timed-fixed-class-aware",
+    "feedback-stall-fixed-class-aware",
+    "timed-biological-adaptive",
+    "feedback-stall-fixed-class-aware",
+    "feedback-stall-fixed-minimum",
+    "timed-fixed-class-aware",
+    "feedback-stall-biological-adaptive",
+    "timed-fixed-minimum"
+  ],
+  "measurement_schema": {
+    "path": "benchmarks/raw_host_policy_pilot_measurement_v1.json",
+    "sha256": "85206a27988fd296299264e0b0e7d9a58cd2c291f1b2975d1b5ca073e4af872e"
+  },
+  "execution": {
+    "fresh_vm_pair_per_cell_block": true,
+    "lifecycle_count": 12,
+    "same_source_commit": true,
+    "same_runtime_binary_sha256_across_treatments": true,
+    "policy_selection": "sender-runtime-argument",
+    "default_mode": "plan-only",
+    "reviewed_source_commit_required_for_execute": true
+  },
+  "analysis": {
+    "mode": "descriptive-policy-discrimination",
+    "primary_outcome": "critical_delivery_before_deadline",
+    "secondary_outcomes": [
+      "total_delivery",
+      "initial_redundancy",
+      "repair_symbols_emitted",
+      "wire_symbol_datagrams",
+      "terminal_feedback_rtt_mean_us"
+    ],
+    "policy_superiority_test": false,
+    "early_stopping": false,
+    "adaptive_policy_is_design_target": false,
+    "confirmatory_followup_requires_new_freeze": true
+  },
+  "safety": {
+    "maximum_lifecycles": 12,
+    "execute_requires_billing_and_teardown_acknowledgement": true,
+    "execute_requires_reviewed_source_commit_acknowledgement": true,
+    "vm_max_run_duration": "30m",
+    "cleanup_between_lifecycles": true,
+    "replacement_lifecycles": false,
+    "project_deletion": false
+  },
+  "claims": {
+    "confirmatory": false,
+    "calibrated_performance": false,
+    "field_evidence": false,
+    "one_way_latency": false,
+    "network_only_feedback_rtt": false,
+    "policy_superiority": false
+  }
+}

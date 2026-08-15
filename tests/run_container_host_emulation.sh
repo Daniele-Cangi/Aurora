@@ -3,6 +3,17 @@ set -euo pipefail
 
 image="${1:-aurora-process-emulation:local}"
 evidence_dir="${2:-process-host-evidence}"
+policy_id="${3:-biological-adaptive}"
+workload_id="${4:-smoke-v2}"
+generation_count="${5:-2}"
+forward_trace="${6:-process_timed_v2.trace}"
+reverse_trace="${7:-process_feedback_v2.trace}"
+service_timeout_ms=15000
+sender_timeout_seconds=45
+if [ "${workload_id}" = policy-pilot-v1 ]; then
+  service_timeout_ms=120000
+  sender_timeout_seconds=180
+fi
 run_suffix="${GITHUB_RUN_ID:-$$}"
 network="aurora-process-${run_suffix}"
 receiver="aurora-receiver-${run_suffix}"
@@ -24,8 +35,9 @@ docker network create --driver bridge --subnet 172.30.44.0/24 \
 
 docker run --detach --name "${receiver}" \
   --network "${network}" --ip "${receiver_ip}" \
-  "${image}" receiver 0.0.0.0 47001 "${sender_ip}" 47002 2 \
-  process_feedback_v2.trace process_auth_test.key "${session_id}" \
+  "${image}" receiver 0.0.0.0 47001 "${sender_ip}" 47002 \
+  "${generation_count}" "${reverse_trace}" process_auth_test.key \
+  "${session_id}" 60000 "${service_timeout_ms}" \
   >/dev/null
 
 receiver_ready=false
@@ -46,10 +58,11 @@ if [ "${receiver_ready}" != true ]; then
 fi
 
 set +e
-timeout 45s docker run --name "${sender}" \
+timeout "${sender_timeout_seconds}s" docker run --name "${sender}" \
   --network "${network}" --ip "${sender_ip}" \
   "${image}" sender "${receiver_ip}" 47001 0.0.0.0 47002 \
-  process_timed_v2.trace process_auth_test.key "${session_id}" \
+  "${forward_trace}" process_auth_test.key "${session_id}" \
+  --policy "${policy_id}" --workload "${workload_id}" \
   >"${evidence_dir}/sender.log" 2>&1
 sender_status=$?
 set -e
@@ -74,29 +87,36 @@ session_id=${session_id}
 authentication_profile=hmac-sha256-libsodium
 process_protocol_version=2
 measurement_profile=application-controller-steady-v2
+policy_id=${policy_id}
+workload_id=${workload_id}
+generation_count=${generation_count}
 receiver_ready=${receiver_ready}
 startup_timeout_ms=60000
-service_timeout_ms=15000
+service_timeout_ms=${service_timeout_ms}
 sender_exit=${sender_status}
 receiver_exit=${receiver_status}
 EOF
 
 test "${sender_status}" -eq 0
 test "${receiver_status}" -eq 0
-grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=15000 ' \
+grep -q "^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=${service_timeout_ms} " \
   "${evidence_dir}/receiver.log"
-grep -q "sender_complete generations=2" "${evidence_dir}/sender.log"
-grep -q "feedback_applied=2" "${evidence_dir}/sender.log"
+grep -q "sender_complete generations=${generation_count}" \
+  "${evidence_dir}/sender.log"
+grep -q "policy_id=${policy_id}" "${evidence_dir}/sender.log"
+grep -q "workload_id=${workload_id}" "${evidence_dir}/sender.log"
+grep -q "feedback_applied=${generation_count}" "${evidence_dir}/sender.log"
 grep -q "protocol_version=2" "${evidence_dir}/sender.log"
 grep -Eq "feedback_rtt_samples=([2-9]|[1-9][0-9]+)( |$)" \
   "${evidence_dir}/sender.log"
-grep -q "terminal_feedback_rtt_samples=2" \
+grep -q "terminal_feedback_rtt_samples=${generation_count}" \
   "${evidence_dir}/sender.log"
 grep -q "unknown_feedback_echoes=0" "${evidence_dir}/sender.log"
 grep -q "auth_profile=hmac-sha256-libsodium" \
   "${evidence_dir}/sender.log"
 grep -Eq "replay_rejected=[1-9][0-9]*" "${evidence_dir}/sender.log"
-grep -q "receiver_complete generations=2" "${evidence_dir}/receiver.log"
+grep -q "receiver_complete generations=${generation_count}" \
+  "${evidence_dir}/receiver.log"
 grep -q "protocol_version=2" "${evidence_dir}/receiver.log"
 grep -q "auth_profile=hmac-sha256-libsodium" \
   "${evidence_dir}/receiver.log"

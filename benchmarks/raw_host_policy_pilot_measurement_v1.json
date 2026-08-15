@@ -1,0 +1,80 @@
+{
+  "schema": "aurora-raw-host-policy-pilot-measurement-v1",
+  "purpose": "bounded-policy-discrimination-pilot",
+  "unit_of_analysis": "fresh-vm-pair-lifecycle",
+  "clock_relationship": "independent-unsynchronized-steady-clocks",
+  "outcomes": {
+    "critical_delivery_before_deadline": {
+      "type": "count-over-critical-generations",
+      "source": "receiver-steady-clock",
+      "definition": "critical segment completed no later than its descriptor expiry"
+    },
+    "total_delivery": {
+      "type": "count-over-generations",
+      "source": "authenticated terminal decode report",
+      "definition": "complete payload recovered with required integrity before generation expiry"
+    },
+    "redundancy": {
+      "fields": [
+        "source_symbols",
+        "initial_symbols",
+        "wire_symbol_datagrams"
+      ],
+      "derived": "initial_symbols/source_symbols"
+    },
+    "repair": {
+      "fields": [
+        "repair_symbols_requested",
+        "repair_symbols_emitted"
+      ]
+    },
+    "feedback_rtt": {
+      "clock": "sender-steady",
+      "fields": [
+        "feedback_rtt_samples",
+        "feedback_rtt_min_us",
+        "feedback_rtt_mean_us",
+        "feedback_rtt_max_us",
+        "terminal_feedback_rtt_samples",
+        "terminal_feedback_rtt_min_us",
+        "terminal_feedback_rtt_mean_us",
+        "terminal_feedback_rtt_max_us"
+      ],
+      "includes": [
+        "forward-network-service",
+        "receiver-processing",
+        "configured-reverse-impairment",
+        "reverse-network-service",
+        "sender-polling"
+      ]
+    }
+  },
+  "required_identity": [
+    "source_commit",
+    "runtime_binary_sha256",
+    "authentication_profile",
+    "topology",
+    "workload_id",
+    "forward_trace_sha256",
+    "reverse_trace_sha256"
+  ],
+  "analysis": {
+    "mode": "descriptive-policy-discrimination",
+    "report_each_lifecycle": true,
+    "report_each_policy_condition_cell": true,
+    "report_blockwise_contrasts": true,
+    "superiority_test": false,
+    "power_claim": false,
+    "adaptive_policy_is_design_target": false,
+    "confirmatory_followup_requires_new_freeze": true
+  },
+  "prohibitions": {
+    "cross_clock_subtraction": true,
+    "one_way_latency_claim": true,
+    "network_only_rtt_claim": true,
+    "post_hoc_workload_change": true,
+    "post_hoc_trace_change": true,
+    "post_hoc_policy_parameter_change": true,
+    "early_stopping_for_policy_ranking": true
+  }
+}

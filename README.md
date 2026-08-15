@@ -155,7 +155,7 @@ Secure claims apply only to builds explicitly using the real cryptographic backe
 
 ### 7. Process-separated transport emulation
 
-`aurora_process_emulation` runs sender and receiver roles in separate OS processes. The sender multiplexes two concurrent generations by interleaving their canonical descriptors and FEC symbols on one IPv4 UDP destination. The receiver keeps decoder-only state keyed by generation identity, without access to either source payload, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. Each successful terminal feedback is applied exactly once to the adaptive policy. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts. CI exercises them in distinct Docker network namespaces and on independent GitHub-hosted VMs over Tailscale; a retained manual record additionally exercises public IPv4 routing between non-peered GCP VPCs in different regions.
+`aurora_process_emulation` runs sender and receiver roles in separate OS processes. Its default smoke workload serves two generations; the fixed policy-pilot workload serves eight generations sequentially so authenticated terminal feedback is applied before the next policy plan. The receiver keeps decoder-only state keyed by generation identity, without access to source payloads, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. `--policy` selects `fixed-minimum`, `fixed-class-aware` or `biological-adaptive` at runtime in the same binary; `--workload` selects the frozen workload. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts. CI exercises them in distinct Docker network namespaces and on independent GitHub-hosted VMs over Tailscale; retained records additionally exercise public IPv4 routing between non-peered GCP VPCs in different regions.
 
 Process protocol V2 adds `echoed_forward_sequence` to authenticated feedback.
 The sender records the first wire emission of each authenticated forward
@@ -173,7 +173,7 @@ Descriptor, symbol and feedback payloads retain their bounded versioned checksum
 
 With `USE_SODIUM=OFF`, the same envelope and replay invariants use a deterministic placeholder tagged `insecure-test-placeholder-mac`. That profile is a regression oracle only and is not authentication. CI includes a separate Ubuntu `secure-auth` job that installs libsodium and runs the authentication unit test plus the complete two-process path under the real backend. The checked-in key is public test material and must never be reused as a deployment secret.
 
-The current harness uses two generations and independent replayable pass/drop/duplicate/delay profiles. The container-host job builds a libsodium-enabled image, runs sender and receiver under distinct network namespaces and IPv4 addresses, and retains their logs plus a topology/authentication manifest as a CI artifact. It proves authenticated framing, replay rejection, process/channel separation, deterministic bidirectional multiplexing and release ordering across that declared bridge topology. Because both containers still share one runner and Docker bridge, it does not prove Internet behaviour, independent-machine success, calibrated timing or field performance.
+The smoke harness uses two generations; the policy pilot uses the frozen eight-generation segmented workload. The container-host job builds one libsodium-enabled image, runs all six policy-condition cells with that image under distinct network namespaces and IPv4 addresses, and retains logs plus topology/authentication manifests. It proves authenticated framing, replay rejection, process/channel separation, runtime policy selection and release ordering across that declared bridge topology. Because both containers still share one runner and Docker bridge, it does not prove Internet behaviour, independent-machine success, calibrated timing or field performance.
 
 ---
 
@@ -688,6 +688,18 @@ preregistered estimate for `timed − zero-delay` was 51.570 ms, with a two-side
 evidence for the narrow declared emulation condition, not calibrated field
 performance, network-only latency, a causal region effect or a regional
 ranking.
+
+The next raw-host experiment is the unexecuted, bounded
+[`raw-host-policy-pilot-v1`](docs/raw-host-policy-pilot-v1.md). Its frozen plan
+compares the three existing transport policies under two adverse trace
+conditions in two randomized complete blocks: 12 fresh VM-pair lifecycles.
+Policy and workload are runtime arguments to one identical authenticated
+process binary. The plan, workload, trace digests, policy parameters,
+randomization order and measurement schema are frozen in
+[`benchmarks/gcp_raw_host_policy_pilot_v1.json`](benchmarks/gcp_raw_host_policy_pilot_v1.json).
+It is descriptive pilot work, includes no policy-superiority test, and cannot
+execute without an explicit reviewed-source acknowledgement. No GCP dispatch
+is performed by CI or by plan validation.
 
 Recompute and validate the power decision without cloud authentication:
 

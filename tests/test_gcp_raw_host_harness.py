@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import gcp_raw_host_emulation as harness  # noqa: E402
 import gcp_raw_host_matrix as raw_matrix  # noqa: E402
+import gcp_raw_policy_pilot as policy_pilot  # noqa: E402
 import gcp_raw_power_analysis as power_analysis  # noqa: E402
 import summarize_gcp_raw_campaign as campaign  # noqa: E402
 
@@ -172,6 +173,7 @@ def write_matrix_evidence(
                 "reverse_trace": profile.reverse_name,
             },
             "workload": {
+                "id": "smoke-v2",
                 "generation_count": 2,
                 "startup_timeout_ms": harness.STARTUP_TIMEOUT_MS,
                 "service_timeout_ms": harness.SERVICE_TIMEOUT_MS,
@@ -258,6 +260,49 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         self.assertIn("/32", plan["firewall"]["forward"])
         self.assertIn("automatic", plan["safety"]["vm_max_run_duration"])
         self.assertFalse(plan["safety"]["project_deletion"])
+        self.assertEqual(
+            plan["treatment"]["policy_id"], "biological-adaptive"
+        )
+        self.assertEqual(plan["workload"]["id"], "smoke-v2")
+
+    def test_policy_pilot_is_frozen_bounded_and_plan_only(self):
+        spec = policy_pilot.Spec.load(
+            ROOT / "benchmarks" / "gcp_raw_host_policy_pilot_v1.json"
+        )
+        with tempfile.TemporaryDirectory() as name:
+            context = policy_pilot.Context(
+                project="aurora-raw-test-12345",
+                run_prefix="policy-test",
+                source_commit=COMMIT,
+                repository_url="https://github.com/Daniele-Cangi/Aurora.git",
+                evidence_root=Path(name) / "evidence",
+            )
+            plan = policy_pilot.build_plan(spec, context)
+            runs = policy_pilot.planned_runs(spec, context)
+
+        self.assertEqual(plan["lifecycle_count"], 12)
+        self.assertTrue(plan["safety"]["fresh_vm_pair_per_lifecycle"])
+        self.assertTrue(
+            plan["safety"]["reviewed_source_commit_required_for_execute"]
+        )
+        self.assertFalse(plan["claims"]["confirmatory"])
+        self.assertEqual(len({run.run_id for run in runs}), 12)
+        for start in (0, 6):
+            block = runs[start:start + 6]
+            self.assertEqual({run.cell.id for run in block}, {
+                cell.id for cell in spec.cells
+            })
+        self.assertEqual(
+            {run.cell.policy for run in runs}, set(harness.POLICY_IDS)
+        )
+        self.assertEqual(
+            {run.cell.condition for run in runs},
+            {"timed-replay-v2", "feedback-stall-v2"},
+        )
+        for run in runs:
+            cfg = policy_pilot.run_config(spec, context, run)
+            self.assertEqual(cfg.workload_id, "policy-pilot-v1")
+            self.assertEqual(cfg.policy_id, run.cell.policy)
 
     def test_unsafe_run_id_is_rejected(self):
         with tempfile.TemporaryDirectory() as name:
