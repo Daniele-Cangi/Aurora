@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -293,68 +294,142 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         return sender, receiver
 
     @staticmethod
-    def transport_runner(sender_text, receiver_text, receiver_status):
-        class ReceiverProcess:
-            def poll(self):
-                return None
-
-            def wait(self, timeout=None):
-                del timeout
-                return receiver_status
-
-            def terminate(self):
-                pass
-
+    def transport_runner(
+        sender_text, receiver_text, receiver_status,
+        *, transient_launch_failures=0, transient_probe_failures=0,
+        exit_before_ready=False,
+    ):
         class TransportRunner:
-            def popen(self, args, *, stdout, stderr):
-                del args, stderr
-                stdout.write(receiver_text)
-                stdout.flush()
-                return ReceiverProcess()
+            def __init__(self):
+                self.sender_finished = False
+                self.launch_calls = 0
+                self.snapshot_calls = 0
+                self.commands = []
 
             def run(self, args, *, check=True, timeout=None):
                 del check, timeout
+                self.commands.append(list(args))
+                if args[1:3] == ["compute", "scp"]:
+                    source, destination = args[-2:]
+                    if source.endswith(harness.REMOTE_RECEIVER_LOG):
+                        Path(destination).write_bytes(receiver_text.encode("utf-8"))
+                    elif source.endswith(harness.REMOTE_RECEIVER_STDERR):
+                        Path(destination).write_bytes(b"")
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout="", stderr=""
+                    )
+                command = next(
+                    (value.removeprefix("--command=") for value in args
+                     if value.startswith("--command=")),
+                    "",
+                )
+                if "nohup sh -c" in command:
+                    self.launch_calls += 1
+                    return subprocess.CompletedProcess(
+                        args,
+                        1 if self.launch_calls <= transient_launch_failures else 0,
+                        stdout="",
+                        stderr="transient IAP close",
+                    )
+                if harness.RECEIVER_STATUS_MARKER in command:
+                    self.snapshot_calls += 1
+                    if self.snapshot_calls <= transient_probe_failures:
+                        return subprocess.CompletedProcess(
+                            args, 1, stdout="", stderr="transient IAP close"
+                        )
+                    if not self.sender_finished:
+                        if exit_before_ready:
+                            snapshot = (
+                                harness.RECEIVER_STATUS_MARKER +
+                                str(receiver_status) + "\n"
+                            )
+                            return subprocess.CompletedProcess(
+                                args, 0, stdout=snapshot, stderr=""
+                            )
+                        ready = receiver_text.splitlines(keepends=True)[0]
+                        return subprocess.CompletedProcess(
+                            args, 0, stdout=ready, stderr=""
+                        )
+                    snapshot = (
+                        receiver_text + "\n" +
+                        harness.RECEIVER_STATUS_MARKER +
+                        str(receiver_status) + "\n"
+                    )
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=snapshot, stderr=""
+                    )
+                if "aurora_process_emulation sender " in command:
+                    self.sender_finished = True
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=sender_text, stderr=""
+                    )
                 return subprocess.CompletedProcess(
-                    args, 0, stdout=sender_text, stderr=""
+                    args, 0, stdout="", stderr=""
                 )
 
         return TransportRunner()
 
-    def test_windows_access_violation_requires_verified_completion(self):
+    def test_detached_receiver_recovers_from_transient_iap_probe_failure(self):
         sender, receiver = self.completed_transport_logs()
-        status = harness.WINDOWS_ACCESS_VIOLATION
-        runner = self.transport_runner(sender, receiver, status)
+        runner = self.transport_runner(
+            sender,
+            receiver,
+            0,
+            transient_launch_failures=1,
+            transient_probe_failures=1,
+        )
         with tempfile.TemporaryDirectory() as name:
             cfg = config(Path(name))
             sut = harness.GcpRawHarness(
                 cfg, runner, gcloud="gcloud", platform_name="win32"
             )
             sut.ssh_key_file = Path(name) / "ephemeral-ssh-key"
-            _, _, timing, controller_transport = sut.run_transport(
-                "192.0.2.1", "198.51.100.1"
-            )
+            with mock.patch.object(
+                harness.time, "sleep", return_value=None
+            ):
+                _, _, timing, controller_transport = sut.run_transport(
+                    "192.0.2.1", "198.51.100.1"
+                )
 
         self.assertEqual(timing["sender_elapsed_ms"], 1234)
-        self.assertTrue(controller_transport["receiver_ssh_exit_tolerated"])
+        self.assertFalse(controller_transport["receiver_ssh_exit_tolerated"])
         self.assertEqual(
             controller_transport["receiver_ssh_exit_classification"],
-            "windows-access-violation-after-verified-remote-completion",
+            "detached-retry-bounded-control",
         )
+        self.assertEqual(controller_transport["receiver_process_exit_code"], 0)
+        self.assertEqual(controller_transport["receiver_control_probe_failures"], 2)
+        self.assertEqual(runner.launch_calls, 2)
+        launch = next(
+            value.removeprefix("--command=")
+            for command in runner.commands
+            for value in command
+            if value.startswith("--command=") and "nohup sh -c" in value
+        )
+        self.assertIn(harness.REMOTE_RECEIVER_PID, launch)
+        self.assertIn(harness.REMOTE_RECEIVER_STATUS, launch)
+        self.assertIn("kill -0", launch)
         self.assertEqual(
             controller_transport["acceptance_basis"],
-            "verified-authenticated-completion",
+            "detached-process-zero-exit-and-verified-authenticated-completion",
         )
 
-        incomplete = receiver.split("receiver_complete", 1)[0]
-        runner = self.transport_runner(sender, incomplete, status)
+    def test_detached_receiver_remote_failure_stops_before_sender(self):
+        sender, receiver = self.completed_transport_logs()
+        runner = self.transport_runner(
+            sender, receiver, 7, exit_before_ready=True
+        )
         with tempfile.TemporaryDirectory() as name:
             cfg = config(Path(name))
-            sut = harness.GcpRawHarness(
-                cfg, runner, gcloud="gcloud", platform_name="win32"
-            )
+            sut = harness.GcpRawHarness(cfg, runner, gcloud="gcloud")
             sut.ssh_key_file = Path(name) / "ephemeral-ssh-key"
-            with self.assertRaises(harness.HarnessError):
-                sut.run_transport("192.0.2.1", "198.51.100.1")
+            with mock.patch.object(harness.time, "sleep", return_value=None):
+                with self.assertRaisesRegex(
+                    harness.HarnessError,
+                    "receiver exited 7 before publishing readiness",
+                ):
+                    sut.run_transport("192.0.2.1", "198.51.100.1")
+        self.assertFalse(runner.sender_finished)
 
     def test_windows_access_violation_is_platform_and_code_specific(self):
         unsigned = harness.WINDOWS_ACCESS_VIOLATION
@@ -675,6 +750,77 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         self.assertEqual(first[1:4], ["compute", "instances", "delete"])
         for command in fake.commands:
             self.assertIn(f"--project={cfg.project}", command)
+
+    def test_cleanup_retries_exact_remaining_resources_after_transient_failure(self):
+        class RetryCleanupRunner:
+            def __init__(self, names):
+                self.names = names
+                self.audit_round = 0
+                self.commands = []
+
+            def run(self, args, *, check=True, timeout=None):
+                del check, timeout
+                self.commands.append(list(args))
+                is_list = args[1] == "compute" and "list" in args[2:6]
+                if not is_list:
+                    return subprocess.CompletedProcess(
+                        args,
+                        1 if self.audit_round == 0 else 0,
+                        stdout="",
+                        stderr="transient control-plane failure",
+                    )
+                values = ""
+                if self.audit_round == 0:
+                    if args[2:4] == ["instances", "list"]:
+                        values = (
+                            f"{self.names.sender_instance}\n"
+                            f"{self.names.receiver_instance}\n"
+                        )
+                    elif args[2:4] == ["disks", "list"]:
+                        values = (
+                            f"{self.names.sender_instance}\n"
+                            f"{self.names.receiver_instance}\n"
+                        )
+                    elif args[2:4] == ["firewall-rules", "list"]:
+                        values = "\n".join((
+                            self.names.forward_firewall,
+                            self.names.reverse_firewall,
+                            self.names.sender_iap_firewall,
+                            self.names.receiver_iap_firewall,
+                        )) + "\n"
+                    elif args[2:5] == ["networks", "subnets", "list"]:
+                        values = (
+                            f"{self.names.sender_subnet}\n"
+                            f"{self.names.receiver_subnet}\n"
+                        )
+                    elif args[2:4] == ["networks", "list"]:
+                        values = (
+                            f"{self.names.sender_network}\n"
+                            f"{self.names.receiver_network}\n"
+                        )
+                        self.audit_round += 1
+                elif args[2:4] == ["networks", "list"]:
+                    self.audit_round += 1
+                return subprocess.CompletedProcess(
+                    args, 0, stdout=values, stderr=""
+                )
+
+        with tempfile.TemporaryDirectory() as name:
+            cfg = config(Path(name))
+            names = harness.Names.from_run_id(cfg.run_id)
+            runner = RetryCleanupRunner(names)
+            sut = harness.GcpRawHarness(cfg, runner, gcloud="gcloud")
+            with mock.patch.object(harness.time, "sleep", return_value=None):
+                result = sut.cleanup()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["cleanup_attempts"], 2)
+        self.assertGreater(result["delete_nonzero_count"], 0)
+        self.assertFalse(any(result["remaining"].values()))
+        self.assertEqual(len(result["attempt_history"]), 2)
+        commands = json.dumps(runner.commands)
+        self.assertIn("compute\", \"disks\", \"delete", commands)
+        self.assertNotIn("*", commands)
 
     def test_campaign_summary_requires_common_identity_and_teardown(self):
         with tempfile.TemporaryDirectory() as name:
