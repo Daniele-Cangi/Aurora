@@ -135,14 +135,16 @@ class Spec:
 
         conditions = value.get("conditions", [])
         condition_ids = {item.get("id") for item in conditions}
-        expected_conditions = {"timed-replay-v2", "feedback-stall-v2"}
+        expected_conditions = {"timed-replay-v2", "regime-change-v1"}
         if condition_ids != expected_conditions or len(conditions) != 2:
             raise PilotError("pilot must contain two adverse conditions")
         for condition in conditions:
             profile = harness.CONDITION_PROFILES.get(condition["id"])
             if profile is None or \
                     condition.get("forward_trace") != profile.forward_trace or \
-                    condition.get("reverse_trace") != profile.reverse_trace:
+                    condition.get("reverse_trace") != profile.reverse_trace or \
+                    condition.get("outage_generation_index") != \
+                    profile.outage_generation_index:
                 raise PilotError("condition profile does not match the harness")
             for direction in ("forward", "reverse"):
                 relative = condition[f"{direction}_trace"]
@@ -165,6 +167,17 @@ class Spec:
         }
         if combinations != expected:
             raise PilotError("pilot cells are not a complete policy-condition factorial")
+
+        regime = next(
+            item for item in conditions if item["id"] == "regime-change-v1"
+        )
+        if regime.get("outage_scope") != \
+                "receiver-ingress-symbol-datagrams-only" or \
+                regime.get("descriptors_and_feedback_preserved") is not True or \
+                regime.get("outage_end") != \
+                "receiver-local-critical-deadline" or \
+                regime.get("policy_neutral") is not True:
+            raise PilotError("regime-change condition is not frozen")
 
         randomization = value.get("randomization", {})
         seed = randomization.get("seed")
@@ -191,8 +204,27 @@ class Spec:
         if sha256_file(measurement_path) != measurement.get("sha256"):
             raise PilotError("frozen measurement schema checksum mismatch")
         measurement_value = json.loads(measurement_path.read_text(encoding="utf-8"))
-        if measurement_value.get("analysis", {}).get("superiority_test") is not False:
+        deadline_evaluation = measurement_value.get("deadline_evaluation", {})
+        causal_regression = measurement_value.get(
+            "causal_adaptation_regression", {}
+        )
+        if measurement_value.get("analysis", {}).get("superiority_test") is not False or \
+                deadline_evaluation.get("clock") != "receiver-steady" or \
+                deadline_evaluation.get("sender_expiry_values_used") is not False or \
+                causal_regression.get("condition") != "regime-change-v1" or \
+                causal_regression.get("policy_winner_targeted") is not False:
             raise PilotError("measurement schema is not pilot-bounded")
+
+        causal_gate = value.get("causal_adaptation_gate", {})
+        if causal_gate != {
+            "condition": "regime-change-v1",
+            "terminal_failure_generation_index": 2,
+            "subsequent_plan_generation_index": 3,
+            "biological_updated_state_required": True,
+            "biological_protection_plan_change_required": True,
+            "fixed_policy_plan_invariance_required": True,
+        }:
+            raise PilotError("causal adaptation gate is not frozen")
 
         execution = value.get("execution", {})
         safety = value.get("safety", {})

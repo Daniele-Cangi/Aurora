@@ -56,12 +56,17 @@
       "reverse_trace_sha256": "a502ba8f93721d1dd8c2284ae5554713858c20f5747d116787ccdcf4dd9d9c05"
     },
     {
-      "id": "feedback-stall-v2",
-      "description": "periodic forward loss and duplication without configured forward delay, plus the same adverse delayed reverse feedback",
-      "forward_trace": "benchmarks/process_zero_delay_forward_v1.trace",
-      "forward_trace_sha256": "422c742b5c57833e6cdcc60d68f1441fae9cc6fcf724ccab138a552a412e667c",
+      "id": "regime-change-v1",
+      "description": "the timed adverse transport traces plus a deterministic receiver-ingress symbol blackout for generation index 2 until its receiver-local critical deadline",
+      "forward_trace": "benchmarks/process_timed_v2.trace",
+      "forward_trace_sha256": "b08cda6df8e6d8826db728b91bdfd9eac7974276bfc82927b929f59b59da25e5",
       "reverse_trace": "benchmarks/process_feedback_v2.trace",
-      "reverse_trace_sha256": "a502ba8f93721d1dd8c2284ae5554713858c20f5747d116787ccdcf4dd9d9c05"
+      "reverse_trace_sha256": "a502ba8f93721d1dd8c2284ae5554713858c20f5747d116787ccdcf4dd9d9c05",
+      "outage_generation_index": 2,
+      "outage_scope": "receiver-ingress-symbol-datagrams-only",
+      "descriptors_and_feedback_preserved": true,
+      "outage_end": "receiver-local-critical-deadline",
+      "policy_neutral": true
     }
   ],
   "blocks": 2,
@@ -69,31 +74,31 @@
     {"id": "timed-fixed-minimum", "condition": "timed-replay-v2", "policy": "fixed-minimum"},
     {"id": "timed-fixed-class-aware", "condition": "timed-replay-v2", "policy": "fixed-class-aware"},
     {"id": "timed-biological-adaptive", "condition": "timed-replay-v2", "policy": "biological-adaptive"},
-    {"id": "feedback-stall-fixed-minimum", "condition": "feedback-stall-v2", "policy": "fixed-minimum"},
-    {"id": "feedback-stall-fixed-class-aware", "condition": "feedback-stall-v2", "policy": "fixed-class-aware"},
-    {"id": "feedback-stall-biological-adaptive", "condition": "feedback-stall-v2", "policy": "biological-adaptive"}
+    {"id": "regime-change-fixed-minimum", "condition": "regime-change-v1", "policy": "fixed-minimum"},
+    {"id": "regime-change-fixed-class-aware", "condition": "regime-change-v1", "policy": "fixed-class-aware"},
+    {"id": "regime-change-biological-adaptive", "condition": "regime-change-v1", "policy": "biological-adaptive"}
   ],
   "randomization": {
     "method": "randomized-complete-blocks-sha256-v1",
     "seed": "aurora-raw-policy-pilot-v1-1701"
   },
   "execution_order": [
-    "feedback-stall-biological-adaptive",
     "timed-fixed-minimum",
     "timed-biological-adaptive",
-    "feedback-stall-fixed-minimum",
+    "regime-change-fixed-class-aware",
+    "regime-change-biological-adaptive",
     "timed-fixed-class-aware",
-    "feedback-stall-fixed-class-aware",
+    "regime-change-fixed-minimum",
     "timed-biological-adaptive",
-    "feedback-stall-fixed-class-aware",
-    "feedback-stall-fixed-minimum",
+    "regime-change-biological-adaptive",
     "timed-fixed-class-aware",
-    "feedback-stall-biological-adaptive",
-    "timed-fixed-minimum"
+    "regime-change-fixed-minimum",
+    "timed-fixed-minimum",
+    "regime-change-fixed-class-aware"
   ],
   "measurement_schema": {
     "path": "benchmarks/raw_host_policy_pilot_measurement_v1.json",
-    "sha256": "85206a27988fd296299264e0b0e7d9a58cd2c291f1b2975d1b5ca073e4af872e"
+    "sha256": "bbe91f8feb0ffcf39c5d0cc60d03dc9877a622fa6b0866e1785febfb0e2c5768"
   },
   "execution": {
     "fresh_vm_pair_per_cell_block": true,
@@ -104,15 +109,26 @@
     "default_mode": "plan-only",
     "reviewed_source_commit_required_for_execute": true
   },
+  "causal_adaptation_gate": {
+    "condition": "regime-change-v1",
+    "terminal_failure_generation_index": 2,
+    "subsequent_plan_generation_index": 3,
+    "biological_updated_state_required": true,
+    "biological_protection_plan_change_required": true,
+    "fixed_policy_plan_invariance_required": true
+  },
   "analysis": {
     "mode": "descriptive-policy-discrimination",
     "primary_outcome": "critical_delivery_before_deadline",
     "secondary_outcomes": [
       "total_delivery",
+      "terminal_failure",
       "initial_redundancy",
       "repair_symbols_emitted",
       "wire_symbol_datagrams",
-      "terminal_feedback_rtt_mean_us"
+      "terminal_feedback_rtt_mean_us",
+      "per_generation_protection_factors",
+      "per_generation_adaptive_state"
     ],
     "policy_superiority_test": false,
     "early_stopping": false,

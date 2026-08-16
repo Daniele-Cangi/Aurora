@@ -299,12 +299,19 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         )
         self.assertEqual(
             {run.cell.condition for run in runs},
-            {"timed-replay-v2", "feedback-stall-v2"},
+            {"timed-replay-v2", "regime-change-v1"},
         )
         for run in runs:
             cfg = policy_pilot.run_config(spec, context, run)
             self.assertEqual(cfg.workload_id, "policy-pilot-v1")
             self.assertEqual(cfg.policy_id, run.cell.policy)
+            expected_outage = 2 if run.cell.condition == "regime-change-v1" \
+                else None
+            profile = harness.CONDITION_PROFILES[cfg.condition_profile]
+            self.assertEqual(
+                profile.outage_generation_index,
+                expected_outage,
+            )
 
     def test_unsafe_run_id_is_rejected(self):
         with tempfile.TemporaryDirectory() as name:

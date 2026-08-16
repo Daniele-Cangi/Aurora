@@ -155,7 +155,7 @@ Secure claims apply only to builds explicitly using the real cryptographic backe
 
 ### 7. Process-separated transport emulation
 
-`aurora_process_emulation` runs sender and receiver roles in separate OS processes. Its default smoke workload serves two generations; the fixed policy-pilot workload serves eight generations sequentially so authenticated terminal feedback is applied before the next policy plan. The receiver keeps decoder-only state keyed by generation identity, without access to source payloads, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. `--policy` selects `fixed-minimum`, `fixed-class-aware` or `biological-adaptive` at runtime in the same binary; `--workload` selects the frozen workload. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts. CI exercises them in distinct Docker network namespaces and on independent GitHub-hosted VMs over Tailscale; retained records additionally exercise public IPv4 routing between non-peered GCP VPCs in different regions.
+`aurora_process_emulation` runs sender and receiver roles in separate OS processes. Its default smoke workload serves two generations; the fixed policy-pilot workload serves eight generations sequentially so authenticated terminal feedback is applied before the next policy plan. The receiver keeps decoder-only state keyed by generation identity, without access to source payloads, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. Receiver deadline outcomes use only its own `steady_clock`: the first accepted descriptor is the local origin and authenticated descriptor deadlines are relative durations, never sender expiry timestamps. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. `--policy` selects `fixed-minimum`, `fixed-class-aware` or `biological-adaptive` at runtime in the same binary; `--workload` selects the frozen workload. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts. CI exercises them in distinct Docker network namespaces and on independent GitHub-hosted VMs over Tailscale; retained records additionally exercise public IPv4 routing between non-peered GCP VPCs in different regions.
 
 Process protocol V2 adds `echoed_forward_sequence` to authenticated feedback.
 The sender records the first wire emission of each authenticated forward
@@ -691,15 +691,20 @@ ranking.
 
 The next raw-host experiment is the unexecuted, bounded
 [`raw-host-policy-pilot-v1`](docs/raw-host-policy-pilot-v1.md). Its frozen plan
-compares the three existing transport policies under two adverse trace
-conditions in two randomized complete blocks: 12 fresh VM-pair lifecycles.
+compares the three existing transport policies under one adverse dynamic trace
+and one deterministic policy-neutral regime-change condition in two randomized
+complete blocks: 12 fresh VM-pair lifecycles. The regime change suppresses only
+receiver-ingress symbol datagrams for generation index 2 until its local
+critical deadline, then requires failure-informed generation-3 planning.
 Policy and workload are runtime arguments to one identical authenticated
 process binary. The plan, workload, trace digests, policy parameters,
 randomization order and measurement schema are frozen in
 [`benchmarks/gcp_raw_host_policy_pilot_v1.json`](benchmarks/gcp_raw_host_policy_pilot_v1.json).
 It is descriptive pilot work, includes no policy-superiority test, and cannot
 execute without an explicit reviewed-source acknowledgement. No GCP dispatch
-is performed by CI or by plan validation.
+is performed by CI or by plan validation. The freeze followed green local,
+Docker, Ubuntu, Windows, secure-auth and independent remote-host gates; those
+records are validation evidence, not pilot observations.
 
 Recompute and validate the power decision without cloud authentication:
 

@@ -14,6 +14,10 @@ read-only plan and refuses execution unless the operator supplies both the
 billing/teardown acknowledgement and a reviewed source commit identical to the
 requested source commit.
 
+The design below was frozen only after the process-separated, Docker and
+independent remote-host gates passed. Those gates are validation evidence, not
+pilot observations, and did not create GCP resources.
+
 ## Implementation audit
 
 The three controllers already existed in `TransportPolicy.hpp`:
@@ -44,6 +48,18 @@ deadline observation into a harness error: bounded authenticated probes remain
 active until terminal delivery or expiry. Feedback is applied exactly once
 before the next generation is planned.
 
+All receiver deadline outcomes are now evaluated on one receiver
+`steady_clock`. The first accepted authenticated descriptor establishes the
+local origin; the authenticated descriptor supplies only relative segment and
+generation durations. Sender expiry timestamps are never used to decide a
+receiver outcome, and the descriptor itself remains immutable.
+
+The completed pre-change remote-host evidence saturated the intended outcome:
+all 48 policy-condition generations were delivered, all critical segments met
+their deadlines, and the biological state never observed a failure. That
+evidence could not discriminate causal adaptation, so the second condition was
+replaced before freeze with the policy-neutral regime change described below.
+
 ## Frozen design
 
 The authoritative freeze is
@@ -54,7 +70,7 @@ It declares:
   public IPv4, `e2-micro`;
 - three runtime policy treatments;
 - two adverse conditions assembled from existing versioned transport traces:
-  `timed-replay-v2` and `feedback-stall-v2`;
+  `timed-replay-v2` and `regime-change-v1`;
 - two randomized complete blocks, each containing all six policy-condition
   cells;
 - exactly 12 fresh VM-pair lifecycles, with no replacement lifecycle;
@@ -66,19 +82,21 @@ The fixed `policy-pilot-v1` workload has eight 2,560-byte generations, 64-byte
 symbols and the existing segmented transport contract semantics. Each
 generation contains 1,024 critical bytes with a 10-second segment deadline,
 1,024 important bytes with a 20-second deadline, and 512 elastic bytes under a
-30-second generation deadline. Eight generations allow a history-dependent
-policy to react if the frozen conditions yield terminal failures or recovery;
-the design does not inject a policy-specific failure and does not require the
-adaptive plan to change for the pilot to be valid.
+30-second generation deadline. Generation index 2 in `regime-change-v1` is a
+declared terminal failure and generation index 3 is planned only after that
+feedback. The causal regression requires the biological plan to reflect its
+updated state and requires both fixed policies to remain invariant.
 
 The conditions reuse existing traces rather than introducing a new workload:
 
 - `timed-replay-v2` uses `process_timed_v2.trace` forward and
   `process_feedback_v2.trace` reverse;
-- `feedback-stall-v2` uses `process_zero_delay_forward_v1.trace` forward and
-  the same adverse `process_feedback_v2.trace` reverse. Despite its forward
-  name, this condition remains adverse: both directions include periodic loss
-  and duplication, and the reverse path includes configured delay/reordering.
+- `regime-change-v1` reuses those same forward and reverse traces, while the
+  receiver deterministically suppresses symbol datagrams for generation index
+  2 until its receiver-local critical deadline. Authenticated descriptors and
+  feedback remain active. The blackout is independent of treatment and forces
+  every policy through failure followed by a subsequent plan; it does not tune
+  transport conditions to make one policy win.
 
 ## Frozen measurements and analysis
 
@@ -92,6 +110,16 @@ Each lifecycle records:
 - requested and emitted repair symbols;
 - descriptor retransmission and replay/reordering evidence;
 - all-feedback and terminal-feedback RTT summaries on the sender steady clock.
+- the critical, important and elastic protection factors for every generation;
+- the biological generation/success/failure counters, panic budget and
+  critical/important adaptive overhead at planning and after terminal feedback.
+
+Critical and total-delivery deadlines are computed only as receiver descriptor
+receipt plus the authenticated relative duration. The evidence contract
+explicitly prohibits receiver decisions based on sender-relative expiry values.
+For `regime-change-v1`, evidence must show a terminal failure at generation 2,
+a subsequent generation-3 plan, changed biological protection reflecting the
+failure state, and unchanged fixed-policy protection.
 
 Feedback RTT includes forward service, receiver work, configured reverse
 impairment, reverse service and sender polling. It is not one-way or
@@ -115,7 +143,19 @@ python3 tools/gcp_raw_policy_pilot.py \
 CTest covers all three runtime policies in process-separated mode. CI also
 runs all six policy-condition cells from one libsodium-enabled Docker image and
 from one immutable artifact copied to two independent GitHub-hosted VMs. These
-are validation gates, not GCP pilot observations.
+are validation gates, not GCP pilot observations. Before this freeze, local
+CTest passed 39/39, the Docker six-cell gate passed, and the independent-host
+sender, receiver and combined evidence verifier passed in GitHub Actions run
+`31916124563`; the corresponding Ubuntu, Windows and secure-auth gates passed
+in run `31916124554`.
+
+The retained remote validation record shows the intended causal chain without
+being treated as a pilot result: biological generation 2 failed with factors
+`2.5/1.5/1.25`, then generation 3 planned with failure count 1, panic budget 2
+and factors `4.0/2.325/1.25`. The fixed-minimum and fixed-class-aware factors
+were unchanged across the same failure boundary. The local replay of the
+combined sender/receiver evidence passed the frozen deadline and adaptation
+verifier.
 
 Only after review, an operator may execute the frozen order with explicit
 acknowledgements:
