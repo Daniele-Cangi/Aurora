@@ -246,6 +246,30 @@ class FakeRunner:
 
 
 class GcpRawHostHarnessTests(unittest.TestCase):
+    def test_evidence_log_hashes_preserve_raw_newline_bytes(self):
+        with tempfile.TemporaryDirectory() as name:
+            evidence = Path(name)
+            sender_bytes = b"sender_ready\r\nsender_complete\r\n"
+            receiver_bytes = b"receiver_ready\nreceiver_complete\n"
+            (evidence / "sender.log").write_bytes(sender_bytes)
+            (evidence / "receiver.log").write_bytes(receiver_bytes)
+
+            result = harness.evidence_log_hashes(evidence)
+            normalized_sender = (evidence / "sender.log").read_text(
+                encoding="utf-8"
+            ).encode("utf-8")
+
+        self.assertEqual(
+            result["sender_sha256"], hashlib.sha256(sender_bytes).hexdigest()
+        )
+        self.assertEqual(
+            result["receiver_sha256"], hashlib.sha256(receiver_bytes).hexdigest()
+        )
+        self.assertNotEqual(
+            result["sender_sha256"],
+            hashlib.sha256(normalized_sender).hexdigest(),
+        )
+
     def test_windows_keygen_uses_gcloud_winkeygen_and_requires_ppk(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)
