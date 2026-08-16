@@ -57,6 +57,14 @@ WORKLOAD_GENERATIONS = {
     "smoke-v2": 2,
     "policy-pilot-v1": 8,
 }
+REMOTE_RECEIVER_LOG = "/tmp/aurora-receiver.log"
+REMOTE_RECEIVER_STDERR = "/tmp/aurora-receiver.stderr.log"
+REMOTE_RECEIVER_STATUS = "/tmp/aurora-receiver.exit"
+REMOTE_RECEIVER_STATUS_TEMP = "/tmp/aurora-receiver.exit.tmp"
+REMOTE_RECEIVER_PID = "/tmp/aurora-receiver.pid"
+RECEIVER_STATUS_MARKER = "__AURORA_RECEIVER_EXIT__="
+CONTROL_RETRY_DELAYS_SECONDS = (0.0, 1.0, 3.0)
+CLEANUP_BACKOFF_SECONDS = (0.0, 2.0, 5.0)
 
 
 def workload_service_timeout_ms(workload_id: str) -> int:
@@ -643,9 +651,14 @@ class GcpRawHarness:
             f"--command={command}",
         ]
 
-    def ssh(self, instance: str, zone: str, command: str, *, timeout=600):
+    def ssh(
+        self, instance: str, zone: str, command: str, *,
+        timeout=600, check: bool = True,
+    ):
         return self.runner.run(
-            self.ssh_args(instance, zone, command), timeout=timeout
+            self.ssh_args(instance, zone, command),
+            timeout=timeout,
+            check=check,
         )
 
     def scp(
@@ -878,7 +891,7 @@ class GcpRawHarness:
         sender_log = evidence / "sender.log"
         sender_err = evidence / "sender.stderr.log"
         receiver_command = (
-            "set -euo pipefail; session=$(tr -d '\\r\\n' "
+            "session=$(tr -d \"\\r\\n\" "
             "< /tmp/process-session.id); "
             "/tmp/aurora-runtime/aurora_process_emulation receiver "
             f"0.0.0.0 {FORWARD_PORT} {sender_ip} {REVERSE_PORT} "
@@ -893,6 +906,27 @@ class GcpRawHarness:
                 " --outage-generation "
                 f"{condition.outage_generation_index}"
             )
+        detached_script = (
+            f"{receiver_command} > {REMOTE_RECEIVER_LOG} "
+            f"2> {REMOTE_RECEIVER_STDERR}; status=$?; "
+            f"printf \"%s\\n\" \"$status\" > "
+            f"{REMOTE_RECEIVER_STATUS_TEMP}; "
+            f"mv {REMOTE_RECEIVER_STATUS_TEMP} {REMOTE_RECEIVER_STATUS}; "
+            "exit \"$status\""
+        )
+        launch_receiver = (
+            "set -eu; "
+            f"if test -f {REMOTE_RECEIVER_STATUS}; then exit 0; fi; "
+            f"if test -f {REMOTE_RECEIVER_PID} && "
+            f"kill -0 \"$(cat {REMOTE_RECEIVER_PID})\" 2>/dev/null; "
+            "then exit 0; fi; "
+            f"rm -f {REMOTE_RECEIVER_LOG} {REMOTE_RECEIVER_STDERR} "
+            f"{REMOTE_RECEIVER_STATUS} {REMOTE_RECEIVER_STATUS_TEMP} "
+            f"{REMOTE_RECEIVER_PID}; "
+            f"nohup sh -c '{detached_script}' "
+            "</dev/null >/dev/null 2>&1 & "
+            f"printf \"%s\\n\" \"$!\" > {REMOTE_RECEIVER_PID}"
+        )
         sender_command = (
             "set -euo pipefail; session=$(tr -d '\\r\\n' "
             "< /tmp/process-session.id); "
@@ -904,46 +938,46 @@ class GcpRawHarness:
             f"--workload {self.config.workload_id}"
         )
         started_ns = time.perf_counter_ns()
-        with receiver_log.open("w", encoding="utf-8") as rx_out, \
-                receiver_err.open("w", encoding="utf-8") as rx_err:
-            receiver = self.runner.popen(
-                self.ssh_args(
-                    n.receiver_instance, self.config.receiver_zone,
-                    receiver_command,
-                ),
-                stdout=rx_out,
-                stderr=rx_err,
+        launch_failures = self._launch_detached_receiver(launch_receiver)
+        try:
+            ready_ns, probe_failures = self._wait_detached_receiver_ready(
+                90, launch_failures
             )
-            ready_ns = self._wait_ready(receiver, receiver_log, 90)
-            sender_started_ns = time.perf_counter_ns()
-            sender = self.runner.run(
-                self.ssh_args(
-                    n.sender_instance, self.config.sender_zone, sender_command
-                ),
-                check=False,
-                timeout=(
-                    180
-                    if self.config.workload_id == "policy-pilot-v1"
-                    else 90
-                ),
+        except BaseException:
+            self._collect_receiver_logs(
+                receiver_log, receiver_err, required=False
             )
-            sender_finished_ns = time.perf_counter_ns()
-            sender_log.write_text(sender.stdout, encoding="utf-8")
-            sender_err.write_text(sender.stderr, encoding="utf-8")
-            if sender.returncode != 0:
-                receiver.terminate()
-                receiver.wait(timeout=10)
-                raise HarnessError(f"sender exited {sender.returncode}")
-            try:
-                receiver_status = receiver.wait(timeout=30)
-            except subprocess.TimeoutExpired as error:
-                receiver.terminate()
-                receiver.wait(timeout=10)
-                raise HarnessError("receiver did not exit after sender") from error
-        receiver_finished_ns = time.perf_counter_ns()
-        if receiver_status != 0 and not is_windows_access_violation(
-            receiver_status, platform_name=self.platform_name
-        ):
+            raise
+        sender_started_ns = time.perf_counter_ns()
+        sender = self.runner.run(
+            self.ssh_args(
+                n.sender_instance, self.config.sender_zone, sender_command
+            ),
+            check=False,
+            timeout=(
+                180
+                if self.config.workload_id == "policy-pilot-v1"
+                else 90
+            ),
+        )
+        sender_finished_ns = time.perf_counter_ns()
+        sender_log.write_text(sender.stdout, encoding="utf-8")
+        sender_err.write_text(sender.stderr, encoding="utf-8")
+        if sender.returncode != 0:
+            self._collect_receiver_logs(
+                receiver_log, receiver_err, required=False
+            )
+            raise HarnessError(f"sender exited {sender.returncode}")
+        try:
+            receiver_status, receiver_finished_ns, probe_failures = \
+                self._wait_detached_receiver_exit(45, probe_failures)
+        except BaseException:
+            self._collect_receiver_logs(
+                receiver_log, receiver_err, required=False
+            )
+            raise
+        self._collect_receiver_logs(receiver_log, receiver_err, required=True)
+        if receiver_status != 0:
             raise HarnessError(f"receiver exited {receiver_status}")
         sender_text = sender_log.read_text(encoding="utf-8")
         receiver_text = receiver_log.read_text(encoding="utf-8")
@@ -974,29 +1008,143 @@ class GcpRawHarness:
                 ),
             }
         )
-        controller_transport = verified_receiver_ssh_exit(
-            receiver_status, platform_name=self.platform_name
-        )
+        controller_transport = {
+            "receiver_ssh_exit_code": None,
+            "receiver_ssh_exit_classification": (
+                "detached-retry-bounded-control"
+            ),
+            "receiver_ssh_exit_tolerated": False,
+            "receiver_process_exit_code": receiver_status,
+            "receiver_process_exit_classification": "clean",
+            "receiver_control_probe_failures": probe_failures,
+            "acceptance_basis": (
+                "detached-process-zero-exit-and-verified-authenticated-"
+                "completion"
+            ),
+        }
         return sender_text, receiver_text, verified, controller_transport
 
+    def _launch_detached_receiver(self, command: str) -> int:
+        failures = 0
+        for delay in CONTROL_RETRY_DELAYS_SECONDS:
+            if delay:
+                time.sleep(delay)
+            try:
+                result = self.ssh(
+                    self.names.receiver_instance,
+                    self.config.receiver_zone,
+                    command,
+                    timeout=45,
+                    check=False,
+                )
+            except Exception:
+                failures += 1
+                continue
+            if result.returncode == 0:
+                return failures
+            failures += 1
+        # A control connection may close after the idempotent remote launch
+        # already succeeded. Readiness probes decide whether the process exists.
+        return failures
+
+    def _receiver_snapshot(self) -> str | None:
+        command = (
+            "set +e; "
+            f"if test -f {REMOTE_RECEIVER_LOG}; then "
+            f"cat {REMOTE_RECEIVER_LOG}; fi; "
+            f"if test -f {REMOTE_RECEIVER_STATUS}; then "
+            f"printf '\\n{RECEIVER_STATUS_MARKER}'; "
+            f"cat {REMOTE_RECEIVER_STATUS}; fi; exit 0"
+        )
+        try:
+            result = self.ssh(
+                self.names.receiver_instance,
+                self.config.receiver_zone,
+                command,
+                timeout=30,
+                check=False,
+            )
+        except Exception:
+            return None
+        return result.stdout if result.returncode == 0 else None
+
     @staticmethod
-    def _wait_ready(
-        process: subprocess.Popen[str], log_path: Path, timeout_seconds: int
-    ) -> int:
+    def _receiver_status(snapshot: str) -> int | None:
+        match = re.search(
+            rf"(?:^|\n){re.escape(RECEIVER_STATUS_MARKER)}(-?[0-9]+)",
+            snapshot,
+        )
+        return int(match.group(1)) if match else None
+
+    def _wait_detached_receiver_ready(
+        self, timeout_seconds: int, probe_failures: int
+    ) -> tuple[int, int]:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
-            if any(line.startswith("receiver_ready ") for line in text.splitlines()):
-                return time.perf_counter_ns()
-            status = process.poll()
+            snapshot = self._receiver_snapshot()
+            if snapshot is None:
+                probe_failures += 1
+                time.sleep(1.0)
+                continue
+            if any(
+                line.startswith("receiver_ready ")
+                for line in snapshot.splitlines()
+            ):
+                return time.perf_counter_ns(), probe_failures
+            status = self._receiver_status(snapshot)
             if status is not None:
                 raise HarnessError(
                     f"receiver exited {status} before publishing readiness"
                 )
-            time.sleep(0.2)
-        process.terminate()
-        process.wait(timeout=10)
-        raise HarnessError("receiver readiness timed out at controller")
+            time.sleep(1.0)
+        raise HarnessError(
+            "receiver readiness timed out after retry-bounded control probes"
+        )
+
+    def _wait_detached_receiver_exit(
+        self, timeout_seconds: int, probe_failures: int
+    ) -> tuple[int, int, int]:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            snapshot = self._receiver_snapshot()
+            if snapshot is None:
+                probe_failures += 1
+                time.sleep(1.0)
+                continue
+            status = self._receiver_status(snapshot)
+            if status is not None:
+                return status, time.perf_counter_ns(), probe_failures
+            time.sleep(1.0)
+        raise HarnessError(
+            "receiver did not publish a remote exit status after sender"
+        )
+
+    def _collect_receiver_logs(
+        self, receiver_log: Path, receiver_err: Path, *, required: bool
+    ) -> None:
+        for remote, local in (
+            (REMOTE_RECEIVER_LOG, receiver_log),
+            (REMOTE_RECEIVER_STDERR, receiver_err),
+        ):
+            collected = False
+            for delay in CONTROL_RETRY_DELAYS_SECONDS:
+                if delay:
+                    time.sleep(delay)
+                try:
+                    self.scp(
+                        f"{self.names.receiver_instance}:{remote}",
+                        str(local),
+                        zone=self.config.receiver_zone,
+                        timeout=60,
+                    )
+                except Exception:
+                    continue
+                collected = True
+                break
+            if required and not collected:
+                raise HarnessError(
+                    f"receiver evidence collection failed for {remote}"
+                )
 
     def host_metadata(self, instance: str, zone: str) -> dict:
         command = (
@@ -1020,35 +1168,96 @@ class GcpRawHarness:
         n = self.names
         sender_region = zone_region(self.config.sender_zone)
         receiver_region = zone_region(self.config.receiver_zone)
-        commands: list[list[str]] = [
-            ["compute", "instances", "delete", n.sender_instance,
-             f"--zone={self.config.sender_zone}", "--delete-disks=all", "--quiet"],
-            ["compute", "instances", "delete", n.receiver_instance,
-             f"--zone={self.config.receiver_zone}", "--delete-disks=all", "--quiet"],
-            ["compute", "firewall-rules", "delete", n.forward_firewall,
-             "--quiet"],
-            ["compute", "firewall-rules", "delete", n.reverse_firewall,
-             "--quiet"],
-            ["compute", "firewall-rules", "delete", n.sender_iap_firewall,
-             "--quiet"],
-            ["compute", "firewall-rules", "delete", n.receiver_iap_firewall,
-             "--quiet"],
-            ["compute", "networks", "subnets", "delete", n.sender_subnet,
-             f"--region={sender_region}", "--quiet"],
-            ["compute", "networks", "subnets", "delete", n.receiver_subnet,
-             f"--region={receiver_region}", "--quiet"],
-            ["compute", "networks", "delete", n.sender_network, "--quiet"],
-            ["compute", "networks", "delete", n.receiver_network, "--quiet"],
+        commands: list[tuple[str, str, list[str]]] = [
+            ("instances", n.sender_instance,
+             ["compute", "instances", "delete", n.sender_instance,
+              f"--zone={self.config.sender_zone}", "--delete-disks=all", "--quiet"]),
+            ("instances", n.receiver_instance,
+             ["compute", "instances", "delete", n.receiver_instance,
+              f"--zone={self.config.receiver_zone}", "--delete-disks=all", "--quiet"]),
+            ("disks", n.sender_instance,
+             ["compute", "disks", "delete", n.sender_instance,
+              f"--zone={self.config.sender_zone}", "--quiet"]),
+            ("disks", n.receiver_instance,
+             ["compute", "disks", "delete", n.receiver_instance,
+              f"--zone={self.config.receiver_zone}", "--quiet"]),
+            ("firewall_rules", n.forward_firewall,
+             ["compute", "firewall-rules", "delete", n.forward_firewall,
+              "--quiet"]),
+            ("firewall_rules", n.reverse_firewall,
+             ["compute", "firewall-rules", "delete", n.reverse_firewall,
+              "--quiet"]),
+            ("firewall_rules", n.sender_iap_firewall,
+             ["compute", "firewall-rules", "delete", n.sender_iap_firewall,
+              "--quiet"]),
+            ("firewall_rules", n.receiver_iap_firewall,
+             ["compute", "firewall-rules", "delete", n.receiver_iap_firewall,
+              "--quiet"]),
+            ("subnets", n.sender_subnet,
+             ["compute", "networks", "subnets", "delete", n.sender_subnet,
+              f"--region={sender_region}", "--quiet"]),
+            ("subnets", n.receiver_subnet,
+             ["compute", "networks", "subnets", "delete", n.receiver_subnet,
+              f"--region={receiver_region}", "--quiet"]),
+            ("networks", n.sender_network,
+             ["compute", "networks", "delete", n.sender_network, "--quiet"]),
+            ("networks", n.receiver_network,
+             ["compute", "networks", "delete", n.receiver_network, "--quiet"]),
         ]
-        cleanup_errors = []
-        for command in commands:
-            try:
-                result = self.gc(*command, check=False, timeout=240)
-            except Exception:
-                cleanup_errors.append(command[1:4])
-                continue
-            if result.returncode != 0:
-                cleanup_errors.append(command[1:4])
+        delete_nonzero_count = 0
+        attempt_history = []
+        previous_remaining: dict[str, list[str]] | None = None
+        for attempt, delay in enumerate(CLEANUP_BACKOFF_SECONDS, start=1):
+            if delay:
+                time.sleep(delay)
+            audit_was_unavailable = previous_remaining is not None and any(
+                values == ["audit-unavailable"]
+                for values in previous_remaining.values()
+            )
+            selected = [
+                command for resource, target, command in commands
+                if (
+                    previous_remaining is None and resource != "disks"
+                ) or audit_was_unavailable or (
+                    previous_remaining is not None and
+                    target in previous_remaining.get(resource, [])
+                )
+            ]
+            attempt_nonzero = 0
+            for command in selected:
+                try:
+                    result = self.gc(*command, check=False, timeout=240)
+                except Exception:
+                    attempt_nonzero += 1
+                    continue
+                if result.returncode != 0:
+                    attempt_nonzero += 1
+            delete_nonzero_count += attempt_nonzero
+            remaining = self._audit_cleanup_remaining()
+            attempt_history.append({
+                "attempt": attempt,
+                "delete_commands": len(selected),
+                "delete_nonzero_count": attempt_nonzero,
+                "remaining": remaining,
+            })
+            if not any(remaining.values()):
+                return {
+                    "success": True,
+                    "cleanup_attempts": attempt,
+                    "delete_nonzero_count": delete_nonzero_count,
+                    "remaining": remaining,
+                    "attempt_history": attempt_history,
+                }
+            previous_remaining = remaining
+        return {
+            "success": False,
+            "cleanup_attempts": len(CLEANUP_BACKOFF_SECONDS),
+            "delete_nonzero_count": delete_nonzero_count,
+            "remaining": previous_remaining,
+            "attempt_history": attempt_history,
+        }
+
+    def _audit_cleanup_remaining(self) -> dict[str, list[str]]:
         remaining: dict[str, list[str]] = {}
         audits = {
             "instances": ["compute", "instances", "list"],
@@ -1072,14 +1281,10 @@ class GcpRawHarness:
                 continue
             names = [
                 value.strip() for value in result.stdout.splitlines()
-                if value.strip().startswith(n.prefix)
+                if value.strip().startswith(self.names.prefix)
             ]
             remaining[resource] = names
-        return {
-            "success": not any(remaining.values()),
-            "delete_nonzero_count": len(cleanup_errors),
-            "remaining": remaining,
-        }
+        return remaining
 
     def execute(self) -> dict:
         manifest = {
