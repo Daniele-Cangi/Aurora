@@ -1,0 +1,4 @@
+AURORA_IMPAIRMENT_TRACE_V2
+name=process-terminal-recovery-v3
+events=U@0,P@0,P@0,P@0,P@0,P@0,P@0,P@0,P@0,D@0,D@0,D@0
+checksum=e5168f1193c4b536

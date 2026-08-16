@@ -123,8 +123,16 @@ def main():
             or f"workload_id={workload_id}" not in sender.stdout
         ):
             raise RuntimeError(f"runtime treatment was not reported: {sender.stdout}")
-        if "protocol_version=2" not in sender.stdout:
+        if "protocol_version=3" not in sender.stdout:
             raise RuntimeError(f"wrong process protocol version: {sender.stdout}")
+        if (
+            f"terminal_ack_datagrams={expected_generations * 3}"
+            not in sender.stdout
+            or "terminal_handshake=authenticated-ack-v1" not in sender.stdout
+        ):
+            raise RuntimeError(
+                f"missing authenticated terminal acknowledgements: {sender.stdout}"
+            )
         rtt = {
             name: re.search(rf"{name}=(\d+)", sender.stdout)
             for name in (
@@ -186,9 +194,20 @@ def main():
             raise RuntimeError(f"missing per-generation evidence: {receiver_stdout}")
         if f"receiver_complete generations={expected_generations}" not in receiver_stdout:
             raise RuntimeError(f"missing receiver evidence: {receiver_stdout}")
-        if receiver_stdout.count("protocol_version=2") < 2:
+        if receiver_stdout.count("protocol_version=3") < 2:
             raise RuntimeError(
                 f"wrong receiver protocol version evidence: {receiver_stdout}"
+            )
+        if (
+            f"terminal_acknowledged={expected_generations}"
+            not in receiver_stdout
+            or receiver_stdout.count(
+                "terminal_handshake=authenticated-ack-v1"
+            ) < 2
+        ):
+            raise RuntimeError(
+                f"receiver did not attest terminal acknowledgements: "
+                f"{receiver_stdout}"
             )
         if "startup_timeout_ms=60000" not in receiver_stdout:
             raise RuntimeError(f"missing startup timeout evidence: {receiver_stdout}")

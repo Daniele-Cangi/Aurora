@@ -40,6 +40,8 @@
 
 namespace {
 
+constexpr std::uint32_t terminal_ack_copy_count = 3;
+
 #ifdef _WIN32
 using NativeSocket = SOCKET;
 constexpr NativeSocket invalid_socket = INVALID_SOCKET;
@@ -308,6 +310,7 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
     std::uint32_t forward_datagrams = 0;
     std::uint32_t descriptor_datagrams = 0;
     std::uint32_t wire_symbol_datagrams = 0;
+    std::uint32_t terminal_ack_datagrams = 0;
     std::uint32_t feedback_datagrams = 0;
     std::uint32_t stale_feedback_datagrams = 0;
     std::uint32_t authentication_rejections = 0;
@@ -446,6 +449,22 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
         }
     };
 
+    auto acknowledge_terminal = [&](const SenderGeneration& generation) {
+        const auto& descriptor = generation.spawned.descriptor;
+        const auto acknowledgement = aurora::emulation::encode_terminal_ack({
+            descriptor.descriptor_fingerprint,
+            descriptor.generation_id});
+        for (std::uint32_t copy = 0; copy < terminal_ack_copy_count; ++copy) {
+            const auto sequence = forward_auth_sequence++;
+            const auto frame = authenticator.seal(
+                aurora::emulation::ProcessDirection::FORWARD,
+                sequence, acknowledgement);
+            forward_socket.send(frame, forward_host, forward_port);
+            ++forward_datagrams;
+            ++terminal_ack_datagrams;
+        }
+    };
+
     for (std::size_t generation_index = 0;
          generation_index < workload.generation_count; ++generation_index) {
         std::vector<std::uint8_t> payload(
@@ -546,6 +565,7 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
             throw std::runtime_error(
                 "process emulation: generation did not become terminal");
         }
+        acknowledge_terminal(generation);
         total_repair_requested += generation.repair_symbols_requested;
         total_repair_emitted += generation.repair_symbols_emitted;
         if (generation.feedback->report.delivered()) ++delivered_generations;
@@ -655,6 +675,8 @@ int run_sender(std::string_view forward_host, std::uint16_t forward_port,
               << " forward_datagrams=" << forward_datagrams
               << " descriptor_datagrams=" << descriptor_datagrams
               << " wire_symbol_datagrams=" << wire_symbol_datagrams
+              << " terminal_ack_datagrams=" << terminal_ack_datagrams
+              << " terminal_handshake=authenticated-ack-v1"
               << " source_symbols=" << total_source_symbols
               << " initial_symbols=" << total_initial_symbols
               << " repair_symbols_requested=" << total_repair_requested
@@ -709,6 +731,7 @@ int run_receiver(std::string_view forward_bind_host,
     std::unordered_map<std::string,
         std::unique_ptr<aurora::transport::GenerationReceiver>> receivers;
     std::unordered_set<std::string> terminal_generations;
+    std::unordered_set<std::string> acknowledged_terminal_generations;
     struct ReceiverObservation {
         std::optional<std::uint64_t> critical_completed_at_ms;
         std::uint32_t last_feedback_rank = 0;
@@ -749,6 +772,8 @@ int run_receiver(std::string_view forward_bind_host,
     std::uint64_t reverse_auth_sequence = 0;
     std::uint32_t authentication_rejections = 0;
     std::uint32_t replay_rejections = 0;
+    std::uint32_t terminal_feedback_retry_rounds = 0;
+    std::optional<std::uint64_t> all_generations_terminal_at_ms;
 
     std::cout << "receiver_ready forward_port=" << forward_port
               << " protocol_version="
@@ -763,6 +788,7 @@ int run_receiver(std::string_view forward_bind_host,
                       : std::string("none"))
               << " auth_profile="
               << aurora::emulation::ProcessAuthenticator::profile()
+              << " terminal_handshake=authenticated-ack-v1"
               << std::endl;
 
     auto flush_feedback = [&](bool flush_all) {
@@ -838,6 +864,8 @@ int run_receiver(std::string_view forward_bind_host,
             echoed_forward_sequence});
         const bool terminal =
             report.delivered() || report.terminal_failure();
+        const bool terminal_was_known =
+            terminal_generations.contains(generation_id);
         const bool periodic_progress = report.decoder_rank >=
             observation.last_feedback_rank + 8;
         if (force_feedback || terminal || newly_critical ||
@@ -845,12 +873,13 @@ int run_receiver(std::string_view forward_bind_host,
             send_feedback(feedback);
             observation.last_feedback_rank = report.decoder_rank;
         }
-        if (!terminal) return false;
+        if (!terminal) return;
 
         // Repeat the terminal datagram to tolerate reverse loss while keeping
         // every copy authenticated and subject to replay rejection.
         send_feedback(feedback);
         send_feedback(feedback);
+        if (terminal_was_known) ++terminal_feedback_retry_rounds;
         if (terminal_generations.insert(generation_id).second) {
             std::optional<std::uint64_t> critical_deadline_duration_ms;
             std::optional<std::uint64_t> critical_deadline_at_ms;
@@ -908,8 +937,16 @@ int run_receiver(std::string_view forward_bind_host,
                       << " symbols_observed=" << report.symbols_observed
                       << '\n';
         }
-        if (terminal_generations.size() != expected_generations) {
-            return false;
+        if (terminal_generations.size() == expected_generations &&
+            !all_generations_terminal_at_ms) {
+            all_generations_terminal_at_ms = receiver_now_ms;
+        }
+    };
+
+    auto emit_receiver_complete = [&](std::uint64_t acknowledged_at_ms) {
+        if (!all_generations_terminal_at_ms) {
+            throw std::runtime_error(
+                "process emulation: terminal acknowledgement preceded completion");
         }
         flush_feedback(true);
         std::cout << "receiver_complete generations="
@@ -942,8 +979,15 @@ int run_receiver(std::string_view forward_bind_host,
                   << " replay_rejected=" << replay_rejections
                   << " auth_profile="
                   << aurora::emulation::ProcessAuthenticator::profile()
-                  << " service_elapsed_ms=" << receiver_now_ms << '\n';
-        return true;
+                  << " terminal_handshake=authenticated-ack-v1"
+                  << " terminal_acknowledged="
+                  << acknowledged_terminal_generations.size()
+                  << " terminal_feedback_retry_rounds="
+                  << terminal_feedback_retry_rounds
+                  << " terminal_ack_wait_ms="
+                  << acknowledged_at_ms - *all_generations_terminal_at_ms
+                  << " service_elapsed_ms="
+                  << *all_generations_terminal_at_ms << '\n';
     };
 
     while (true) {
@@ -978,6 +1022,30 @@ int run_receiver(std::string_view forward_bind_host,
         const auto& datagram = opened->payload;
         try {
             const auto type = aurora::emulation::frame_type(datagram);
+            if (type == aurora::emulation::FrameType::TERMINAL_ACK) {
+                if (!service_started) continue;
+                const auto acknowledgement =
+                    aurora::emulation::decode_terminal_ack(datagram);
+                const auto found = receivers.find(
+                    acknowledgement.generation_id);
+                if (found == receivers.end() ||
+                    found->second->descriptor().descriptor_fingerprint !=
+                        acknowledgement.descriptor_fingerprint ||
+                    !terminal_generations.contains(
+                        acknowledgement.generation_id)) {
+                    throw std::invalid_argument(
+                        "process emulation: invalid terminal acknowledgement");
+                }
+                acknowledged_terminal_generations.insert(
+                    acknowledgement.generation_id);
+                if (terminal_generations.size() == expected_generations &&
+                    acknowledged_terminal_generations.size() ==
+                        expected_generations) {
+                    emit_receiver_complete(elapsed_ms(*service_started));
+                    return 0;
+                }
+                continue;
+            }
             if (type == aurora::emulation::FrameType::DESCRIPTOR) {
                 const auto descriptor =
                     aurora::emulation::decode_descriptor(datagram);
@@ -1018,11 +1086,9 @@ int run_receiver(std::string_view forward_bind_host,
                 }
                 const auto report = found->second->integrate(
                     {}, receiver_now_ms);
-                if (integrate_report(
-                        descriptor.generation_id, *found->second, report,
-                        receiver_now_ms, opened->sequence, true)) {
-                    return 0;
-                }
+                integrate_report(
+                    descriptor.generation_id, *found->second, report,
+                    receiver_now_ms, opened->sequence, true);
                 continue;
             }
             if (type != aurora::emulation::FrameType::SYMBOL) {
@@ -1042,11 +1108,9 @@ int run_receiver(std::string_view forward_bind_host,
             }
             const auto report = found->second->integrate(
                 accepted_packets, receiver_now_ms);
-            if (integrate_report(
-                    packet.generation_id, *found->second, report,
-                    receiver_now_ms, opened->sequence, false)) {
-                return 0;
-            }
+            integrate_report(
+                packet.generation_id, *found->second, report,
+                receiver_now_ms, opened->sequence, false);
         } catch (const std::invalid_argument&) {
             // Malformed datagrams are isolated to the receiver boundary.
         }

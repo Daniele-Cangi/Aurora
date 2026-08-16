@@ -204,7 +204,8 @@ jobs:
             echo "reverse_port_schedule=47002,47002,47002,47002,47002,47002"
             echo "authenticated_session_schedule=per-cell-distinct"
             echo "authentication_profile=hmac-sha256-libsodium"
-            echo "process_protocol_version=2"
+            echo "process_protocol_version=3"
+            echo "terminal_handshake=authenticated-ack-v1"
             echo "measurement_profile=application-controller-steady-v2"
             echo "receiver_ready=$(grep -c '^receiver_ready ' receiver.log)"
             echo "startup_timeout_ms=60000"
@@ -256,7 +257,8 @@ jobs:
             echo "reverse_port_schedule=47002,47002,47002,47002,47002,47002"
             echo "authenticated_session_schedule=per-cell-distinct"
             echo "authentication_profile=hmac-sha256-libsodium"
-            echo "process_protocol_version=2"
+            echo "process_protocol_version=3"
+            echo "terminal_handshake=authenticated-ack-v1"
             echo "measurement_profile=application-controller-steady-v2"
             echo "source_commit=$(cat remote-bundle/source-commit.txt)"
             echo "binary_sha256=$(cut -d ' ' -f 1 remote-bundle/binary.sha256)"
@@ -303,8 +305,12 @@ jobs:
             receiver-manifest.txt
           grep -q '^authentication_profile=hmac-sha256-libsodium$' \
             sender-manifest.txt
-          grep -q '^process_protocol_version=2$' receiver-manifest.txt
-          grep -q '^process_protocol_version=2$' sender-manifest.txt
+          grep -q '^process_protocol_version=3$' receiver-manifest.txt
+          grep -q '^process_protocol_version=3$' sender-manifest.txt
+          grep -q '^terminal_handshake=authenticated-ack-v1$' \
+            receiver-manifest.txt
+          grep -q '^terminal_handshake=authenticated-ack-v1$' \
+            sender-manifest.txt
           grep -q '^measurement_profile=application-controller-steady-v2$' \
             receiver-manifest.txt
           grep -q '^measurement_profile=application-controller-steady-v2$' \
@@ -321,6 +327,8 @@ jobs:
           test "$(grep -c 'receiver_complete generations=8' receiver.log)" -eq 6
           test "$(grep -c 'sender_complete generations=8' sender.log)" -eq 6
           test "$(grep -c 'feedback_applied=8' sender.log)" -eq 6
+          test "$(grep -c 'terminal_ack_datagrams=24' sender.log)" -eq 6
+          test "$(grep -c 'terminal_acknowledged=8' receiver.log)" -eq 6
           test "$(grep -c 'workload_id=policy-pilot-v1' sender.log)" -eq 6
           test "$(grep -c '^sender_complete .*policy_id=fixed-minimum ' sender.log)" -eq 2
           test "$(grep -c '^sender_complete .*policy_id=fixed-class-aware ' sender.log)" -eq 2

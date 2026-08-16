@@ -408,6 +408,20 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "emulation;regression"
         TIMEOUT 45)
+    add_test(
+      NAME aurora.process_terminal_feedback_recovery
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_terminal_feedback_recovery.py"
+        "$<TARGET_FILE:aurora_process_emulation>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_zero_delay_forward_v1.trace"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_terminal_recovery_v3.trace"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_auth_test.key"
+        "a17e5c003b29d4f8")
+    set_tests_properties(
+      aurora.process_terminal_feedback_recovery
+      PROPERTIES
+        LABELS "emulation;authentication;regression"
+        TIMEOUT 45)
     foreach(policy_id IN ITEMS
         fixed-minimum fixed-class-aware biological-adaptive)
       string(REPLACE "-" "_" policy_test_name "${policy_id}")

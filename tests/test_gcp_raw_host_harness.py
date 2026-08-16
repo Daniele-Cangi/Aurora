@@ -128,7 +128,7 @@ def write_matrix_evidence(
         sender_elapsed = 400 + index
         receiver_elapsed = 1200 + index
         sender_text = (
-            "sender_complete generations=2 protocol_version=2 "
+            "sender_complete generations=2 protocol_version=3 "
             "replay_rejected=4 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
             "feedback_rtt_samples=6 feedback_rtt_min_us=100 "
@@ -138,17 +138,23 @@ def write_matrix_evidence(
             "terminal_feedback_rtt_mean_us=250 "
             "terminal_feedback_rtt_max_us=350 "
             "unknown_feedback_echoes=0 feedback_applied=2 "
+            "terminal_ack_datagrams=6 "
+            "terminal_handshake=authenticated-ack-v1 "
             f"sender_elapsed_ms={sender_elapsed}\n"
         )
         receiver_text = (
             "receiver_ready startup_timeout_ms=60000 "
-            "service_timeout_ms=15000 protocol_version=2 "
+            "service_timeout_ms=15000 protocol_version=3 "
             "deadline_semantics=descriptor-relative-receiver-steady "
             "regime_outage_generation_index=none "
-            "auth_profile=hmac-sha256-libsodium\n"
-            "receiver_complete generations=2 protocol_version=2 "
+            "auth_profile=hmac-sha256-libsodium "
+            "terminal_handshake=authenticated-ack-v1\n"
+            "receiver_complete generations=2 protocol_version=3 "
             "replay_rejected=5 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
+            "terminal_handshake=authenticated-ack-v1 "
+            "terminal_acknowledged=2 terminal_feedback_retry_rounds=0 "
+            "terminal_ack_wait_ms=1 "
             f"service_elapsed_ms={receiver_elapsed}\n"
         )
         (run.evidence_dir / "sender.log").write_text(
@@ -165,6 +171,8 @@ def write_matrix_evidence(
             "project": context.project,
             "run_id": run.run_id,
             "source_commit": context.source_commit,
+            "process_protocol_version": harness.PROCESS_PROTOCOL_VERSION,
+            "terminal_handshake": "authenticated-ack-v1",
             "topology": "two-cross-region-non-peered-vpcs-public-ipv4",
             "machine_type": spec.machine_type,
             "authentication_profile": "hmac-sha256-libsodium",
@@ -213,6 +221,10 @@ def write_matrix_evidence(
                 "terminal_feedback_rtt_mean_us": 250,
                 "terminal_feedback_rtt_max_us": 350,
                 "unknown_feedback_echoes": 0,
+                "terminal_ack_datagrams": 6,
+                "terminal_acknowledged": 2,
+                "terminal_feedback_retry_rounds": 0,
+                "terminal_ack_wait_ms": 1,
                 "controller_receiver_ready_ms": 2500 + index,
                 "controller_sender_wall_ms": 3500 + index,
                 "controller_total_wall_ms": 7000 + index,
@@ -249,7 +261,7 @@ class GcpRawHostHarnessTests(unittest.TestCase):
     @staticmethod
     def completed_transport_logs():
         sender = (
-            "sender_complete generations=2 protocol_version=2 "
+            "sender_complete generations=2 protocol_version=3 "
             "replay_rejected=4 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
             "feedback_applied=2 feedback_rtt_samples=6 "
@@ -259,17 +271,23 @@ class GcpRawHostHarnessTests(unittest.TestCase):
             "terminal_feedback_rtt_mean_us=250 "
             "terminal_feedback_rtt_max_us=350 "
             "unknown_feedback_echoes=0 sender_elapsed_ms=1234 "
+            "terminal_ack_datagrams=6 "
+            "terminal_handshake=authenticated-ack-v1 "
             "policy_id=biological-adaptive workload_id=smoke-v2\n"
         )
         receiver = (
             "receiver_ready startup_timeout_ms=60000 "
-            "service_timeout_ms=15000 protocol_version=2 "
+            "service_timeout_ms=15000 protocol_version=3 "
             "deadline_semantics=descriptor-relative-receiver-steady "
             "regime_outage_generation_index=none "
-            "auth_profile=hmac-sha256-libsodium\n"
-            "receiver_complete generations=2 protocol_version=2 "
+            "auth_profile=hmac-sha256-libsodium "
+            "terminal_handshake=authenticated-ack-v1\n"
+            "receiver_complete generations=2 protocol_version=3 "
             "replay_rejected=5 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
+            "terminal_handshake=authenticated-ack-v1 "
+            "terminal_acknowledged=2 terminal_feedback_retry_rounds=0 "
+            "terminal_ack_wait_ms=1 "
             "service_elapsed_ms=987\n"
         )
         return sender, receiver
@@ -548,7 +566,7 @@ class GcpRawHostHarnessTests(unittest.TestCase):
 
     def test_process_evidence_requires_timing_and_authentication(self):
         sender = (
-            "sender_complete generations=2 protocol_version=2 "
+            "sender_complete generations=2 protocol_version=3 "
             "replay_rejected=4 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
             "feedback_applied=2 feedback_rtt_samples=6 "
@@ -557,18 +575,23 @@ class GcpRawHostHarnessTests(unittest.TestCase):
             "terminal_feedback_rtt_min_us=150 "
             "terminal_feedback_rtt_mean_us=250 "
             "terminal_feedback_rtt_max_us=350 "
-            "unknown_feedback_echoes=0 "
+            "unknown_feedback_echoes=0 terminal_ack_datagrams=6 "
+            "terminal_handshake=authenticated-ack-v1 "
             "sender_elapsed_ms=1234\n"
         )
         receiver = (
             "receiver_ready startup_timeout_ms=60000 "
-            "service_timeout_ms=15000 protocol_version=2 "
+            "service_timeout_ms=15000 protocol_version=3 "
             "deadline_semantics=descriptor-relative-receiver-steady "
             "regime_outage_generation_index=none "
-            "auth_profile=hmac-sha256-libsodium\n"
-            "receiver_complete generations=2 protocol_version=2 "
+            "auth_profile=hmac-sha256-libsodium "
+            "terminal_handshake=authenticated-ack-v1\n"
+            "receiver_complete generations=2 protocol_version=3 "
             "replay_rejected=5 "
             "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
+            "terminal_handshake=authenticated-ack-v1 "
+            "terminal_acknowledged=2 terminal_feedback_retry_rounds=0 "
+            "terminal_ack_wait_ms=1 "
             "service_elapsed_ms=987\n"
         )
         result = harness.verify_process_logs(sender, receiver)
@@ -577,6 +600,10 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         self.assertEqual(result["feedback_rtt_samples"], 6)
         self.assertEqual(result["terminal_feedback_rtt_samples"], 2)
         self.assertEqual(result["terminal_feedback_rtt_mean_us"], 250)
+        self.assertEqual(result["terminal_ack_datagrams"], 6)
+        self.assertEqual(result["terminal_acknowledged"], 2)
+        self.assertEqual(result["terminal_feedback_retry_rounds"], 0)
+        self.assertEqual(result["terminal_ack_wait_ms"], 1)
 
     def test_instance_has_billing_and_credential_safety_guards(self):
         with tempfile.TemporaryDirectory() as name:

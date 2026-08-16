@@ -26,7 +26,8 @@ FEEDBACK_RTT_TIMING_FIELDS = (
     "terminal_feedback_rtt_max_us",
 )
 LEGACY_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v2"
-CURRENT_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v3"
+FEEDBACK_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v3"
+CURRENT_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v4"
 
 
 class CampaignError(RuntimeError):
@@ -81,11 +82,20 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
     )
     run_ids: list[str] = []
     schema = reference.get("schema")
-    if schema not in (LEGACY_EVIDENCE_SCHEMA, CURRENT_EVIDENCE_SCHEMA):
+    if schema not in (
+        LEGACY_EVIDENCE_SCHEMA,
+        FEEDBACK_EVIDENCE_SCHEMA,
+        CURRENT_EVIDENCE_SCHEMA,
+    ):
         raise CampaignError("unexpected evidence schema")
+    if schema == CURRENT_EVIDENCE_SCHEMA:
+        identity_fields += (
+            "process_protocol_version",
+            "terminal_handshake",
+        )
     timing_fields = TIMING_FIELDS + (
         FEEDBACK_RTT_TIMING_FIELDS
-        if schema == CURRENT_EVIDENCE_SCHEMA
+        if schema in (FEEDBACK_EVIDENCE_SCHEMA, CURRENT_EVIDENCE_SCHEMA)
         else ()
     )
     metrics: dict[str, list[float]] = {
@@ -118,7 +128,7 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
     return {
         "schema": (
             "aurora-raw-host-campaign-v2"
-            if schema == CURRENT_EVIDENCE_SCHEMA
+            if schema in (FEEDBACK_EVIDENCE_SCHEMA, CURRENT_EVIDENCE_SCHEMA)
             else "aurora-raw-host-campaign-v1"
         ),
         "evidence_level": "emulation",
@@ -130,6 +140,15 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
         "topology": reference["topology"],
         "runtime_binary_sha256": reference["runtime_binary_sha256"],
         "authentication_profile": reference["authentication_profile"],
+        **(
+            {
+                "process_protocol_version": reference[
+                    "process_protocol_version"
+                ],
+                "terminal_handshake": reference["terminal_handshake"],
+            }
+            if schema == CURRENT_EVIDENCE_SCHEMA else {}
+        ),
         "sample_run_ids": run_ids,
         "all_primary_teardowns_passed": True,
         "timing": {
@@ -140,7 +159,7 @@ def summarize(evidence_root: Path, expected_samples: int) -> dict:
             "field_evidence": False,
             "timing_scope": (
                 "application-controller-and-sender-feedback-steady-clocks"
-                if schema == CURRENT_EVIDENCE_SCHEMA
+                if schema in (FEEDBACK_EVIDENCE_SCHEMA, CURRENT_EVIDENCE_SCHEMA)
                 else "application-and-controller-steady-clock"
             ),
             "one_way_latency": False,
