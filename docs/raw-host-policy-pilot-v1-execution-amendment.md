@@ -25,9 +25,10 @@ The controller now selects the key generator that matches gcloud's platform SSH
 suite:
 
 - Windows uses the Cloud SDK's bundled `winkeygen.exe` non-interactively and
-  verifies the private, `.pub`, and `.ppk` files before provisioning continues.
+  verifies the private, `.pub`, and `.ppk` files before any GCP resource is
+  created.
 - Other platforms retain the existing OpenSSH `ssh-keygen` path and verify the
-  private/public pair.
+  private/public pair before any GCP resource is created.
 
 This correction does not change the authenticated transport binary, policy
 implementations or parameters, workload, traces, conditions, randomization seed

@@ -684,9 +684,8 @@ class GcpRawHarness:
             raise HarnessError(f"invalid public IPv4 for {instance}")
         return value
 
-    def prepare_runtime(self, temp: Path) -> str:
-        n = self.names
-        condition = CONDITION_PROFILES[self.config.condition_profile]
+    def prepare_ssh_key(self, temp: Path) -> None:
+        """Prepare and verify the local key set before creating GCP resources."""
         self.ssh_key_file = temp / "gcp-ssh-key"
         self.runner.run(
             ephemeral_ssh_keygen_command(self.gcloud, self.ssh_key_file),
@@ -702,6 +701,12 @@ class GcpRawHarness:
                 "ephemeral SSH key generation did not produce: "
                 + ", ".join(missing_key_files)
             )
+
+    def prepare_runtime(self, temp: Path) -> str:
+        n = self.names
+        condition = CONDITION_PROFILES[self.config.condition_profile]
+        if self.ssh_key_file is None:
+            raise HarnessError("ephemeral SSH key has not been prepared")
         tx_setup = (
             "set -euo pipefail; "
             "sudo DEBIAN_FRONTEND=noninteractive apt-get update; "
@@ -1037,8 +1042,9 @@ class GcpRawHarness:
         self.config.evidence_dir.mkdir(parents=True, exist_ok=True)
         failure: BaseException | None = None
         try:
-            sender_ip, receiver_ip = self.provision()
             with tempfile.TemporaryDirectory(prefix="aurora-gcp-") as temp_name:
+                self.prepare_ssh_key(Path(temp_name))
+                sender_ip, receiver_ip = self.provision()
                 binary_sha = self.prepare_runtime(Path(temp_name))
                 sender_text, receiver_text, timing = self.run_transport(
                     sender_ip, receiver_ip

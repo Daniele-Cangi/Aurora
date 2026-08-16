@@ -298,7 +298,7 @@ class GcpRawHostHarnessTests(unittest.TestCase):
             (key_file, Path(f"{key_file}.pub")),
         )
 
-    def test_windows_keygen_fails_before_gcp_when_winkeygen_is_missing(self):
+    def test_windows_keygen_fails_locally_when_winkeygen_is_missing(self):
         with tempfile.TemporaryDirectory() as name:
             gcloud = Path(name) / "gcloud.cmd"
             gcloud.touch()
@@ -309,6 +309,36 @@ class GcpRawHostHarnessTests(unittest.TestCase):
                     platform_name="win32",
                     executable_lookup=lambda _executable: None,
                 )
+
+    def test_execute_prepares_ssh_key_before_provisioning(self):
+        with tempfile.TemporaryDirectory() as name:
+            cfg = config(Path(name))
+            events = []
+
+            class OrderingHarness(harness.GcpRawHarness):
+                def prepare_ssh_key(self, _temp):
+                    events.append("prepare-ssh-key")
+
+                def provision(self):
+                    events.append("provision")
+                    return "192.0.2.1", "198.51.100.1"
+
+                def prepare_runtime(self, _temp):
+                    events.append("prepare-runtime")
+                    raise harness.HarnessError("ordering sentinel")
+
+                def cleanup(self):
+                    events.append("cleanup")
+                    return {"success": True, "remaining": {}}
+
+            sut = OrderingHarness(cfg, FakeRunner(), gcloud="gcloud")
+            with self.assertRaisesRegex(harness.HarnessError, "ordering sentinel"):
+                sut.execute()
+
+        self.assertEqual(
+            events,
+            ["prepare-ssh-key", "provision", "prepare-runtime", "cleanup"],
+        )
 
     def test_plan_declares_non_peered_public_topology(self):
         with tempfile.TemporaryDirectory() as name:
