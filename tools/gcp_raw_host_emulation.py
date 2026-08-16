@@ -36,6 +36,7 @@ NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{2,30}$")
 PROJECT_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 RAW_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v3"
+WINDOWS_ACCESS_VIOLATION = 0xC0000005
 PROCESS_PROTOCOL_VERSION = 2
 MEASUREMENT_PROFILE = "application-controller-steady-v2"
 TIMING_SCOPE = "application-controller-and-sender-feedback-steady-clocks"
@@ -128,6 +129,43 @@ CONDITION_PROFILES = {
 
 class HarnessError(RuntimeError):
     pass
+
+
+def is_windows_access_violation(
+    return_code: int, *, platform_name: str | None = None
+) -> bool:
+    """Recognize signed or unsigned Windows STATUS_ACCESS_VIOLATION values."""
+    platform_name = platform_name or sys.platform
+    return (
+        platform_name == "win32"
+        and return_code != 0
+        and return_code & 0xFFFFFFFF == WINDOWS_ACCESS_VIOLATION
+    )
+
+
+def verified_receiver_ssh_exit(
+    return_code: int, *, platform_name: str | None = None
+) -> dict:
+    """Attest an SSH wrapper exit after authenticated logs were verified."""
+    if return_code == 0:
+        return {
+            "receiver_ssh_exit_code": 0,
+            "receiver_ssh_exit_classification": "clean",
+            "receiver_ssh_exit_tolerated": False,
+            "acceptance_basis": "zero-exit-and-verified-authenticated-completion",
+        }
+    if is_windows_access_violation(
+        return_code, platform_name=platform_name
+    ):
+        return {
+            "receiver_ssh_exit_code": return_code,
+            "receiver_ssh_exit_classification": (
+                "windows-access-violation-after-verified-remote-completion"
+            ),
+            "receiver_ssh_exit_tolerated": True,
+            "acceptance_basis": "verified-authenticated-completion",
+        }
+    raise HarnessError(f"receiver exited {return_code}")
 
 
 def ephemeral_ssh_keygen_command(
@@ -550,11 +588,13 @@ class GcpRawHarness:
         runner: CommandRunner,
         *,
         gcloud: str,
+        platform_name: str | None = None,
     ):
         config.validate()
         self.config = config
         self.runner = runner
         self.gcloud = gcloud
+        self.platform_name = platform_name or sys.platform
         self.names = Names.from_run_id(config.run_id)
         self.ssh_key_file: Path | None = None
 
@@ -803,7 +843,7 @@ class GcpRawHarness:
 
     def run_transport(
         self, sender_ip: str, receiver_ip: str
-    ) -> tuple[str, str, dict]:
+    ) -> tuple[str, str, dict, dict]:
         n = self.names
         condition = CONDITION_PROFILES[self.config.condition_profile]
         evidence = self.config.evidence_dir
@@ -876,7 +916,9 @@ class GcpRawHarness:
                 receiver.wait(timeout=10)
                 raise HarnessError("receiver did not exit after sender") from error
         receiver_finished_ns = time.perf_counter_ns()
-        if receiver_status != 0:
+        if receiver_status != 0 and not is_windows_access_violation(
+            receiver_status, platform_name=self.platform_name
+        ):
             raise HarnessError(f"receiver exited {receiver_status}")
         sender_text = sender_log.read_text(encoding="utf-8")
         receiver_text = receiver_log.read_text(encoding="utf-8")
@@ -907,7 +949,10 @@ class GcpRawHarness:
                 ),
             }
         )
-        return sender_text, receiver_text, verified
+        controller_transport = verified_receiver_ssh_exit(
+            receiver_status, platform_name=self.platform_name
+        )
+        return sender_text, receiver_text, verified, controller_transport
 
     @staticmethod
     def _wait_ready(
@@ -1054,9 +1099,12 @@ class GcpRawHarness:
                 self.prepare_ssh_key(Path(temp_name))
                 sender_ip, receiver_ip = self.provision()
                 binary_sha = self.prepare_runtime(Path(temp_name))
-                sender_text, receiver_text, timing = self.run_transport(
-                    sender_ip, receiver_ip
-                )
+                (
+                    sender_text,
+                    receiver_text,
+                    timing,
+                    controller_transport,
+                ) = self.run_transport(sender_ip, receiver_ip)
                 sender_meta = self.host_metadata(
                     self.names.sender_instance, self.config.sender_zone
                 )
@@ -1085,6 +1133,7 @@ class GcpRawHarness:
                         "public_ipv4": receiver_ip,
                         **receiver_meta,
                     },
+                    "controller_transport": controller_transport,
                     "timing": timing,
                     "logs": evidence_log_hashes(self.config.evidence_dir),
                     "claims": {
