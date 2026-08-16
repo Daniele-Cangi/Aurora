@@ -246,6 +246,70 @@ class FakeRunner:
 
 
 class GcpRawHostHarnessTests(unittest.TestCase):
+    def test_windows_keygen_uses_gcloud_winkeygen_and_requires_ppk(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            sdk_bin = root / "google-cloud-sdk" / "bin"
+            sdk_helpers = sdk_bin / "sdk"
+            sdk_helpers.mkdir(parents=True)
+            gcloud = sdk_bin / "gcloud.cmd"
+            winkeygen = sdk_helpers / "winkeygen.exe"
+            gcloud.touch()
+            winkeygen.touch()
+            key_file = root / "ephemeral-key"
+            command = harness.ephemeral_ssh_keygen_command(
+                str(gcloud),
+                key_file,
+                platform_name="win32",
+                executable_lookup=lambda executable: (
+                    str(gcloud) if executable == str(gcloud) else None
+                ),
+            )
+            expected_files = harness.expected_ephemeral_ssh_key_files(
+                key_file, platform_name="win32"
+            )
+
+        self.assertEqual(Path(command[0]), winkeygen.resolve())
+        self.assertEqual(
+            command[1:5],
+            ["-bits", "3072", "-overwrite", str(key_file)],
+        )
+        self.assertEqual(
+            expected_files,
+            (key_file, Path(f"{key_file}.pub"), Path(f"{key_file}.ppk")),
+        )
+
+    def test_posix_keygen_keeps_openssh_command_and_key_pair(self):
+        key_file = Path("ephemeral-key")
+        command = harness.ephemeral_ssh_keygen_command(
+            "gcloud",
+            key_file,
+            platform_name="linux",
+            executable_lookup=lambda executable: (
+                "/usr/bin/ssh-keygen" if executable == "ssh-keygen" else None
+            ),
+        )
+        self.assertEqual(command[0], "/usr/bin/ssh-keygen")
+        self.assertEqual(command[-2:], ["-f", str(key_file)])
+        self.assertEqual(
+            harness.expected_ephemeral_ssh_key_files(
+                key_file, platform_name="linux"
+            ),
+            (key_file, Path(f"{key_file}.pub")),
+        )
+
+    def test_windows_keygen_fails_before_gcp_when_winkeygen_is_missing(self):
+        with tempfile.TemporaryDirectory() as name:
+            gcloud = Path(name) / "gcloud.cmd"
+            gcloud.touch()
+            with self.assertRaisesRegex(harness.HarnessError, r"\.ppk"):
+                harness.ephemeral_ssh_keygen_command(
+                    str(gcloud),
+                    Path(name) / "ephemeral-key",
+                    platform_name="win32",
+                    executable_lookup=lambda _executable: None,
+                )
+
     def test_plan_declares_non_peered_public_topology(self):
         with tempfile.TemporaryDirectory() as name:
             cfg = config(Path(name))

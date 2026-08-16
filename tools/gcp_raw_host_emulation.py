@@ -24,7 +24,7 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 FORWARD_PORT = 47001
@@ -128,6 +128,65 @@ CONDITION_PROFILES = {
 
 class HarnessError(RuntimeError):
     pass
+
+
+def ephemeral_ssh_keygen_command(
+    gcloud: str,
+    key_file: Path,
+    *,
+    platform_name: str | None = None,
+    executable_lookup: Callable[[str], str | None] = shutil.which,
+) -> list[str]:
+    """Build a non-interactive key-generation command for gcloud's SSH suite."""
+    platform_name = platform_name or sys.platform
+    if platform_name == "win32":
+        resolved_gcloud = executable_lookup(gcloud) or gcloud
+        bundled_winkeygen = (
+            Path(resolved_gcloud).resolve().parent / "sdk" / "winkeygen.exe"
+        )
+        winkeygen = (
+            str(bundled_winkeygen)
+            if bundled_winkeygen.is_file()
+            else executable_lookup("winkeygen")
+        )
+        if not winkeygen:
+            raise HarnessError(
+                "Cloud SDK winkeygen.exe was not found; gcloud uses PuTTY "
+                "on Windows and requires a companion .ppk SSH key"
+            )
+        return [
+            winkeygen,
+            "-bits",
+            "3072",
+            "-overwrite",
+            str(key_file),
+        ]
+
+    ssh_keygen = executable_lookup("ssh-keygen")
+    if not ssh_keygen:
+        raise HarnessError("ssh-keygen was not found")
+    return [
+        ssh_keygen,
+        "-q",
+        "-t",
+        "rsa",
+        "-b",
+        "3072",
+        "-N",
+        "",
+        "-f",
+        str(key_file),
+    ]
+
+
+def expected_ephemeral_ssh_key_files(
+    key_file: Path, *, platform_name: str | None = None
+) -> tuple[Path, ...]:
+    """Return the complete key set required by gcloud on this platform."""
+    files = [key_file, Path(f"{key_file}.pub")]
+    if (platform_name or sys.platform) == "win32":
+        files.append(Path(f"{key_file}.ppk"))
+    return tuple(files)
 
 
 class CommandRunner:
@@ -628,25 +687,21 @@ class GcpRawHarness:
     def prepare_runtime(self, temp: Path) -> str:
         n = self.names
         condition = CONDITION_PROFILES[self.config.condition_profile]
-        ssh_keygen = shutil.which("ssh-keygen")
-        if not ssh_keygen:
-            raise HarnessError("ssh-keygen was not found")
         self.ssh_key_file = temp / "gcp-ssh-key"
         self.runner.run(
-            [
-                ssh_keygen,
-                "-q",
-                "-t",
-                "rsa",
-                "-b",
-                "3072",
-                "-N",
-                "",
-                "-f",
-                str(self.ssh_key_file),
-            ],
+            ephemeral_ssh_keygen_command(self.gcloud, self.ssh_key_file),
             timeout=30,
         )
+        missing_key_files = [
+            str(path)
+            for path in expected_ephemeral_ssh_key_files(self.ssh_key_file)
+            if not path.is_file()
+        ]
+        if missing_key_files:
+            raise HarnessError(
+                "ephemeral SSH key generation did not produce: "
+                + ", ".join(missing_key_files)
+            )
         tx_setup = (
             "set -euo pipefail; "
             "sudo DEBIAN_FRONTEND=noninteractive apt-get update; "
