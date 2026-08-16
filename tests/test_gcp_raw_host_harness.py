@@ -246,6 +246,115 @@ class FakeRunner:
 
 
 class GcpRawHostHarnessTests(unittest.TestCase):
+    @staticmethod
+    def completed_transport_logs():
+        sender = (
+            "sender_complete generations=2 protocol_version=2 "
+            "replay_rejected=4 "
+            "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
+            "feedback_applied=2 feedback_rtt_samples=6 "
+            "feedback_rtt_min_us=100 feedback_rtt_mean_us=200 "
+            "feedback_rtt_max_us=300 terminal_feedback_rtt_samples=2 "
+            "terminal_feedback_rtt_min_us=150 "
+            "terminal_feedback_rtt_mean_us=250 "
+            "terminal_feedback_rtt_max_us=350 "
+            "unknown_feedback_echoes=0 sender_elapsed_ms=1234 "
+            "policy_id=biological-adaptive workload_id=smoke-v2\n"
+        )
+        receiver = (
+            "receiver_ready startup_timeout_ms=60000 "
+            "service_timeout_ms=15000 protocol_version=2 "
+            "deadline_semantics=descriptor-relative-receiver-steady "
+            "regime_outage_generation_index=none "
+            "auth_profile=hmac-sha256-libsodium\n"
+            "receiver_complete generations=2 protocol_version=2 "
+            "replay_rejected=5 "
+            "auth_profile=hmac-sha256-libsodium auth_rejected=0 "
+            "service_elapsed_ms=987\n"
+        )
+        return sender, receiver
+
+    @staticmethod
+    def transport_runner(sender_text, receiver_text, receiver_status):
+        class ReceiverProcess:
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                del timeout
+                return receiver_status
+
+            def terminate(self):
+                pass
+
+        class TransportRunner:
+            def popen(self, args, *, stdout, stderr):
+                del args, stderr
+                stdout.write(receiver_text)
+                stdout.flush()
+                return ReceiverProcess()
+
+            def run(self, args, *, check=True, timeout=None):
+                del check, timeout
+                return subprocess.CompletedProcess(
+                    args, 0, stdout=sender_text, stderr=""
+                )
+
+        return TransportRunner()
+
+    def test_windows_access_violation_requires_verified_completion(self):
+        sender, receiver = self.completed_transport_logs()
+        status = harness.WINDOWS_ACCESS_VIOLATION
+        runner = self.transport_runner(sender, receiver, status)
+        with tempfile.TemporaryDirectory() as name:
+            cfg = config(Path(name))
+            sut = harness.GcpRawHarness(
+                cfg, runner, gcloud="gcloud", platform_name="win32"
+            )
+            sut.ssh_key_file = Path(name) / "ephemeral-ssh-key"
+            _, _, timing, controller_transport = sut.run_transport(
+                "192.0.2.1", "198.51.100.1"
+            )
+
+        self.assertEqual(timing["sender_elapsed_ms"], 1234)
+        self.assertTrue(controller_transport["receiver_ssh_exit_tolerated"])
+        self.assertEqual(
+            controller_transport["receiver_ssh_exit_classification"],
+            "windows-access-violation-after-verified-remote-completion",
+        )
+        self.assertEqual(
+            controller_transport["acceptance_basis"],
+            "verified-authenticated-completion",
+        )
+
+        incomplete = receiver.split("receiver_complete", 1)[0]
+        runner = self.transport_runner(sender, incomplete, status)
+        with tempfile.TemporaryDirectory() as name:
+            cfg = config(Path(name))
+            sut = harness.GcpRawHarness(
+                cfg, runner, gcloud="gcloud", platform_name="win32"
+            )
+            sut.ssh_key_file = Path(name) / "ephemeral-ssh-key"
+            with self.assertRaises(harness.HarnessError):
+                sut.run_transport("192.0.2.1", "198.51.100.1")
+
+    def test_windows_access_violation_is_platform_and_code_specific(self):
+        unsigned = harness.WINDOWS_ACCESS_VIOLATION
+        signed = unsigned - (1 << 32)
+        self.assertTrue(
+            harness.is_windows_access_violation(
+                unsigned, platform_name="win32"
+            )
+        )
+        self.assertTrue(
+            harness.is_windows_access_violation(signed, platform_name="win32")
+        )
+        self.assertFalse(
+            harness.is_windows_access_violation(unsigned, platform_name="linux")
+        )
+        with self.assertRaisesRegex(harness.HarnessError, "receiver exited 1"):
+            harness.verified_receiver_ssh_exit(1, platform_name="win32")
+
     def test_evidence_log_hashes_preserve_raw_newline_bytes(self):
         with tempfile.TemporaryDirectory() as name:
             evidence = Path(name)
