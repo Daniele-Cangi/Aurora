@@ -98,7 +98,7 @@
   ],
   "measurement_schema": {
     "path": "benchmarks/raw_host_policy_pilot_measurement_v1.json",
-    "sha256": "bbe91f8feb0ffcf39c5d0cc60d03dc9877a622fa6b0866e1785febfb0e2c5768"
+    "sha256": "04d86645f8a2291de5843077250769f845118a6f1274ee8ef7bf02d857bc8663"
   },
   "execution": {
     "fresh_vm_pair_per_cell_block": true,
@@ -106,6 +106,9 @@
     "same_source_commit": true,
     "same_runtime_binary_sha256_across_treatments": true,
     "policy_selection": "sender-runtime-argument",
+    "process_protocol_version": 3,
+    "terminal_handshake": "authenticated-ack-v1",
+    "terminal_ack_occurs_after_policy_observation": true,
     "default_mode": "plan-only",
     "reviewed_source_commit_required_for_execute": true
   },

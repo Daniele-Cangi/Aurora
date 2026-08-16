@@ -65,8 +65,10 @@ def main():
             raise RuntimeError(f"wrong startup timeout: {ready_line}")
         if "service_timeout_ms=5000" not in ready_line:
             raise RuntimeError(f"wrong service timeout: {ready_line}")
-        if "protocol_version=2" not in ready_line:
+        if "protocol_version=3" not in ready_line:
             raise RuntimeError(f"wrong process protocol version: {ready_line}")
+        if "terminal_handshake=authenticated-ack-v1" not in ready_line:
+            raise RuntimeError(f"missing terminal handshake: {ready_line}")
 
         # This delay exceeds the service budget. Success proves that service
         # accounting begins at the first valid descriptor, not at bind time.
@@ -102,9 +104,15 @@ def main():
             )
         if "sender_complete generations=2" not in sender.stdout:
             raise RuntimeError(f"missing sender completion: {sender.stdout}")
+        if "terminal_ack_datagrams=6" not in sender.stdout:
+            raise RuntimeError(f"missing sender terminal ACKs: {sender.stdout}")
         if "receiver_complete generations=2" not in receiver_stdout:
             raise RuntimeError(
                 f"missing receiver completion: {receiver_stdout}"
+            )
+        if "terminal_acknowledged=2" not in receiver_stdout:
+            raise RuntimeError(
+                f"missing receiver terminal ACK evidence: {receiver_stdout}"
             )
         if not re.search(r"sender_elapsed_ms=[1-9][0-9]*", sender.stdout):
             raise RuntimeError(f"missing sender timing: {sender.stdout}")

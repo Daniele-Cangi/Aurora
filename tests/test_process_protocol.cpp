@@ -79,6 +79,20 @@ int main() {
     assert(restored.report.decoder_rank == descriptor.total_source_symbols);
     assert(restored.report.payload.empty());
 
+    const aurora::emulation::TerminalAckFrame acknowledgement{
+        descriptor.descriptor_fingerprint,
+        descriptor.generation_id};
+    const auto acknowledgement_frame =
+        aurora::emulation::encode_terminal_ack(acknowledgement);
+    assert(aurora::emulation::frame_type(acknowledgement_frame) ==
+           aurora::emulation::FrameType::TERMINAL_ACK);
+    const auto restored_acknowledgement =
+        aurora::emulation::decode_terminal_ack(acknowledgement_frame);
+    assert(restored_acknowledgement.descriptor_fingerprint ==
+           descriptor.descriptor_fingerprint);
+    assert(restored_acknowledgement.generation_id ==
+           descriptor.generation_id);
+
     aurora::emulation::FeedbackRttTracker tracker;
     using namespace std::chrono_literals;
     const auto origin = aurora::emulation::FeedbackRttTracker::TimePoint{};

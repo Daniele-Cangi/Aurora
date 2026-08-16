@@ -35,9 +35,9 @@ IAP_SOURCE_CIDR = "35.235.240.0/20"
 NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{2,30}$")
 PROJECT_PATTERN = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
-RAW_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v3"
+RAW_EVIDENCE_SCHEMA = "aurora-raw-host-evidence-v4"
 WINDOWS_ACCESS_VIOLATION = 0xC0000005
-PROCESS_PROTOCOL_VERSION = 2
+PROCESS_PROTOCOL_VERSION = 3
 MEASUREMENT_PROFILE = "application-controller-steady-v2"
 TIMING_SCOPE = "application-controller-and-sender-feedback-steady-clocks"
 FEEDBACK_RTT_TIMING_FIELDS = (
@@ -73,7 +73,10 @@ def measurement_contract() -> dict:
                 "sender_elapsed_ms",
                 *FEEDBACK_RTT_TIMING_FIELDS,
             ],
-            "receiver_steady": ["receiver_service_elapsed_ms"],
+            "receiver_steady": [
+                "receiver_service_elapsed_ms",
+                "terminal_ack_wait_ms",
+            ],
             "controller_steady": [
                 "controller_receiver_ready_ms",
                 "controller_sender_wall_ms",
@@ -426,6 +429,8 @@ def verify_process_logs(
         raise HarnessError("receiver regime schedule mismatch")
     if ready.get("auth_profile") != "hmac-sha256-libsodium":
         raise HarnessError("receiver readiness is not authenticated")
+    if ready.get("terminal_handshake") != "authenticated-ack-v1":
+        raise HarnessError("receiver readiness has no terminal handshake")
     for role, fields in (("sender", sender), ("receiver", receiver)):
         if fields.get("generations") != str(expected_generations):
             raise HarnessError(
@@ -435,11 +440,27 @@ def verify_process_logs(
             raise HarnessError(f"{role} did not use libsodium HMAC")
         if fields.get("auth_rejected") != "0":
             raise HarnessError(f"{role} rejected authenticated evidence")
+        if fields.get("terminal_handshake") != "authenticated-ack-v1":
+            raise HarnessError(f"{role} terminal handshake mismatch")
         if fields.get("protocol_version") != str(PROCESS_PROTOCOL_VERSION):
             raise HarnessError(f"{role} process protocol version mismatch")
         require_positive(fields, "replay_rejected")
     if sender.get("feedback_applied") != str(expected_generations):
         raise HarnessError("sender did not apply every terminal feedback report")
+    terminal_ack_datagrams = require_nonnegative(
+        sender, "terminal_ack_datagrams"
+    )
+    if terminal_ack_datagrams != expected_generations * 3:
+        raise HarnessError("sender terminal acknowledgement count mismatch")
+    terminal_acknowledged = require_nonnegative(
+        receiver, "terminal_acknowledged"
+    )
+    if terminal_acknowledged != expected_generations:
+        raise HarnessError("receiver did not authenticate every terminal ACK")
+    terminal_feedback_retry_rounds = require_nonnegative(
+        receiver, "terminal_feedback_retry_rounds"
+    )
+    terminal_ack_wait_ms = require_nonnegative(receiver, "terminal_ack_wait_ms")
     if expected_policy_id is not None and \
             sender.get("policy_id") != expected_policy_id:
         raise HarnessError("sender policy treatment mismatch")
@@ -479,6 +500,10 @@ def verify_process_logs(
         **rtt_values,
         "terminal_feedback_rtt_samples": terminal_samples,
         "unknown_feedback_echoes": 0,
+        "terminal_ack_datagrams": terminal_ack_datagrams,
+        "terminal_acknowledged": terminal_acknowledged,
+        "terminal_feedback_retry_rounds": terminal_feedback_retry_rounds,
+        "terminal_ack_wait_ms": terminal_ack_wait_ms,
     }
     pilot_fields = (
         "delivered",
@@ -1063,6 +1088,8 @@ class GcpRawHarness:
             "project": self.config.project,
             "run_id": self.config.run_id,
             "source_commit": self.config.source_commit,
+            "process_protocol_version": PROCESS_PROTOCOL_VERSION,
+            "terminal_handshake": "authenticated-ack-v1",
             "topology": "two-cross-region-non-peered-vpcs-public-ipv4",
             "machine_type": self.config.machine_type,
             "treatment": {

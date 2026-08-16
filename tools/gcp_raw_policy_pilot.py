@@ -211,6 +211,9 @@ class Spec:
         if measurement_value.get("analysis", {}).get("superiority_test") is not False or \
                 deadline_evaluation.get("clock") != "receiver-steady" or \
                 deadline_evaluation.get("sender_expiry_values_used") is not False or \
+                measurement_value.get("outcomes", {}).get(
+                    "terminal_completion", {}
+                ).get("protocol") != "authenticated-ack-v1" or \
                 causal_regression.get("condition") != "regime-change-v1" or \
                 causal_regression.get("policy_winner_targeted") is not False:
             raise PilotError("measurement schema is not pilot-bounded")
@@ -231,6 +234,12 @@ class Spec:
         if execution.get("lifecycle_count") != MAX_LIFECYCLES or \
                 execution.get("fresh_vm_pair_per_cell_block") is not True or \
                 execution.get("same_runtime_binary_sha256_across_treatments") is not True or \
+                execution.get("process_protocol_version") != \
+                harness.PROCESS_PROTOCOL_VERSION or \
+                execution.get("terminal_handshake") != \
+                "authenticated-ack-v1" or \
+                execution.get("terminal_ack_occurs_after_policy_observation") \
+                is not True or \
                 safety.get("maximum_lifecycles") != MAX_LIFECYCLES or \
                 safety.get("replacement_lifecycles") is not False:
             raise PilotError("pilot lifecycle safety bounds are incomplete")
@@ -346,6 +355,15 @@ def summarize(spec: Spec, context: Context) -> dict:
         if value.get("result") != "passed" or \
                 value.get("teardown", {}).get("success") is not True:
             raise PilotError(f"{run.run_id}: failed lifecycle or teardown")
+        if value.get("schema") != harness.RAW_EVIDENCE_SCHEMA or \
+                value.get("process_protocol_version") != \
+                harness.PROCESS_PROTOCOL_VERSION or \
+                value.get("terminal_handshake") != \
+                "authenticated-ack-v1" or \
+                value.get("measurement", {}).get(
+                    "process_protocol_version"
+                ) != harness.PROCESS_PROTOCOL_VERSION:
+            raise PilotError(f"{run.run_id}: process evidence schema mismatch")
         if value.get("source_commit") != context.source_commit or \
                 value.get("run_id") != run.run_id:
             raise PilotError(f"{run.run_id}: evidence identity mismatch")
@@ -369,6 +387,10 @@ def summarize(spec: Spec, context: Context) -> dict:
             "repair_symbols_emitted",
             "wire_symbol_datagrams",
             "terminal_feedback_rtt_mean_us",
+            "terminal_ack_datagrams",
+            "terminal_acknowledged",
+            "terminal_feedback_retry_rounds",
+            "terminal_ack_wait_ms",
         )
         if any(not isinstance(timing.get(field), (int, float)) for field in required):
             raise PilotError(f"{run.run_id}: incomplete pilot measurements")

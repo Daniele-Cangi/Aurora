@@ -93,7 +93,8 @@ forward_port=47001
 reverse_port=47002
 session_id=${session_id}
 authentication_profile=hmac-sha256-libsodium
-process_protocol_version=2
+process_protocol_version=3
+terminal_handshake=authenticated-ack-v1
 measurement_profile=application-controller-steady-v2
 policy_id=${policy_id}
 workload_id=${workload_id}
@@ -116,7 +117,11 @@ grep -q "sender_complete generations=${generation_count}" \
 grep -q "policy_id=${policy_id}" "${evidence_dir}/sender.log"
 grep -q "workload_id=${workload_id}" "${evidence_dir}/sender.log"
 grep -q "feedback_applied=${generation_count}" "${evidence_dir}/sender.log"
-grep -q "protocol_version=2" "${evidence_dir}/sender.log"
+grep -q "protocol_version=3" "${evidence_dir}/sender.log"
+grep -q "terminal_ack_datagrams=$((generation_count * 3))" \
+  "${evidence_dir}/sender.log"
+grep -q "terminal_handshake=authenticated-ack-v1" \
+  "${evidence_dir}/sender.log"
 grep -Eq "feedback_rtt_samples=([2-9]|[1-9][0-9]+)( |$)" \
   "${evidence_dir}/sender.log"
 grep -q "terminal_feedback_rtt_samples=${generation_count}" \
@@ -127,10 +132,19 @@ grep -q "auth_profile=hmac-sha256-libsodium" \
 grep -Eq "replay_rejected=[1-9][0-9]*" "${evidence_dir}/sender.log"
 grep -q "receiver_complete generations=${generation_count}" \
   "${evidence_dir}/receiver.log"
-grep -q "protocol_version=2" "${evidence_dir}/receiver.log"
+grep -q "protocol_version=3" "${evidence_dir}/receiver.log"
+grep -q "terminal_acknowledged=${generation_count}" \
+  "${evidence_dir}/receiver.log"
+grep -q "terminal_handshake=authenticated-ack-v1" \
+  "${evidence_dir}/receiver.log"
 grep -q "auth_profile=hmac-sha256-libsodium" \
   "${evidence_dir}/receiver.log"
 grep -Eq "replay_rejected=[1-9][0-9]*" "${evidence_dir}/receiver.log"
+
+if [ "${condition_id}" = terminal-recovery-v3 ]; then
+  grep -Eq "terminal_feedback_retry_rounds=[1-9][0-9]*" \
+    "${evidence_dir}/receiver.log"
+fi
 
 if [ "${workload_id}" = policy-pilot-v1 ]; then
   python3 tests/policy_pilot_evidence.py \

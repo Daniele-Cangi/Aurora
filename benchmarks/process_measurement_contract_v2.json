@@ -1,13 +1,16 @@
 {
   "schema": "aurora-process-measurement-contract-v2",
   "profile": "application-controller-steady-v2",
-  "process_protocol_version": 2,
+  "process_protocol_version": 3,
   "clock_relationship": "independent-unsynchronized-steady-clocks",
   "correlation": {
     "field": "echoed_forward_sequence",
     "integrity": "direction-and-session-bound-hmac-sha256-libsodium",
     "sender_records_first_wire_emission": true,
-    "sender_accepts_first_monotonic_feedback_only": true
+    "sender_accepts_first_monotonic_feedback_only": true,
+    "terminal_completion_handshake": "authenticated-ack-v1",
+    "policy_observation_precedes_terminal_ack": true,
+    "receiver_exit_requires_ack_for_every_terminal_generation": true
   },
   "metrics": {
     "sender_elapsed_ms": {
@@ -28,7 +31,13 @@
     },
     "receiver_service_elapsed_ms": {
       "clock": "receiver-steady",
-      "boundary": "first-valid-descriptor-to-terminal-completion"
+      "boundary": "first-valid-descriptor-to-all-generations-terminal",
+      "terminal_ack_wait_excluded": true
+    },
+    "terminal_ack_wait_ms": {
+      "clock": "receiver-steady",
+      "boundary": "all-generations-terminal-to-all-terminal-acks-authenticated",
+      "interpretation": "control-plane completion diagnostic"
     },
     "controller_receiver_ready_ms": {
       "clock": "controller-steady",

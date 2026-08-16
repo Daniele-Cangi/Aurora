@@ -49,7 +49,7 @@ jobs:
       - name: Test real HMAC process authentication
         run: >-
           ctest --test-dir build-secure -C Release --output-on-failure
-          -R 'aurora\.(process_authentication|process_separated_emulation|process_policy_pilot_)'
+          -R 'aurora\.(process_authentication|process_separated_emulation|process_terminal_feedback_recovery|process_policy_pilot_)'
 
   container-host-emulation:
     runs-on: ubuntu-latest
@@ -64,6 +64,14 @@ jobs:
         run: >-
           bash tests/run_container_host_emulation.sh
           aurora-process-emulation:ci process-host-evidence
+      - name: Recover dropped terminal feedback across containers
+        run: >-
+          bash tests/run_container_host_emulation.sh
+          aurora-process-emulation:ci
+          process-host-evidence/terminal-recovery
+          biological-adaptive smoke-v2 2
+          process_zero_delay_forward_v1.trace
+          process_terminal_recovery_v3.trace terminal-recovery-v3
       - name: Run policy pilot treatments in one immutable image
         shell: bash
         run: |

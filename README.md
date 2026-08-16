@@ -157,7 +157,14 @@ Secure claims apply only to builds explicitly using the real cryptographic backe
 
 `aurora_process_emulation` runs sender and receiver roles in separate OS processes. Its default smoke workload serves two generations; the fixed policy-pilot workload serves eight generations sequentially so authenticated terminal feedback is applied before the next policy plan. The receiver keeps decoder-only state keyed by generation identity, without access to source payloads, and returns progress or terminal `DecodeReport` summaries to a separately configured feedback destination. Receiver deadline outcomes use only its own `steady_clock`: the first accepted descriptor is the local origin and authenticated descriptor deadlines are relative durations, never sender expiry timestamps. The sender accepts feedback monotonically: terminal reports are sticky, and reordered reports cannot regress decoder rank or observed-symbol count. `--policy` selects `fixed-minimum`, `fixed-class-aware` or `biological-adaptive` at runtime in the same binary; `--workload` selects the frozen workload. Bind and destination IPv4 literals are independent, so the same roles can be configured across hosts. CI exercises them in distinct Docker network namespaces and on independent GitHub-hosted VMs over Tailscale; retained records additionally exercise public IPv4 routing between non-peered GCP VPCs in different regions.
 
-Process protocol V2 adds `echoed_forward_sequence` to authenticated feedback.
+Process protocol V3 retains the V2 `echoed_forward_sequence` correlation and
+adds an authenticated terminal acknowledgement. The sender applies the
+terminal report to the selected policy before emitting three `TERMINAL_ACK`
+copies; the receiver remains available until it has authenticated one ACK for
+every terminal generation. If the first terminal feedback copies are lost, a
+subsequent sender request causes the receiver to repeat the sticky terminal
+report instead of exiting prematurely.
+
 The sender records the first wire emission of each authenticated forward
 sequence and correlates it with the first monotonic feedback that echoes it.
 The resulting all-feedback and terminal-feedback min/mean/max values use only
@@ -167,9 +174,9 @@ subtraction, but the interval still includes receiver processing, configured
 reverse impairment, network service and sender polling. It is therefore an
 application feedback RTT, not network-only or one-way latency.
 
-Forward symbol attempts and reverse feedback attempts are driven by independent checked-in impairment traces. V1 binds cyclic `P` (pass), `D` (drop) and `U` (duplicate) actions to a scenario name and FNV-1a checksum. V2 uses `action@delay-ms` events, capped at 60 seconds. Events index their channel's attempt order; release time is ordered first and attempt index breaks ties. A delayed earlier event can therefore be overtaken by a later immediate event reproducibly. Forward descriptor retransmission remains outside impairment; the reverse trace covers descriptor acknowledgements, progress reports and repeated terminal reports.
+Forward symbol attempts and reverse feedback attempts are driven by independent checked-in impairment traces. V1 binds cyclic `P` (pass), `D` (drop) and `U` (duplicate) actions to a scenario name and FNV-1a checksum. V2 uses `action@delay-ms` events, capped at 60 seconds. Events index their channel's attempt order; release time is ordered first and attempt index breaks ties. A delayed earlier event can therefore be overtaken by a later immediate event reproducibly. Forward descriptor retransmission and terminal ACKs remain outside symbol impairment; the reverse trace covers descriptor acknowledgements, progress reports and repeated terminal reports.
 
-Descriptor, symbol and feedback payloads retain their bounded versioned checksum envelope. Every UDP datagram is additionally wrapped in a process-authentication envelope binding direction, 64-bit session ID, 64-bit sequence number, payload length and tag. With `USE_SODIUM=ON`, the tag is HMAC-SHA-256 from libsodium; a 64-packet bitmap window accepts bounded UDP reordering while rejecting duplicates and old replays. Possession of the pre-shared key establishes session-peer provenance, not ownership of an IP address.
+Descriptor, symbol, feedback and terminal-ACK payloads retain their bounded versioned checksum envelope. Every UDP datagram is additionally wrapped in a process-authentication envelope binding direction, 64-bit session ID, 64-bit sequence number, payload length and tag. With `USE_SODIUM=ON`, the tag is HMAC-SHA-256 from libsodium; a 64-packet bitmap window accepts bounded UDP reordering while rejecting duplicates and old replays. Possession of the pre-shared key establishes session-peer provenance, not ownership of an IP address.
 
 With `USE_SODIUM=OFF`, the same envelope and replay invariants use a deterministic placeholder tagged `insecure-test-placeholder-mac`. That profile is a regression oracle only and is not authentication. CI includes a separate Ubuntu `secure-auth` job that installs libsodium and runs the authentication unit test plus the complete two-process path under the real backend. The checked-in key is public test material and must never be reused as a deployment secret.
 

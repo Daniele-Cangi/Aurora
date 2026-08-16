@@ -16,19 +16,25 @@
 
 namespace aurora::emulation {
 
-inline constexpr std::uint16_t process_protocol_version = 2;
+inline constexpr std::uint16_t process_protocol_version = 3;
 inline constexpr std::size_t maximum_datagram_bytes = 60'000;
 
 enum class FrameType : std::uint8_t {
     DESCRIPTOR = 1,
     SYMBOL = 2,
-    FEEDBACK = 3
+    FEEDBACK = 3,
+    TERMINAL_ACK = 4
 };
 
 struct FeedbackFrame {
     std::uint64_t descriptor_fingerprint = 0;
     transport::DecodeReport report;
     std::uint64_t echoed_forward_sequence = 0;
+};
+
+struct TerminalAckFrame {
+    std::uint64_t descriptor_fingerprint = 0;
+    std::string generation_id;
 };
 
 namespace detail {
@@ -194,7 +200,7 @@ inline Envelope open(std::span<const std::uint8_t> encoded) {
     }
     const auto raw_type = reader.u8();
     if (raw_type < static_cast<std::uint8_t>(FrameType::DESCRIPTOR) ||
-        raw_type > static_cast<std::uint8_t>(FrameType::FEEDBACK)) {
+        raw_type > static_cast<std::uint8_t>(FrameType::TERMINAL_ACK)) {
         throw std::invalid_argument("process protocol: unknown frame type");
     }
     if (reader.u8() != 0) {
@@ -439,6 +445,34 @@ inline FeedbackFrame decode_feedback(std::span<const std::uint8_t> encoded) {
         throw std::invalid_argument("process protocol: invalid feedback summary");
     }
     return feedback;
+}
+
+inline std::vector<std::uint8_t> encode_terminal_ack(
+    const TerminalAckFrame& acknowledgement) {
+    if (acknowledgement.generation_id.empty()) {
+        throw std::invalid_argument(
+            "process protocol: terminal acknowledgement has no generation");
+    }
+    detail::Writer writer;
+    writer.u64(acknowledgement.descriptor_fingerprint);
+    writer.string(acknowledgement.generation_id);
+    return detail::envelope(FrameType::TERMINAL_ACK, writer.take());
+}
+
+inline TerminalAckFrame decode_terminal_ack(
+    std::span<const std::uint8_t> encoded) {
+    const auto envelope_value = detail::open(encoded);
+    detail::require_type(envelope_value, FrameType::TERMINAL_ACK);
+    detail::Reader reader(envelope_value.payload);
+    TerminalAckFrame acknowledgement;
+    acknowledgement.descriptor_fingerprint = reader.u64();
+    acknowledgement.generation_id = reader.string();
+    reader.finish();
+    if (acknowledgement.generation_id.empty()) {
+        throw std::invalid_argument(
+            "process protocol: terminal acknowledgement has no generation");
+    }
+    return acknowledgement;
 }
 
 } // namespace aurora::emulation

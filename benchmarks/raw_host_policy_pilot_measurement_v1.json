@@ -54,6 +54,17 @@
         "sender-polling"
       ]
     },
+    "terminal_completion": {
+      "protocol": "authenticated-ack-v1",
+      "policy_observation_precedes_ack": true,
+      "fields": [
+        "terminal_ack_datagrams",
+        "terminal_acknowledged",
+        "terminal_feedback_retry_rounds",
+        "terminal_ack_wait_ms"
+      ],
+      "receiver_service_elapsed_excludes_ack_wait": true
+    },
     "protection_plan": {
       "scope": "per-generation",
       "fields": [
@@ -130,6 +141,8 @@
   "required_identity": [
     "source_commit",
     "runtime_binary_sha256",
+    "process_protocol_version",
+    "terminal_handshake",
     "authentication_profile",
     "topology",
     "workload_id",
