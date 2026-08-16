@@ -1,5 +1,7 @@
 benchmarks/*.csv text eol=lf
 benchmarks/*.trace text eol=lf
+benchmarks/gcp_raw_host_policy_pilot_v1.json text eol=lf
+benchmarks/raw_host_policy_pilot_measurement_v1.json text eol=lf
 tests/*.sh text eol=lf
 tests/Dockerfile.* text eol=lf
 .github/workflows/*.yml text eol=lf

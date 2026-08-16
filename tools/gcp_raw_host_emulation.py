@@ -47,6 +47,19 @@ FEEDBACK_RTT_TIMING_FIELDS = (
     "terminal_feedback_rtt_mean_us",
     "terminal_feedback_rtt_max_us",
 )
+POLICY_IDS = (
+    "fixed-minimum",
+    "fixed-class-aware",
+    "biological-adaptive",
+)
+WORKLOAD_GENERATIONS = {
+    "smoke-v2": 2,
+    "policy-pilot-v1": 8,
+}
+
+
+def workload_service_timeout_ms(workload_id: str) -> int:
+    return 120_000 if workload_id == "policy-pilot-v1" else SERVICE_TIMEOUT_MS
 
 
 def measurement_contract() -> dict:
@@ -77,6 +90,7 @@ class ConditionProfile:
     name: str
     forward_trace: str
     reverse_trace: str
+    outage_generation_index: int | None = None
 
     @property
     def forward_name(self) -> str:
@@ -97,6 +111,17 @@ CONDITION_PROFILES = {
         name="zero-delay-replay-v1",
         forward_trace="benchmarks/process_zero_delay_forward_v1.trace",
         reverse_trace="benchmarks/process_zero_delay_reverse_v1.trace",
+    ),
+    "feedback-stall-v2": ConditionProfile(
+        name="feedback-stall-v2",
+        forward_trace="benchmarks/process_zero_delay_forward_v1.trace",
+        reverse_trace="benchmarks/process_feedback_v2.trace",
+    ),
+    "regime-change-v1": ConditionProfile(
+        name="regime-change-v1",
+        forward_trace="benchmarks/process_timed_v2.trace",
+        reverse_trace="benchmarks/process_feedback_v2.trace",
+        outage_generation_index=2,
     ),
 }
 
@@ -160,6 +185,8 @@ class Config:
     source_commit: str
     repository_url: str
     evidence_dir: Path
+    policy_id: str = "biological-adaptive"
+    workload_id: str = "smoke-v2"
 
     def validate(self) -> None:
         if not PROJECT_PATTERN.fullmatch(self.project):
@@ -179,6 +206,10 @@ class Config:
             raise HarnessError("invalid machine type")
         if self.condition_profile not in CONDITION_PROFILES:
             raise HarnessError("unknown condition profile")
+        if self.policy_id not in POLICY_IDS:
+            raise HarnessError("unknown transport policy")
+        if self.workload_id not in WORKLOAD_GENERATIONS:
+            raise HarnessError("unknown process workload")
         if not self.repository_url.startswith("https://github.com/"):
             raise HarnessError("repository URL must use GitHub HTTPS")
 
@@ -262,19 +293,39 @@ def require_nonnegative(fields: dict[str, str], key: str) -> int:
     return value
 
 
-def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
+def verify_process_logs(
+    sender_text: str,
+    receiver_text: str,
+    *,
+    expected_generations: int = 2,
+    expected_policy_id: str | None = None,
+    expected_workload_id: str | None = None,
+    expected_service_timeout_ms: int = SERVICE_TIMEOUT_MS,
+    expected_outage_generation_index: int | None = None,
+) -> dict:
     ready = parse_record(receiver_text, "receiver_ready")
     sender = parse_record(sender_text, "sender_complete")
     receiver = parse_record(receiver_text, "receiver_complete")
     if ready.get("startup_timeout_ms") != str(STARTUP_TIMEOUT_MS):
         raise HarnessError("receiver startup timeout evidence mismatch")
-    if ready.get("service_timeout_ms") != str(SERVICE_TIMEOUT_MS):
+    if ready.get("service_timeout_ms") != str(expected_service_timeout_ms):
         raise HarnessError("receiver service timeout evidence mismatch")
+    if ready.get("deadline_semantics") != \
+            "descriptor-relative-receiver-steady":
+        raise HarnessError("receiver deadline semantics mismatch")
+    expected_outage = (
+        str(expected_outage_generation_index)
+        if expected_outage_generation_index is not None else "none"
+    )
+    if ready.get("regime_outage_generation_index") != expected_outage:
+        raise HarnessError("receiver regime schedule mismatch")
     if ready.get("auth_profile") != "hmac-sha256-libsodium":
         raise HarnessError("receiver readiness is not authenticated")
     for role, fields in (("sender", sender), ("receiver", receiver)):
-        if fields.get("generations") != "2":
-            raise HarnessError(f"{role} did not complete two generations")
+        if fields.get("generations") != str(expected_generations):
+            raise HarnessError(
+                f"{role} did not complete {expected_generations} generations"
+            )
         if fields.get("auth_profile") != "hmac-sha256-libsodium":
             raise HarnessError(f"{role} did not use libsodium HMAC")
         if fields.get("auth_rejected") != "0":
@@ -282,15 +333,22 @@ def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
         if fields.get("protocol_version") != str(PROCESS_PROTOCOL_VERSION):
             raise HarnessError(f"{role} process protocol version mismatch")
         require_positive(fields, "replay_rejected")
-    if sender.get("feedback_applied") != "2":
-        raise HarnessError("sender did not apply both feedback reports")
+    if sender.get("feedback_applied") != str(expected_generations):
+        raise HarnessError("sender did not apply every terminal feedback report")
+    if expected_policy_id is not None and \
+            sender.get("policy_id") != expected_policy_id:
+        raise HarnessError("sender policy treatment mismatch")
+    if expected_workload_id is not None and \
+            sender.get("workload_id") != expected_workload_id:
+        raise HarnessError("sender workload mismatch")
     if ready.get("protocol_version") != str(PROCESS_PROTOCOL_VERSION):
         raise HarnessError("receiver readiness protocol version mismatch")
     feedback_samples = require_positive(sender, "feedback_rtt_samples")
     terminal_samples = require_positive(
         sender, "terminal_feedback_rtt_samples"
     )
-    if terminal_samples != 2 or feedback_samples < terminal_samples:
+    if terminal_samples != expected_generations or \
+            feedback_samples < terminal_samples:
         raise HarnessError("sender feedback RTT sample counts are inconsistent")
     if require_nonnegative(sender, "unknown_feedback_echoes") != 0:
         raise HarnessError("sender observed an unbound feedback echo")
@@ -305,7 +363,7 @@ def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
             <= rtt_values[f"{prefix}_max_us"]
         ):
             raise HarnessError(f"invalid {prefix} summary")
-    return {
+    result = {
         "sender_elapsed_ms": require_positive(sender, "sender_elapsed_ms"),
         "receiver_service_elapsed_ms": require_positive(
             receiver, "service_elapsed_ms"
@@ -317,6 +375,37 @@ def verify_process_logs(sender_text: str, receiver_text: str) -> dict:
         "terminal_feedback_rtt_samples": terminal_samples,
         "unknown_feedback_echoes": 0,
     }
+    pilot_fields = (
+        "delivered",
+        "critical_generations",
+        "critical_delivered_before_deadline",
+        "source_symbols",
+        "initial_symbols",
+        "repair_symbols_requested",
+        "repair_symbols_emitted",
+        "descriptor_datagrams",
+        "wire_symbol_datagrams",
+    )
+    if expected_workload_id == "policy-pilot-v1":
+        for field in pilot_fields:
+            result[field] = require_nonnegative(sender, field)
+        if result["source_symbols"] <= 0 or result["initial_symbols"] <= 0:
+            raise HarnessError("pilot symbol counters must be positive")
+        receiver_delivered = require_nonnegative(receiver, "delivered")
+        receiver_critical = require_nonnegative(
+            receiver, "critical_generations"
+        )
+        receiver_critical_before = require_nonnegative(
+            receiver, "critical_delivered_before_deadline"
+        )
+        if receiver_delivered != result["delivered"] or \
+                receiver_critical != result["critical_generations"] or \
+                receiver_critical_before != \
+                result["critical_delivered_before_deadline"]:
+            raise HarnessError("sender/receiver delivery outcomes disagree")
+        if result["critical_generations"] != expected_generations:
+            raise HarnessError("pilot workload lacks a critical segment")
+    return result
 
 
 def build_plan(config: Config, names: Names) -> dict:
@@ -328,10 +417,24 @@ def build_plan(config: Config, names: Names) -> dict:
         "source_commit": config.source_commit,
         "topology": "two-cross-region-non-peered-vpcs-public-ipv4",
         "machine_type": config.machine_type,
+        "treatment": {
+            "policy_id": config.policy_id,
+            "selection": "sender-runtime-argument",
+            "binary_rebuild_per_treatment": False,
+        },
+        "workload": {
+            "id": config.workload_id,
+            "generation_count": WORKLOAD_GENERATIONS[config.workload_id],
+            "startup_timeout_ms": STARTUP_TIMEOUT_MS,
+            "service_timeout_ms": workload_service_timeout_ms(
+                config.workload_id
+            ),
+        },
         "condition": {
             "profile": condition.name,
             "forward_trace": condition.forward_name,
             "reverse_trace": condition.reverse_name,
+            "outage_generation_index": condition.outage_generation_index,
         },
         "measurement": measurement_contract(),
         "sender": {
@@ -645,18 +748,27 @@ class GcpRawHarness:
             "set -euo pipefail; session=$(tr -d '\\r\\n' "
             "< /tmp/process-session.id); "
             "/tmp/aurora-runtime/aurora_process_emulation receiver "
-            f"0.0.0.0 {FORWARD_PORT} {sender_ip} {REVERSE_PORT} 2 "
+            f"0.0.0.0 {FORWARD_PORT} {sender_ip} {REVERSE_PORT} "
+            f"{WORKLOAD_GENERATIONS[self.config.workload_id]} "
             f"/tmp/aurora-runtime/{condition.reverse_name} "
             "/tmp/process-auth.key \"${session}\" "
-            f"{STARTUP_TIMEOUT_MS} {SERVICE_TIMEOUT_MS}"
+            f"{STARTUP_TIMEOUT_MS} "
+            f"{workload_service_timeout_ms(self.config.workload_id)}"
         )
+        if condition.outage_generation_index is not None:
+            receiver_command += (
+                " --outage-generation "
+                f"{condition.outage_generation_index}"
+            )
         sender_command = (
             "set -euo pipefail; session=$(tr -d '\\r\\n' "
             "< /tmp/process-session.id); "
             "/tmp/aurora-runtime/aurora_process_emulation sender "
             f"{receiver_ip} {FORWARD_PORT} 0.0.0.0 {REVERSE_PORT} "
             f"/tmp/aurora-runtime/{condition.forward_name} "
-            "/tmp/process-auth.key \"${session}\""
+            "/tmp/process-auth.key \"${session}\" "
+            f"--policy {self.config.policy_id} "
+            f"--workload {self.config.workload_id}"
         )
         started_ns = time.perf_counter_ns()
         with receiver_log.open("w", encoding="utf-8") as rx_out, \
@@ -676,7 +788,11 @@ class GcpRawHarness:
                     n.sender_instance, self.config.sender_zone, sender_command
                 ),
                 check=False,
-                timeout=90,
+                timeout=(
+                    180
+                    if self.config.workload_id == "policy-pilot-v1"
+                    else 90
+                ),
             )
             sender_finished_ns = time.perf_counter_ns()
             sender_log.write_text(sender.stdout, encoding="utf-8")
@@ -696,7 +812,20 @@ class GcpRawHarness:
             raise HarnessError(f"receiver exited {receiver_status}")
         sender_text = sender_log.read_text(encoding="utf-8")
         receiver_text = receiver_log.read_text(encoding="utf-8")
-        verified = verify_process_logs(sender_text, receiver_text)
+        verified = verify_process_logs(
+            sender_text,
+            receiver_text,
+            expected_generations=WORKLOAD_GENERATIONS[
+                self.config.workload_id
+            ],
+            expected_policy_id=self.config.policy_id,
+            expected_workload_id=self.config.workload_id,
+            expected_service_timeout_ms=workload_service_timeout_ms(
+                self.config.workload_id
+            ),
+            expected_outage_generation_index=
+                condition.outage_generation_index,
+        )
         verified.update(
             {
                 "controller_receiver_ready_ms": round(
@@ -823,6 +952,11 @@ class GcpRawHarness:
             "source_commit": self.config.source_commit,
             "topology": "two-cross-region-non-peered-vpcs-public-ipv4",
             "machine_type": self.config.machine_type,
+            "treatment": {
+                "policy_id": self.config.policy_id,
+                "selection": "sender-runtime-argument",
+                "binary_rebuild_per_treatment": False,
+            },
             "condition": {
                 "profile": self.config.condition_profile,
                 "forward_trace": CONDITION_PROFILES[
@@ -833,9 +967,14 @@ class GcpRawHarness:
                 ].reverse_name,
             },
             "workload": {
-                "generation_count": 2,
+                "id": self.config.workload_id,
+                "generation_count": WORKLOAD_GENERATIONS[
+                    self.config.workload_id
+                ],
                 "startup_timeout_ms": STARTUP_TIMEOUT_MS,
-                "service_timeout_ms": SERVICE_TIMEOUT_MS,
+                "service_timeout_ms": workload_service_timeout_ms(
+                    self.config.workload_id
+                ),
             },
             "measurement": measurement_contract(),
             "result": "failed",
@@ -936,6 +1075,14 @@ def parser() -> argparse.ArgumentParser:
         choices=sorted(CONDITION_PROFILES),
         default="timed-replay-v2",
     )
+    result.add_argument(
+        "--policy-id", choices=POLICY_IDS, default="biological-adaptive"
+    )
+    result.add_argument(
+        "--workload-id",
+        choices=sorted(WORKLOAD_GENERATIONS),
+        default="smoke-v2",
+    )
     result.add_argument("--source-commit", default=current_commit())
     result.add_argument(
         "--repository-url",
@@ -964,6 +1111,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         source_commit=args.source_commit,
         repository_url=args.repository_url,
         evidence_dir=evidence_dir,
+        policy_id=args.policy_id,
+        workload_id=args.workload_id,
     )
     config.validate()
     names = Names.from_run_id(config.run_id)

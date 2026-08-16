@@ -1,0 +1,161 @@
+{
+  "schema": "aurora-raw-host-policy-pilot-measurement-v1",
+  "purpose": "bounded-policy-discrimination-pilot",
+  "unit_of_analysis": "fresh-vm-pair-lifecycle",
+  "clock_relationship": "independent-unsynchronized-steady-clocks",
+  "deadline_evaluation": {
+    "clock": "receiver-steady",
+    "origin": "first-accepted-authenticated-descriptor-receipt",
+    "duration_source": "authenticated-descriptor-relative-deadline",
+    "sender_expiry_values_used": false
+  },
+  "outcomes": {
+    "critical_delivery_before_deadline": {
+      "type": "count-over-critical-generations",
+      "source": "receiver-steady-clock",
+      "definition": "critical segment completed no later than receiver descriptor receipt plus the descriptor-relative critical deadline duration"
+    },
+    "total_delivery": {
+      "type": "count-over-generations",
+      "source": "authenticated terminal decode report",
+      "definition": "complete payload recovered with required integrity no later than receiver descriptor receipt plus the descriptor-relative generation deadline duration"
+    },
+    "redundancy": {
+      "fields": [
+        "source_symbols",
+        "initial_symbols",
+        "wire_symbol_datagrams"
+      ],
+      "derived": "initial_symbols/source_symbols"
+    },
+    "repair": {
+      "fields": [
+        "repair_symbols_requested",
+        "repair_symbols_emitted"
+      ]
+    },
+    "feedback_rtt": {
+      "clock": "sender-steady",
+      "fields": [
+        "feedback_rtt_samples",
+        "feedback_rtt_min_us",
+        "feedback_rtt_mean_us",
+        "feedback_rtt_max_us",
+        "terminal_feedback_rtt_samples",
+        "terminal_feedback_rtt_min_us",
+        "terminal_feedback_rtt_mean_us",
+        "terminal_feedback_rtt_max_us"
+      ],
+      "includes": [
+        "forward-network-service",
+        "receiver-processing",
+        "configured-reverse-impairment",
+        "reverse-network-service",
+        "sender-polling"
+      ]
+    },
+    "protection_plan": {
+      "scope": "per-generation",
+      "fields": [
+        "critical_protection_factor",
+        "important_protection_factor",
+        "elastic_protection_factor"
+      ]
+    },
+    "adaptive_state": {
+      "scope": "per-generation-at-plan-and-after-terminal",
+      "fields": [
+        "adaptive_state_present",
+        "adaptive_generation_count_at_plan",
+        "adaptive_success_count_at_plan",
+        "adaptive_failure_count_at_plan",
+        "adaptive_panic_boost_at_plan",
+        "adaptive_critical_overhead_at_plan",
+        "adaptive_important_overhead_at_plan",
+        "adaptive_success_count_after_terminal",
+        "adaptive_failure_count_after_terminal",
+        "adaptive_panic_boost_after_terminal"
+      ]
+    }
+  },
+  "causal_adaptation_regression": {
+    "condition": "regime-change-v1",
+    "terminal_failure_generation_index": 2,
+    "subsequent_plan_generation_index": 3,
+    "biological_requirement": "the next plan reflects the updated failure state and changes at least one protection factor",
+    "fixed_requirement": "all per-generation protection factors remain invariant",
+    "policy_winner_targeted": false
+  },
+  "required_per_generation_evidence": {
+    "sender": [
+      "index",
+      "policy_id",
+      "policy_version",
+      "delivered",
+      "terminal_failure",
+      "critical_before_deadline",
+      "critical_protection_factor",
+      "important_protection_factor",
+      "elastic_protection_factor",
+      "adaptive_state_present",
+      "adaptive_generation_count_at_plan",
+      "adaptive_success_count_at_plan",
+      "adaptive_failure_count_at_plan",
+      "adaptive_panic_boost_at_plan",
+      "adaptive_critical_overhead_at_plan",
+      "adaptive_important_overhead_at_plan",
+      "adaptive_success_count_after_terminal",
+      "adaptive_failure_count_after_terminal",
+      "adaptive_panic_boost_after_terminal",
+      "repair_requested",
+      "repair_emitted",
+      "symbols_observed"
+    ],
+    "receiver": [
+      "index",
+      "delivered",
+      "terminal_failure",
+      "critical_before_deadline",
+      "descriptor_received_at_ms",
+      "critical_deadline_duration_ms",
+      "critical_deadline_at_ms",
+      "generation_deadline_duration_ms",
+      "generation_deadline_at_ms",
+      "deadline_clock",
+      "regime_outage",
+      "regime_suppressed_symbols",
+      "symbols_observed"
+    ]
+  },
+  "required_identity": [
+    "source_commit",
+    "runtime_binary_sha256",
+    "authentication_profile",
+    "topology",
+    "workload_id",
+    "condition_profile",
+    "outage_generation_index",
+    "forward_trace_sha256",
+    "reverse_trace_sha256"
+  ],
+  "analysis": {
+    "mode": "descriptive-policy-discrimination",
+    "report_each_lifecycle": true,
+    "report_each_policy_condition_cell": true,
+    "report_blockwise_contrasts": true,
+    "superiority_test": false,
+    "power_claim": false,
+    "adaptive_policy_is_design_target": false,
+    "confirmatory_followup_requires_new_freeze": true
+  },
+  "prohibitions": {
+    "cross_clock_subtraction": true,
+    "sender_relative_expiry_evaluation": true,
+    "one_way_latency_claim": true,
+    "network_only_rtt_claim": true,
+    "post_hoc_workload_change": true,
+    "post_hoc_trace_change": true,
+    "post_hoc_policy_parameter_change": true,
+    "early_stopping_for_policy_ranking": true
+  }
+}

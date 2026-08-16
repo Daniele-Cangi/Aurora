@@ -28,6 +28,7 @@ namespace aurora::transport {
 
 struct GenerationSpawnResult {
     GenerationDescriptor descriptor;
+    control::ProtectionPlan protection;
     std::vector<::fec::Pkt> packets;
     int source_symbol_count = 0;
     // Compatibility alias for the historical simulator API.
@@ -148,6 +149,7 @@ public:
         const auto requirements = compile_segments(contract, payload_bytes.size());
 
         GenerationSpawnResult result;
+        result.protection = protection;
         result.payload_size = payload_bytes.size();
         auto& descriptor = result.descriptor;
         descriptor.token_id = token_id;

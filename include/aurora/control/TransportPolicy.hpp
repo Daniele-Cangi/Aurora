@@ -4,12 +4,14 @@
 #include "../transport/TransportContract.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -336,5 +338,29 @@ private:
     AdaptivePolicyConfig config_;
     std::unordered_map<std::string, BiologicalFlowState> states_;
 };
+
+inline constexpr std::array<std::string_view, 3> transport_policy_ids{
+    "fixed-minimum",
+    "fixed-class-aware",
+    "biological-adaptive",
+};
+
+inline std::shared_ptr<TransportPolicy> make_transport_policy(
+    std::string_view policy_id) {
+    if (policy_id == "fixed-minimum") {
+        return std::make_shared<FixedTransportPolicy>(
+            "fixed-minimum", 1.0, 1.0, 1.0);
+    }
+    if (policy_id == "fixed-class-aware") {
+        return std::make_shared<FixedTransportPolicy>(
+            "fixed-class-aware", 2.5, 1.5, 1.1);
+    }
+    if (policy_id == "biological-adaptive") {
+        return std::make_shared<BiologicalAdaptivePolicy>();
+    }
+    throw std::invalid_argument(
+        "transport policy: expected fixed-minimum, fixed-class-aware, or "
+        "biological-adaptive");
+}
 
 } // namespace aurora::control

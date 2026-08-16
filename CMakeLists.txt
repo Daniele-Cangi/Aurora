@@ -408,6 +408,47 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "emulation;regression"
         TIMEOUT 45)
+    foreach(policy_id IN ITEMS
+        fixed-minimum fixed-class-aware biological-adaptive)
+      string(REPLACE "-" "_" policy_test_name "${policy_id}")
+      add_test(
+        NAME "aurora.process_policy_pilot_${policy_test_name}"
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_emulation.py"
+          "$<TARGET_FILE:aurora_process_emulation>"
+          "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_timed_v2.trace"
+          "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_feedback_v2.trace"
+          "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_auth_test.key"
+          "89abcdef01234567"
+          "timed"
+          "${policy_id}"
+          "policy-pilot-v1"
+          "8")
+      set_tests_properties(
+        "aurora.process_policy_pilot_${policy_test_name}"
+        PROPERTIES
+          LABELS "emulation;policy-pilot;regression"
+          TIMEOUT 90)
+      add_test(
+        NAME "aurora.process_policy_regime_${policy_test_name}"
+        COMMAND "${Python3_EXECUTABLE}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_process_emulation.py"
+          "$<TARGET_FILE:aurora_process_emulation>"
+          "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_timed_v2.trace"
+          "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_feedback_v2.trace"
+          "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/process_auth_test.key"
+          "76543210fedcba98"
+          "timed"
+          "${policy_id}"
+          "policy-pilot-v1"
+          "8"
+          "regime-change-v1")
+      set_tests_properties(
+        "aurora.process_policy_regime_${policy_test_name}"
+        PROPERTIES
+          LABELS "emulation;policy-pilot;causal-adaptation;regression"
+          TIMEOUT 120)
+    endforeach()
     add_test(
       NAME aurora.process_receiver_readiness
       COMMAND "${Python3_EXECUTABLE}"

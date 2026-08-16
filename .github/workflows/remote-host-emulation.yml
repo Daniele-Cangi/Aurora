@@ -7,6 +7,7 @@ on:
       - ".github/workflows/remote-host-emulation.yml"
       - "apps/aurora_process_emulation.cpp"
       - "include/aurora/emulation/**"
+      - "include/aurora/control/**"
       - "include/aurora/transport/**"
       - "benchmarks/process_*.trace"
       - "CMakeLists.txt"
@@ -45,6 +46,7 @@ jobs:
           cp build-remote/bin/aurora_process_emulation remote-bundle/
           cp benchmarks/process_timed_v2.trace remote-bundle/
           cp benchmarks/process_feedback_v2.trace remote-bundle/
+          cp benchmarks/process_zero_delay_forward_v1.trace remote-bundle/
           git rev-parse HEAD > remote-bundle/source-commit.txt
           sha256sum remote-bundle/aurora_process_emulation \
             > remote-bundle/binary.sha256
@@ -102,11 +104,16 @@ jobs:
           ).encode("ascii")
           key = hmac.new(master, b"aurora-process:" + context,
                          hashlib.sha256).hexdigest()
-          session = hashlib.sha256(b"aurora-session:" + context).hexdigest()[:16]
           Path("process-auth.key").write_text(key + "\n", encoding="ascii")
-          Path("process-session.id").write_text(session + "\n", encoding="ascii")
+          for case_index in range(6):
+              session = hashlib.sha256(
+                  b"aurora-session:" + context + b":" +
+                  str(case_index).encode("ascii")
+              ).hexdigest()[:16]
+              Path(f"process-session-{case_index}.id").write_text(
+                  session + "\n", encoding="ascii")
           PY
-          chmod 600 process-auth.key process-session.id
+          chmod 600 process-auth.key process-session-*.id
           chmod +x remote-bundle/aurora_process_emulation
       - name: Discover and verify the independent peer VM
         id: peer
@@ -157,28 +164,51 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          session="$(cat process-session.id)"
-          set +e
-          timeout 90s remote-bundle/aurora_process_emulation \
-            receiver 0.0.0.0 47001 "${{ steps.peer.outputs.peer_ip }}" \
-            47002 2 remote-bundle/process_feedback_v2.trace \
-            process-auth.key "${session}" > receiver.log 2>&1
-          status=$?
-          set -e
+          : > receiver.log
+          status=0
+          case_index=0
+          for condition in timed-replay-v2 regime-change-v1; do
+            for policy in fixed-minimum fixed-class-aware biological-adaptive; do
+              forward_port=47001
+              feedback_port=47002
+              session="$(cat "process-session-${case_index}.id")"
+              echo "remote_case condition=${condition} policy=${policy} forward_port=${forward_port} feedback_port=${feedback_port}" \
+                >> receiver.log
+              case_status=0
+              outage_args=()
+              if [ "${condition}" = regime-change-v1 ]; then
+                outage_args=(--outage-generation 2)
+              fi
+              timeout 120s remote-bundle/aurora_process_emulation \
+                  receiver 0.0.0.0 "${forward_port}" \
+                  "${{ steps.peer.outputs.peer_ip }}" \
+                  "${feedback_port}" 8 \
+                  remote-bundle/process_feedback_v2.trace \
+                  process-auth.key "${session}" 60000 120000 \
+                  "${outage_args[@]}" \
+                  >> receiver.log 2>&1 || case_status=$?
+              if [ "${case_status}" -ne 0 ]; then
+                status="${case_status}"
+                break 2
+              fi
+              case_index=$((case_index + 1))
+            done
+          done
           {
             echo "evidence_version=1"
             echo "role=receiver"
             echo "topology=github-hosted-distinct-vms-over-tailscale"
             echo "own_ip=${{ steps.peer.outputs.own_ip }}"
             echo "peer_ip=${{ steps.peer.outputs.peer_ip }}"
-            echo "forward_port=47001"
-            echo "reverse_port=47002"
+            echo "forward_port_schedule=47001,47001,47001,47001,47001,47001"
+            echo "reverse_port_schedule=47002,47002,47002,47002,47002,47002"
+            echo "authenticated_session_schedule=per-cell-distinct"
             echo "authentication_profile=hmac-sha256-libsodium"
             echo "process_protocol_version=2"
             echo "measurement_profile=application-controller-steady-v2"
             echo "receiver_ready=$(grep -c '^receiver_ready ' receiver.log)"
             echo "startup_timeout_ms=60000"
-            echo "service_timeout_ms=15000"
+            echo "service_timeout_ms=120000"
             echo "source_commit=$(cat remote-bundle/source-commit.txt)"
             echo "binary_sha256=$(cut -d ' ' -f 1 remote-bundle/binary.sha256)"
             echo "exit_status=${status}"
@@ -189,23 +219,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          session="$(cat process-session.id)"
           sleep 8
-          set +e
-          timeout 70s remote-bundle/aurora_process_emulation \
-            sender "${{ steps.peer.outputs.peer_ip }}" 47001 0.0.0.0 \
-            47002 remote-bundle/process_timed_v2.trace \
-            process-auth.key "${session}" > sender.log 2>&1
-          status=$?
-          set -e
+          : > sender.log
+          status=0
+          case_index=0
+          for condition in timed-replay-v2 regime-change-v1; do
+            forward_trace=remote-bundle/process_timed_v2.trace
+            for policy in fixed-minimum fixed-class-aware biological-adaptive; do
+              forward_port=47001
+              feedback_port=47002
+              session="$(cat "process-session-${case_index}.id")"
+              sleep 2
+              echo "remote_case condition=${condition} policy=${policy} forward_port=${forward_port} feedback_port=${feedback_port}" \
+                >> sender.log
+              case_status=0
+              timeout 120s remote-bundle/aurora_process_emulation \
+                  sender "${{ steps.peer.outputs.peer_ip }}" \
+                  "${forward_port}" 0.0.0.0 "${feedback_port}" \
+                  "${forward_trace}" process-auth.key "${session}" \
+                  --policy "${policy}" --workload policy-pilot-v1 \
+                  >> sender.log 2>&1 || case_status=$?
+              if [ "${case_status}" -ne 0 ]; then
+                status="${case_status}"
+                break 2
+              fi
+              case_index=$((case_index + 1))
+            done
+          done
           {
             echo "evidence_version=1"
             echo "role=sender"
             echo "topology=github-hosted-distinct-vms-over-tailscale"
             echo "own_ip=${{ steps.peer.outputs.own_ip }}"
             echo "peer_ip=${{ steps.peer.outputs.peer_ip }}"
-            echo "forward_port=47001"
-            echo "reverse_port=47002"
+            echo "forward_port_schedule=47001,47001,47001,47001,47001,47001"
+            echo "reverse_port_schedule=47002,47002,47002,47002,47002,47002"
+            echo "authenticated_session_schedule=per-cell-distinct"
             echo "authentication_profile=hmac-sha256-libsodium"
             echo "process_protocol_version=2"
             echo "measurement_profile=application-controller-steady-v2"
@@ -230,6 +279,7 @@ jobs:
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: aurora-*-evidence
@@ -259,16 +309,24 @@ jobs:
             receiver-manifest.txt
           grep -q '^measurement_profile=application-controller-steady-v2$' \
             sender-manifest.txt
-          grep -q '^receiver_ready=1$' receiver-manifest.txt
+          grep -q '^authenticated_session_schedule=per-cell-distinct$' \
+            receiver-manifest.txt
+          grep -q '^authenticated_session_schedule=per-cell-distinct$' \
+            sender-manifest.txt
+          grep -q '^receiver_ready=6$' receiver-manifest.txt
           grep -q '^startup_timeout_ms=60000$' receiver-manifest.txt
-          grep -q '^service_timeout_ms=15000$' receiver-manifest.txt
-          grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=15000 ' \
+          grep -q '^service_timeout_ms=120000$' receiver-manifest.txt
+          grep -q '^receiver_ready .*startup_timeout_ms=60000 .*service_timeout_ms=120000 ' \
             receiver.log
-          grep -q 'receiver_complete generations=2' receiver.log
-          grep -q 'sender_complete generations=2' sender.log
-          grep -q 'feedback_applied=2' sender.log
+          test "$(grep -c 'receiver_complete generations=8' receiver.log)" -eq 6
+          test "$(grep -c 'sender_complete generations=8' sender.log)" -eq 6
+          test "$(grep -c 'feedback_applied=8' sender.log)" -eq 6
+          test "$(grep -c 'workload_id=policy-pilot-v1' sender.log)" -eq 6
+          test "$(grep -c '^sender_complete .*policy_id=fixed-minimum ' sender.log)" -eq 2
+          test "$(grep -c '^sender_complete .*policy_id=fixed-class-aware ' sender.log)" -eq 2
+          test "$(grep -c '^sender_complete .*policy_id=biological-adaptive ' sender.log)" -eq 2
           grep -Eq 'feedback_rtt_samples=([2-9]|[1-9][0-9]+)( |$)' sender.log
-          grep -q 'terminal_feedback_rtt_samples=2' sender.log
+          grep -q 'terminal_feedback_rtt_samples=8' sender.log
           grep -q 'unknown_feedback_echoes=0' sender.log
           grep -q 'auth_profile=hmac-sha256-libsodium' receiver.log
           grep -q 'auth_profile=hmac-sha256-libsodium' sender.log
@@ -286,6 +344,9 @@ jobs:
           sender_sha="$(sed -n 's/^binary_sha256=//p' sender-manifest.txt)"
           test -n "${receiver_sha}"
           test "${receiver_sha}" = "${sender_sha}"
+
+          python3 ../tests/policy_pilot_evidence.py \
+            --sender sender.log --receiver receiver.log --combined
 
           tar -czf ../authenticated-remote-host-evidence.tar.gz .
       - uses: actions/upload-artifact@v4

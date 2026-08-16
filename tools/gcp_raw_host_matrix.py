@@ -408,6 +408,7 @@ def summarize(spec: MatrixSpec, context: RunContext) -> dict:
         if manifest.get("condition") != expected_condition:
             raise MatrixError(f"{label}: condition profile mismatch")
         expected_workload = {
+            "id": "smoke-v2",
             "generation_count": 2,
             "startup_timeout_ms": harness.STARTUP_TIMEOUT_MS,
             "service_timeout_ms": harness.SERVICE_TIMEOUT_MS,

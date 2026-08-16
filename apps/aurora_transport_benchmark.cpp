@@ -136,15 +136,15 @@ std::unique_ptr<aurora::AuroraOrganism> organism_for(
     std::shared_ptr<aurora::control::TransportPolicy> policy;
     switch (controller.kind) {
         case Controller::Kind::FIXED_MINIMUM:
-            policy = std::make_shared<aurora::control::FixedTransportPolicy>(
-                "fixed-minimum", 1.0, 1.0, 1.0);
+            policy = aurora::control::make_transport_policy("fixed-minimum");
             break;
         case Controller::Kind::FIXED_CLASS_AWARE:
-            policy = std::make_shared<aurora::control::FixedTransportPolicy>(
-                "fixed-class-aware", 2.5, 1.5, 1.1);
+            policy = aurora::control::make_transport_policy(
+                "fixed-class-aware");
             break;
         case Controller::Kind::BIOLOGICAL:
-            policy = std::make_shared<aurora::control::BiologicalAdaptivePolicy>();
+            policy = aurora::control::make_transport_policy(
+                "biological-adaptive");
             break;
     }
     std::shared_ptr<aurora::fec::GenerationCodec> codec;

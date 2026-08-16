@@ -29,6 +29,7 @@ WORKDIR /opt/aurora
 COPY --from=build /src/build-container/bin/aurora_process_emulation ./
 COPY benchmarks/process_timed_v2.trace ./
 COPY benchmarks/process_feedback_v2.trace ./
+COPY benchmarks/process_zero_delay_forward_v1.trace ./
 COPY benchmarks/process_auth_test.key ./
 
 ENTRYPOINT ["/opt/aurora/aurora_process_emulation"]
