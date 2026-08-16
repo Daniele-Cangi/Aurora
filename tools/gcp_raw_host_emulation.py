@@ -319,6 +319,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def evidence_log_hashes(evidence_dir: Path) -> dict[str, str]:
+    """Hash the exact published log bytes without newline normalization."""
+    return {
+        "sender_sha256": sha256_file(evidence_dir / "sender.log"),
+        "receiver_sha256": sha256_file(evidence_dir / "receiver.log"),
+    }
+
+
 def parse_record(text: str, prefix: str) -> dict[str, str]:
     for line in text.splitlines():
         if line.startswith(prefix + " "):
@@ -1078,14 +1086,7 @@ class GcpRawHarness:
                         **receiver_meta,
                     },
                     "timing": timing,
-                    "logs": {
-                        "sender_sha256": hashlib.sha256(
-                            sender_text.encode("utf-8")
-                        ).hexdigest(),
-                        "receiver_sha256": hashlib.sha256(
-                            receiver_text.encode("utf-8")
-                        ).hexdigest(),
-                    },
+                    "logs": evidence_log_hashes(self.config.evidence_dir),
                     "claims": {
                         "calibrated_performance": False,
                         "field_evidence": False,
