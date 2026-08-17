@@ -696,22 +696,25 @@ evidence for the narrow declared emulation condition, not calibrated field
 performance, network-only latency, a causal region effect or a regional
 ranking.
 
-The current raw-host policy experiment is the bounded
-[`raw-host-policy-pilot-v1`](docs/raw-host-policy-pilot-v1.md). Its frozen plan
-compares the three existing transport policies under one adverse dynamic trace
-and one deterministic policy-neutral regime-change condition in two randomized
-complete blocks: 12 fresh VM-pair lifecycles. The regime change suppresses only
-receiver-ingress symbol datagrams for generation index 2 until its local
-critical deadline, then requires failure-informed generation-3 planning.
-Policy and workload are runtime arguments to one identical authenticated
-process binary. The plan, workload, trace digests, policy parameters,
-randomization order and measurement schema are frozen in
-[`benchmarks/gcp_raw_host_policy_pilot_v1.json`](benchmarks/gcp_raw_host_policy_pilot_v1.json).
-It is descriptive pilot work, includes no policy-superiority test, and cannot
-execute without an explicit reviewed-source acknowledgement. No GCP dispatch
-is performed by CI or by plan validation. The freeze followed green local,
-Docker, Ubuntu, Windows, secure-auth and independent remote-host gates; those
-records are validation evidence, not pilot observations.
+The bounded
+[`raw-host-policy-pilot-v1`](docs/raw-host-policy-pilot-v1.md) completed its
+frozen design as `raw-host-policy-pilot-v1-study-v4`: two randomized complete
+blocks, 12/12 valid fresh VM-pair lifecycles, no replacements, one identical
+authenticated process binary and final independent cleanup audit zero. Frozen
+evidence and post-freeze analysis are published in the
+[`raw-host-policy-pilot-v1-study-v4` Release](https://github.com/Daniele-Cangi/Aurora/releases/tag/raw-host-policy-pilot-v1-study-v4),
+with the complete result in
+[`docs/raw-host-policy-pilot-v1-final-results.md`](docs/raw-host-policy-pilot-v1-final-results.md).
+
+All policies delivered 2/2 critical generations before the policy-neutral
+generation-2 shock and 5/5 after it in both blocks, recovering at generation 3;
+the imposed generation-2 failure is not a policy outcome. Biological changed
+its immediately subsequent protection plan while both fixed policies remained
+unchanged. It used more proactive protection but fewer repairs, with mean
+post-shock wire counts of 766 versus 800 for each fixed policy. This is a
+descriptive efficiency signal, not a delivery advantage or policy-superiority
+claim. Any powered follow-up requires a new design freeze and review before
+another GCP dispatch.
 
 Three stopped collection identities remain excluded from policy analysis.
 Study-v1 failed before transport because the Windows Cloud SDK required a PuTTY
