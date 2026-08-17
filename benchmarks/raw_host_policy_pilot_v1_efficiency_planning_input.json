@@ -1,0 +1,30 @@
+{
+  "schema": "aurora-raw-host-policy-pilot-efficiency-planning-input-v1",
+  "pilot_id": "raw-host-policy-pilot-v1-study-v4",
+  "experimental_tag": "raw-host-policy-pilot-v1-study-v4",
+  "experimental_source": "c523e8020c7d96587ce37638d82d728a2513f04c",
+  "evidence_archive_sha256": "bacad78c1c678c64b8c9c605186969d54db33904ef8a347d249b12b1a4112c99",
+  "analysis_json_sha256": "c67e82f01840bb51c6a0b0bd37aecc36b795c74fa48662b056e326c9ac274daa",
+  "condition": "regime-change-v1",
+  "shock_generation_index": 2,
+  "post_shock_generation_indices": [3, 4, 5, 6, 7],
+  "outcome": "post-shock-wire-symbol-datagrams-over-scheduled-generations",
+  "contrast": "biological-adaptive-minus-fixed-class-aware",
+  "blocks": [
+    {
+      "block": 1,
+      "fixed_class_aware_wire_symbols": 800,
+      "biological_adaptive_wire_symbols": 732,
+      "contrast_wire_symbols": -68
+    },
+    {
+      "block": 2,
+      "fixed_class_aware_wire_symbols": 800,
+      "biological_adaptive_wire_symbols": 800,
+      "contrast_wire_symbols": 0
+    }
+  ],
+  "planning_standard_deviation_rule": "ceil-to-next-10-of-full-pilot-contrast-range",
+  "planning_standard_deviation_wire_symbols": 70,
+  "note": "The dispersion rule uses the full observed paired range (68), not the unstable two-block sample standard deviation. The minimum relevant effect is defined independently in the follow-up study specification."
+}

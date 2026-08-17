@@ -716,6 +716,16 @@ descriptive efficiency signal, not a delivery advantage or policy-superiority
 claim. Any powered follow-up requires a new design freeze and review before
 another GCP dispatch.
 
+That proposed confirmatory follow-up is now specified in
+[`raw-host-post-shock-efficiency-study-v1`](docs/raw-host-post-shock-efficiency-study-v1.md).
+It keeps the workload, regime change and policy parameters unchanged and tests
+the paired post-shock wire-symbol contrast between `biological-adaptive` and
+`fixed-class-aware`, subject to an all-critical-delivery guardrail. The
+fixed-seed calculation selects 23 complete blocks, or 46 fresh VM-pair
+lifecycles. The design remains pending review and does not authorize GCP
+dispatch; the distinct earlier-delivery study is deferred until this efficiency
+result is informative.
+
 Three stopped collection identities remain excluded from policy analysis.
 Study-v1 failed before transport because the Windows Cloud SDK required a PuTTY
 key companion; study-v2 stopped at sequence 10 because protocol V2 lacked a

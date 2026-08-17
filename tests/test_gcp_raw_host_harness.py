@@ -15,6 +15,7 @@ import gcp_raw_host_emulation as harness  # noqa: E402
 import gcp_raw_host_matrix as raw_matrix  # noqa: E402
 import gcp_raw_policy_pilot as policy_pilot  # noqa: E402
 import gcp_raw_power_analysis as power_analysis  # noqa: E402
+import gcp_raw_post_shock_study as post_shock  # noqa: E402
 import summarize_gcp_raw_campaign as campaign  # noqa: E402
 
 
@@ -632,6 +633,48 @@ class GcpRawHostHarnessTests(unittest.TestCase):
                 profile.outage_generation_index,
                 expected_outage,
             )
+
+    def test_post_shock_study_is_paired_powered_and_plan_only(self):
+        spec = post_shock.Spec.load(
+            ROOT / "benchmarks" /
+            "gcp_raw_post_shock_efficiency_study_v1.json"
+        )
+        with tempfile.TemporaryDirectory() as name:
+            context = post_shock.Context(
+                project="aurora-raw-test-12345",
+                run_prefix="postshock-test",
+                source_commit=COMMIT,
+                repository_url="https://github.com/Daniele-Cangi/Aurora.git",
+                evidence_root=Path(name) / "evidence",
+            )
+            plan = post_shock.build_plan(spec, context)
+            runs = post_shock.planned_runs(spec, context)
+
+        self.assertEqual(plan["lifecycle_count"], 46)
+        self.assertEqual(plan["safety"]["maximum_lifecycles"], 46)
+        self.assertTrue(plan["claims"]["confirmatory"])
+        self.assertFalse(plan["claims"]["delivery_superiority"])
+        self.assertTrue(
+            plan["analysis"]["delivery_superiority_study_deferred"]
+        )
+        self.assertEqual(len({run.run_id for run in runs}), 46)
+        for block in range(1, 24):
+            observed = runs[(block - 1) * 2:block * 2]
+            self.assertEqual({run.block for run in observed}, {block})
+            self.assertEqual(
+                {run.cell.policy for run in observed},
+                {"fixed-class-aware", "biological-adaptive"},
+            )
+            for run in observed:
+                cfg = post_shock.run_config(spec, context, run)
+                self.assertEqual(cfg.condition_profile, "regime-change-v1")
+                self.assertEqual(cfg.workload_id, "policy-pilot-v1")
+        self.assertFalse(plan["safety"]["replacement_lifecycles"])
+        self.assertTrue(
+            plan["safety"][
+                "immutable_experimental_tag_required_for_execute"
+            ]
+        )
 
     def test_unsafe_run_id_is_rejected(self):
         with tempfile.TemporaryDirectory() as name:
