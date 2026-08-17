@@ -9,6 +9,29 @@ permissions:
   contents: read
 
 jobs:
+  post-shock-study-design:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the plan without GCP access
+        run: >-
+          python3 tools/gcp_raw_post_shock_study.py
+          --project aurora-raw-plan-validation
+          --source-commit "$(git rev-parse HEAD)"
+          > post-shock-execution-plan.json
+      - name: Reproduce the registered power calculation
+        run: >-
+          python3 tools/gcp_raw_post_shock_power_analysis.py
+          > post-shock-power-analysis.json
+      - name: Upload frozen design validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-shock-study-design-validation
+          path: |
+            post-shock-execution-plan.json
+            post-shock-power-analysis.json
+          if-no-files-found: error
+
   build-and-test:
     strategy:
       fail-fast: false
