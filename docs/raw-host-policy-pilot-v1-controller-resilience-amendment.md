@@ -64,3 +64,20 @@ the controller change requires review and merge. A future attempt requires a
 new study identity and a new single technical preflight. Only an entirely
 passing preflight with final audit zero can authorize a fresh sequence 1 through
 12 collection; no lifecycle from study-v3 may be reused.
+
+## Completed successor
+
+Controller PR #43 merged at
+`de2bae2da5dacfbf0c0563b2e587cbf5d84a447b`. The separately identified
+`policy-v4-preflight-01` then passed all technical gates and its independent
+seven-class resource audit was zero. The authorized
+`raw-host-policy-pilot-v1-study-v4` successor subsequently completed all 12
+fresh lifecycles in the frozen order without replacement; every lifecycle
+teardown and the final independent audit were zero.
+
+The successful successor did not reuse any lifecycle from study-v3 and kept
+the experimental source frozen at `c523e802...`. Its evidence and analysis are
+published in the
+[`raw-host-policy-pilot-v1-study-v4` Release](https://github.com/Daniele-Cangi/Aurora/releases/tag/raw-host-policy-pilot-v1-study-v4)
+and documented in
+[`raw-host-policy-pilot-v1-final-results`](raw-host-policy-pilot-v1-final-results.md).

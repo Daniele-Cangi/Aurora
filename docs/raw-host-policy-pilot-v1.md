@@ -1,5 +1,19 @@
 # Raw-host policy pilot v1
 
+## Completion record
+
+The frozen design below completed successfully as
+`raw-host-policy-pilot-v1-study-v4`: 12/12 valid fresh VM-pair lifecycles, two
+complete randomized blocks, no replacements and final independent cleanup
+audit zero. The evidence and post-freeze descriptive analysis are published in
+the [`raw-host-policy-pilot-v1-study-v4` Release](https://github.com/Daniele-Cangi/Aurora/releases/tag/raw-host-policy-pilot-v1-study-v4),
+and the result is documented in
+[`raw-host-policy-pilot-v1-final-results`](raw-host-policy-pilot-v1-final-results.md).
+
+This document remains the frozen design record. No workload, trace, policy,
+parameter, randomization or measurement rule below has been rewritten after
+observing the pilot.
+
 ## Status and boundary
 
 This is a bounded policy-discrimination pilot, not a confirmatory study. Its
