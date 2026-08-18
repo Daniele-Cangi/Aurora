@@ -54,6 +54,8 @@ descriptive and is not reinterpreted.
 
 Generation 2 is the imposed perturbation, not a treatment outcome.
 
+![Frozen raw-host post-shock efficiency study design](images/raw-host-post-shock-study-design-v1.svg)
+
 ## Estimand and delivery guardrail
 
 For each lifecycle, the primary outcome is the sum over generations 3–7 of
@@ -147,6 +149,41 @@ The preregistered classifications are:
 
 None establishes general policy superiority, field calibration or delivery
 advantage.
+
+## Frozen visual analysis
+
+The outcome figures are registered before dispatch in
+[`raw_host_post_shock_efficiency_visualization_v1.json`](../benchmarks/raw_host_post_shock_efficiency_visualization_v1.json).
+The specification fixes the palette, block order, reference lines, full-block
+display and four-figure set:
+
+1. all 23 paired primary contrasts with the mean, two-sided 95% Student-t
+   interval, zero and the registered −50-symbol relevance reference;
+2. per-generation protection-factor means and full observed ranges for every
+   policy and traffic class, with generation 2 marked as the common shock;
+3. mean post-shock initial/repair composition while retaining every lifecycle
+   wire-symbol total;
+4. both policies' critical-before-deadline count in every block.
+
+The visual contract prohibits outcome-dependent sorting or palette changes,
+hiding delivery misses, ranking generation 2, truncating the primary axis or
+replacing failed observations. The renderer consumes the frozen analysis JSON
+and emits deterministic SVG plus a provenance manifest containing the analysis,
+evidence, binary, visualization-spec and figure SHA-256 values:
+
+```bash
+python3 tools/render_raw_host_policy_visuals.py \
+  --analysis FROZEN_ANALYSIS_JSON \
+  --results-only \
+  --output-dir FROZEN_FIGURE_DIRECTORY
+```
+
+The published descriptive pilot visuals and the data-neutral study diagram use
+the same renderer and can be reproduced without cloud access:
+
+```bash
+python3 tools/render_raw_host_policy_visuals.py --output-dir docs/images
+```
 
 ## Review and eventual execution
 

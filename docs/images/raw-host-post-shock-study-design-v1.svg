@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" role="img" aria-labelledby="visual-title visual-desc">
+  <title id="visual-title">Raw-host post-shock efficiency study design</title>
+  <desc id="visual-desc">The same frozen binary selects either fixed-class-aware or biological-adaptive at runtime. Both receive an imposed failure at generation two. Generations three through seven form the primary post-shock window in 23 paired complete blocks.</desc>
+  <style>:root { color-scheme: light dark; }
+    .surface { fill: #FFFFFF; }
+    .title { fill: #101828; font: 700 26px system-ui, sans-serif; }
+    .subtitle { fill: #475467; font: 400 14px system-ui, sans-serif; }
+    .heading { fill: #101828; font: 700 16px system-ui, sans-serif; }
+    .label { fill: #344054; font: 500 13px system-ui, sans-serif; }
+    .small { fill: #475467; font: 400 12px system-ui, sans-serif; }
+    .tiny { fill: #667085; font: 400 11px system-ui, sans-serif; }
+    .value { fill: #101828; font: 700 14px system-ui, sans-serif; }
+    .panel { fill: #F8FAFC; stroke: #D0D5DD; stroke-width: 1; }
+    .box { fill: #FFFFFF; stroke: #98A2B3; stroke-width: 1.2; }
+    .fixed-box { fill: #EFF6FF; stroke: #2563EB; stroke-width: 1.5; }
+    .adaptive-box { fill: #FFF7ED; stroke: #EA580C; stroke-width: 1.5; }
+    .shock-box { fill: #FEF3F2; stroke: #D92D20; stroke-width: 1.5; }
+    .post-box { fill: #ECFDF3; stroke: #12B76A; stroke-width: 1.2; }
+    .grid { stroke: #E4E7EC; stroke-width: 1; }
+    .axis { stroke: #667085; stroke-width: 1.2; }
+    .flow { stroke: #475467; stroke-width: 1.6; fill: none; }
+    .shock-line { stroke: #D92D20; stroke-width: 1.4; stroke-dasharray: 5 4; }
+    .reference { stroke: #98A2B3; stroke-width: 1.2; stroke-dasharray: 5 4; }
+    .mre { stroke: #7F56D9; stroke-width: 1.4; stroke-dasharray: 4 4; }
+    .fixed-line { stroke: #2563EB; stroke-width: 2.5; fill: none; }
+    .adaptive-line { stroke: #EA580C; stroke-width: 2.5; fill: none; }
+    .minimum-line { stroke: #667085; stroke-width: 2.2; fill: none; }
+    .initial { fill: #2563EB; }
+    .repair { fill: #F79009; }
+    .success { fill: #12B76A; }
+    .failure { fill: #D92D20; }
+    .neutral { fill: #667085; }
+    .mean { stroke: #101828; stroke-width: 3; fill: #101828; }
+    .range { fill: #F2F4F7; stroke: none; opacity: .8; }
+    @media (prefers-color-scheme: dark) {
+      .surface { fill: #0B1220; }
+      .title, .heading, .value { fill: #F9FAFB; }
+      .subtitle, .label, .small, .tiny { fill: #D0D5DD; }
+      .panel { fill: #111827; stroke: #475467; }
+      .box { fill: #111827; stroke: #667085; }
+      .fixed-box { fill: #102A56; }
+      .adaptive-box { fill: #4A2410; }
+      .shock-box { fill: #451A1A; }
+      .post-box { fill: #123524; }
+      .grid { stroke: #344054; }
+      .axis, .flow, .reference { stroke: #98A2B3; }
+      .range { fill: #344054; }
+      .mean { stroke: #F9FAFB; fill: #F9FAFB; }
+    }</style>
+  <rect class="surface" width="1200" height="680"/>
+  <text x="55" y="48" class="title" text-anchor="start">Raw-host post-shock efficiency study</text>
+  <text x="55" y="76" class="subtitle" text-anchor="start">One frozen binary, runtime-selected policies, one common shock and paired evidence</text>
+  <rect x="55" y="115" width="190" height="82" class="box" rx="10"/>
+  <text x="150.0" y="144" class="heading" text-anchor="middle">Frozen binary</text>
+  <text x="150.0" y="167" class="small" text-anchor="middle">identical SHA-256</text>
+  <rect x="300" y="115" width="200" height="82" class="box" rx="10"/>
+  <text x="400.0" y="144" class="heading" text-anchor="middle">Runtime selection</text>
+  <text x="400.0" y="167" class="small" text-anchor="middle">sender --policy</text>
+  <line x1="245" y1="156" x2="300" y2="156" class="flow"/>
+  <polyline points="292.33,160.70 300.00,156.00 292.33,151.30" class="flow"/>
+  <rect x="555" y="96" width="215" height="72" class="fixed-box" rx="10"/>
+  <text x="662.5" y="125" class="heading" text-anchor="middle">fixed-class-aware</text>
+  <text x="662.5" y="148" class="small" text-anchor="middle">unchanged plan</text>
+  <rect x="555" y="184" width="215" height="72" class="adaptive-box" rx="10"/>
+  <text x="662.5" y="213" class="heading" text-anchor="middle">biological-adaptive</text>
+  <text x="662.5" y="236" class="small" text-anchor="middle">feedback-driven plan</text>
+  <line x1="500" y1="145" x2="555" y2="132" class="flow"/>
+  <polyline points="548.62,138.34 555.00,132.00 546.45,129.19" class="flow"/>
+  <line x1="500" y1="167" x2="555" y2="220" class="flow"/>
+  <polyline points="546.21,218.06 555.00,220.00 552.74,211.29" class="flow"/>
+  <rect x="835" y="115" width="150" height="82" class="box" rx="10"/>
+  <text x="910.0" y="144" class="heading" text-anchor="middle">Sender</text>
+  <text x="910.0" y="167" class="small" text-anchor="middle">descriptor + symbols</text>
+  <rect x="1035" y="115" width="120" height="82" class="box" rx="10"/>
+  <text x="1095.0" y="144" class="heading" text-anchor="middle">Receiver</text>
+  <text x="1095.0" y="167" class="small" text-anchor="middle">local deadlines</text>
+  <line x1="770" y1="132" x2="835" y2="151" class="flow"/>
+  <polyline points="826.32,153.36 835.00,151.00 828.96,144.33" class="flow"/>
+  <line x1="770" y1="220" x2="835" y2="174" class="flow"/>
+  <polyline points="831.45,182.27 835.00,174.00 826.02,174.59" class="flow"/>
+  <line x1="985" y1="145" x2="1035" y2="145" class="flow"/>
+  <polyline points="1027.33,149.70 1035.00,145.00 1027.33,140.30" class="flow"/>
+  <text x="1010" y="132" class="tiny" text-anchor="middle">authenticated UDP</text>
+  <line x1="1095" y1="200" x2="1095" y2="300" class="flow"/>
+  <line x1="1095" y1="300" x2="400" y2="300" class="flow"/>
+  <line x1="400" y1="300" x2="400" y2="197" class="flow"/>
+  <polyline points="404.70,204.67 400.00,197.00 395.30,204.67" class="flow"/>
+  <text x="748" y="322" class="small" text-anchor="middle">same authenticated terminal feedback applied before the next plan</text>
+  <text x="55" y="350" class="heading" text-anchor="start">Eight-generation causal timeline</text>
+  <rect x="55" y="378" width="126" height="76" class="fixed-box" rx="8"/>
+  <text x="118.0" y="406" class="label" text-anchor="middle">Generation 0</text>
+  <text x="118.0" y="431" class="small" text-anchor="middle">pre-shock</text>
+  <rect x="193" y="378" width="126" height="76" class="fixed-box" rx="8"/>
+  <text x="256.0" y="406" class="label" text-anchor="middle">Generation 1</text>
+  <text x="256.0" y="431" class="small" text-anchor="middle">pre-shock</text>
+  <rect x="331" y="378" width="126" height="76" class="shock-box" rx="8"/>
+  <text x="394.0" y="406" class="label" text-anchor="middle">Generation 2</text>
+  <text x="394.0" y="431" class="small" text-anchor="middle">imposed failure</text>
+  <rect x="469" y="378" width="126" height="76" class="post-box" rx="8"/>
+  <text x="532.0" y="406" class="label" text-anchor="middle">Generation 3</text>
+  <text x="532.0" y="431" class="small" text-anchor="middle">post-shock</text>
+  <rect x="607" y="378" width="126" height="76" class="post-box" rx="8"/>
+  <text x="670.0" y="406" class="label" text-anchor="middle">Generation 4</text>
+  <text x="670.0" y="431" class="small" text-anchor="middle">post-shock</text>
+  <rect x="745" y="378" width="126" height="76" class="post-box" rx="8"/>
+  <text x="808.0" y="406" class="label" text-anchor="middle">Generation 5</text>
+  <text x="808.0" y="431" class="small" text-anchor="middle">post-shock</text>
+  <rect x="883" y="378" width="126" height="76" class="post-box" rx="8"/>
+  <text x="946.0" y="406" class="label" text-anchor="middle">Generation 6</text>
+  <text x="946.0" y="431" class="small" text-anchor="middle">post-shock</text>
+  <rect x="1021" y="378" width="126" height="76" class="post-box" rx="8"/>
+  <text x="1084.0" y="406" class="label" text-anchor="middle">Generation 7</text>
+  <text x="1084.0" y="431" class="small" text-anchor="middle">post-shock</text>
+  <text x="394.0" y="478" class="small" text-anchor="middle">receiver-ingress symbol blackout; identical for both policies</text>
+  <rect x="55" y="525" width="1090" height="105" class="panel" rx="10"/>
+  <text x="82" y="557" class="heading" text-anchor="start">23 complete randomized blocks</text>
+  <text x="82" y="583" class="small" text-anchor="start">2 treatments × 23 = 46 fresh VM-pair lifecycles</text>
+  <text x="430" y="557" class="heading" text-anchor="start">Primary outcome</text>
+  <text x="430" y="583" class="small" text-anchor="start">Σ(initial + emitted repair), generations 3–7</text>
+  <text x="780" y="557" class="heading" text-anchor="start">Evidence boundary</text>
+  <text x="780" y="583" class="small" text-anchor="start">freeze archive + hash before outcome analysis</text>
+  <text x="780" y="607" class="small" text-anchor="start">delivery miss ⇒ efficiency interpretation inconclusive</text>
+</svg>

@@ -86,6 +86,8 @@ differences were +34.25%, −39.29%, −36.55% and −4.25%.
 The net post-shock wire count was lower in one block and tied in the other.
 That is an efficiency signal, not a delivery advantage or a confirmatory win.
 
+![Post-shock wire-symbol composition in both descriptive pilot blocks](images/raw-host-policy-pilot-v1-efficiency-signal.svg)
+
 ## Whole-run transport summaries
 
 Values are means across the two blocks.
@@ -125,6 +127,8 @@ failure. `fixed-minimum` remained at `1.5/1.0/1.0` and
 `fixed-class-aware` remained at `2.5/1.5/1.1` for all generations, with no
 adaptive state. The causal adaptation regression therefore passed in the
 actual raw-host pilot.
+
+![Per-generation protection factors showing the causal biological response and invariant fixed policies](images/raw-host-policy-pilot-v1-causal-response.svg)
 
 ## Evidence and checksums
 

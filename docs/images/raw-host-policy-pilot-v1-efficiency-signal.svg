@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 545" role="img" aria-labelledby="visual-title visual-desc">
+  <title id="visual-title">Pilot post-shock wire-symbol composition</title>
+  <desc id="visual-desc">Stacked bars show initial and emitted repair symbols for fixed-class-aware and biological-adaptive in each of the two descriptive pilot blocks. Totals are shown at each bar end. All four cells delivered five of five post-shock critical segments before receiver deadlines.</desc>
+  <style>:root { color-scheme: light dark; }
+    .surface { fill: #FFFFFF; }
+    .title { fill: #101828; font: 700 26px system-ui, sans-serif; }
+    .subtitle { fill: #475467; font: 400 14px system-ui, sans-serif; }
+    .heading { fill: #101828; font: 700 16px system-ui, sans-serif; }
+    .label { fill: #344054; font: 500 13px system-ui, sans-serif; }
+    .small { fill: #475467; font: 400 12px system-ui, sans-serif; }
+    .tiny { fill: #667085; font: 400 11px system-ui, sans-serif; }
+    .value { fill: #101828; font: 700 14px system-ui, sans-serif; }
+    .panel { fill: #F8FAFC; stroke: #D0D5DD; stroke-width: 1; }
+    .box { fill: #FFFFFF; stroke: #98A2B3; stroke-width: 1.2; }
+    .fixed-box { fill: #EFF6FF; stroke: #2563EB; stroke-width: 1.5; }
+    .adaptive-box { fill: #FFF7ED; stroke: #EA580C; stroke-width: 1.5; }
+    .shock-box { fill: #FEF3F2; stroke: #D92D20; stroke-width: 1.5; }
+    .post-box { fill: #ECFDF3; stroke: #12B76A; stroke-width: 1.2; }
+    .grid { stroke: #E4E7EC; stroke-width: 1; }
+    .axis { stroke: #667085; stroke-width: 1.2; }
+    .flow { stroke: #475467; stroke-width: 1.6; fill: none; }
+    .shock-line { stroke: #D92D20; stroke-width: 1.4; stroke-dasharray: 5 4; }
+    .reference { stroke: #98A2B3; stroke-width: 1.2; stroke-dasharray: 5 4; }
+    .mre { stroke: #7F56D9; stroke-width: 1.4; stroke-dasharray: 4 4; }
+    .fixed-line { stroke: #2563EB; stroke-width: 2.5; fill: none; }
+    .adaptive-line { stroke: #EA580C; stroke-width: 2.5; fill: none; }
+    .minimum-line { stroke: #667085; stroke-width: 2.2; fill: none; }
+    .initial { fill: #2563EB; }
+    .repair { fill: #F79009; }
+    .success { fill: #12B76A; }
+    .failure { fill: #D92D20; }
+    .neutral { fill: #667085; }
+    .mean { stroke: #101828; stroke-width: 3; fill: #101828; }
+    .range { fill: #F2F4F7; stroke: none; opacity: .8; }
+    @media (prefers-color-scheme: dark) {
+      .surface { fill: #0B1220; }
+      .title, .heading, .value { fill: #F9FAFB; }
+      .subtitle, .label, .small, .tiny { fill: #D0D5DD; }
+      .panel { fill: #111827; stroke: #475467; }
+      .box { fill: #111827; stroke: #667085; }
+      .fixed-box { fill: #102A56; }
+      .adaptive-box { fill: #4A2410; }
+      .shock-box { fill: #451A1A; }
+      .post-box { fill: #123524; }
+      .grid { stroke: #344054; }
+      .axis, .flow, .reference { stroke: #98A2B3; }
+      .range { fill: #344054; }
+      .mean { stroke: #F9FAFB; fill: #F9FAFB; }
+    }</style>
+  <rect class="surface" width="1200" height="545"/>
+  <text x="55" y="45" class="title" text-anchor="start">Pilot post-shock wire-symbol composition</text>
+  <text x="55" y="72" class="subtitle" text-anchor="start">Five scheduled generations (3–7); every cell delivered 5/5 critical segments before deadline</text>
+  <rect x="55" y="94" width="18" height="18" class="initial"/>
+  <text x="82" y="108" class="small" text-anchor="start">initial symbols</text>
+  <rect x="205" y="94" width="18" height="18" class="repair"/>
+  <text x="232" y="108" class="small" text-anchor="start">emitted repair symbols</text>
+  <text x="55" y="138" class="heading" text-anchor="start">Block 1</text>
+  <text x="220" y="190" class="label" text-anchor="end">fixed class aware</text>
+  <rect x="245" y="165" width="354.41" height="38" class="initial"/>
+  <rect x="599.41" y="165" width="422.38" height="38" class="repair"/>
+  <text x="1031.79" y="190" class="value" text-anchor="start">800</text>
+  <text x="220" y="262" class="label" text-anchor="end">biological adaptive</text>
+  <rect x="245" y="237" width="475.78" height="38" class="initial"/>
+  <rect x="720.78" y="237" width="234.98" height="38" class="repair"/>
+  <text x="965.76" y="262" class="value" text-anchor="start">732</text>
+  <text x="55" y="312" class="heading" text-anchor="start">Block 2</text>
+  <text x="220" y="364" class="label" text-anchor="end">fixed class aware</text>
+  <rect x="245" y="339" width="354.41" height="38" class="initial"/>
+  <rect x="599.41" y="339" width="422.38" height="38" class="repair"/>
+  <text x="1031.79" y="364" class="value" text-anchor="start">800</text>
+  <text x="220" y="436" class="label" text-anchor="end">biological adaptive</text>
+  <rect x="245" y="411" width="475.78" height="38" class="initial"/>
+  <rect x="720.78" y="411" width="301.0" height="38" class="repair"/>
+  <text x="1031.79" y="436" class="value" text-anchor="start">800</text>
+  <line x1="245" y1="488" x2="1115" y2="488" class="axis"/>
+  <line x1="245.0" y1="484" x2="245.0" y2="492" class="axis"/>
+  <text x="245.0" y="510" class="tiny" text-anchor="middle">0</text>
+  <line x1="439.2" y1="484" x2="439.2" y2="492" class="axis"/>
+  <text x="439.2" y="510" class="tiny" text-anchor="middle">200</text>
+  <line x1="633.39" y1="484" x2="633.39" y2="492" class="axis"/>
+  <text x="633.39" y="510" class="tiny" text-anchor="middle">400</text>
+  <line x1="827.59" y1="484" x2="827.59" y2="492" class="axis"/>
+  <text x="827.59" y="510" class="tiny" text-anchor="middle">600</text>
+  <line x1="1021.79" y1="484" x2="1021.79" y2="492" class="axis"/>
+  <text x="1021.79" y="510" class="tiny" text-anchor="middle">800</text>
+  <text x="680.0" y="532" class="small" text-anchor="middle">Wire-symbol datagrams</text>
+</svg>

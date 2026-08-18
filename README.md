@@ -320,6 +320,9 @@ benchmarks/
   gcp_raw_measurement_pilot_v2.json Randomized 12-lifecycle variance pilot
   gcp_raw_powered_condition_study_v3.json Powered-study preregistration
   gcp_raw_powered_condition_v3_campaign_*.json Four fixed campaign shards
+  gcp_raw_post_shock_efficiency_study_v1.json Post-shock study design
+  raw_host_post_shock_efficiency_visualization_v1.json Frozen figure contract
+  raw_host_policy_pilot_v1_visualization_input.json Published pilot plot input
   process_measurement_contract_v2.json Machine-readable clock/boundary rules
   raw_public_host_matrix_v1.txt Retained descriptive 2×2 GCP evidence
   raw_public_host_measurement_pilot_v2.txt Randomized V2 pilot evidence
@@ -330,6 +333,7 @@ tools/
   gcp_raw_host_emulation.py Guarded single/campaign lifecycle harness
   gcp_raw_host_matrix.py Plan, execute, validate and clean the fixed matrix
   gcp_raw_power_analysis.py Reconstruct pilot contrasts and verify study power
+  render_raw_host_policy_visuals.py Deterministic SVG and checksum manifest
 src/core/
   AuroraSafetyMonitor.hpp    Legacy safety-state prototype
 tests/
@@ -716,6 +720,14 @@ descriptive efficiency signal, not a delivery advantage or policy-superiority
 claim. Any powered follow-up requires a new design freeze and review before
 another GCP dispatch.
 
+<p align="center">
+  <img src="docs/images/raw-host-policy-pilot-v1-causal-response.svg" alt="Three plots showing fixed policy protection factors remaining constant while biological-adaptive raises critical and important protection after the imposed generation-two failure." width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/images/raw-host-policy-pilot-v1-efficiency-signal.svg" alt="Stacked initial and repair symbol counts for fixed-class-aware and biological-adaptive in both descriptive pilot blocks." width="100%">
+</p>
+
 That proposed confirmatory follow-up is now specified in
 [`raw-host-post-shock-efficiency-study-v1`](docs/raw-host-post-shock-efficiency-study-v1.md).
 It keeps the workload, regime change and policy parameters unchanged and tests
@@ -725,6 +737,10 @@ fixed-seed calculation selects 23 complete blocks, or 46 fresh VM-pair
 lifecycles. The design remains pending review and does not authorize GCP
 dispatch; the distinct earlier-delivery study is deferred until this efficiency
 result is informative.
+
+<p align="center">
+  <img src="docs/images/raw-host-post-shock-study-design-v1.svg" alt="Diagram of the frozen post-shock study: one binary, two runtime policies, a common generation-two failure, five post-shock generations and 23 paired randomized blocks." width="100%">
+</p>
 
 Three stopped collection identities remain excluded from policy analysis.
 Study-v1 failed before transport because the Windows Cloud SDK required a PuTTY

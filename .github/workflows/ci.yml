@@ -23,6 +23,10 @@ jobs:
         run: >-
           python3 tools/gcp_raw_post_shock_power_analysis.py
           > post-shock-power-analysis.json
+      - name: Reproduce the registered repository visuals
+        run: >-
+          python3 tools/render_raw_host_policy_visuals.py
+          --output-dir post-shock-visual-validation
       - name: Upload frozen design validation
         uses: actions/upload-artifact@v4
         with:
@@ -30,6 +34,7 @@ jobs:
           path: |
             post-shock-execution-plan.json
             post-shock-power-analysis.json
+            post-shock-visual-validation/*.svg
           if-no-files-found: error
 
   build-and-test:

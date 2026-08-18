@@ -143,6 +143,10 @@
     "path": "benchmarks/raw_host_post_shock_efficiency_measurement_v1.json",
     "sha256": "045c1f8a96dcd2086707506453cb800a689ac450fdd811807f51c3422c46adf6"
   },
+  "visualization_spec": {
+    "path": "benchmarks/raw_host_post_shock_efficiency_visualization_v1.json",
+    "sha256": "2f4009c53e19a9e9b4350422448c687512b558edbf97dbdab0d89c773120c7db"
+  },
   "power": {
     "test": "two-sided-one-sample-t-on-paired-block-contrasts",
     "alpha": 0.05,
