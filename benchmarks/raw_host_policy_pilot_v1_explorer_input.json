@@ -1,0 +1,228 @@
+{
+  "schema": "aurora-raw-host-policy-pilot-evidence-explorer-input-v1",
+  "pilot_id": "raw-host-policy-pilot-v1-study-v4",
+  "mode": "descriptive-policy-discrimination",
+  "analysis_generated_at_utc": "2026-08-17T01:08:41.720Z",
+  "provenance": {
+    "experimental_source": "c523e8020c7d96587ce37638d82d728a2513f04c",
+    "experimental_tag": "raw-host-policy-pilot-v1-study-v4",
+    "controller_commit": "de2bae2da5dacfbf0c0563b2e587cbf5d84a447b",
+    "runtime_binary_sha256": "34d9b78293d2237a701a48ad992f658376374788348363ff4800b103153e625c",
+    "evidence_archive_sha256": "bacad78c1c678c64b8c9c605186969d54db33904ef8a347d249b12b1a4112c99",
+    "analysis_json_sha256": "c67e82f01840bb51c6a0b0bd37aecc36b795c74fa48662b056e326c9ac274daa"
+  },
+  "integrity": {
+    "planned_lifecycles": 12,
+    "valid_lifecycles": 12,
+    "replacement_lifecycles": 0,
+    "randomized_complete_blocks": 2,
+    "identical_binary_across_treatments": true,
+    "integrated_teardown_audits_zero": true,
+    "independent_post_collection_audit_zero": true
+  },
+  "deadline_semantics": {
+    "receiver_generation_records": 96,
+    "clock": "receiver-steady-descriptor-relative",
+    "critical_deadline_duration_ms": 10000,
+    "generation_deadline_duration_ms": 30000,
+    "cross_clock_subtraction_permitted": false,
+    "sender_relative_expiry_references": 0,
+    "violations": 0
+  },
+  "windows": {
+    "pre_shock_generation_indices": [0, 1],
+    "imposed_shock_generation_index": 2,
+    "post_shock_generation_indices": [3, 4, 5, 6, 7]
+  },
+  "policies": {
+    "fixed-minimum": {
+      "kind": "fixed",
+      "protection_factors": [
+        [1.5, 1.0, 1.0],
+        [1.5, 1.0, 1.0],
+        [1.5, 1.0, 1.0],
+        [1.5, 1.0, 1.0],
+        [1.5, 1.0, 1.0],
+        [1.5, 1.0, 1.0],
+        [1.5, 1.0, 1.0],
+        [1.5, 1.0, 1.0]
+      ],
+      "adaptive_state": null
+    },
+    "fixed-class-aware": {
+      "kind": "fixed",
+      "protection_factors": [
+        [2.5, 1.5, 1.1],
+        [2.5, 1.5, 1.1],
+        [2.5, 1.5, 1.1],
+        [2.5, 1.5, 1.1],
+        [2.5, 1.5, 1.1],
+        [2.5, 1.5, 1.1],
+        [2.5, 1.5, 1.1],
+        [2.5, 1.5, 1.1]
+      ],
+      "adaptive_state": null
+    },
+    "biological-adaptive": {
+      "kind": "adaptive",
+      "protection_factors": [
+        [2.5, 1.5, 1.25],
+        [2.5, 1.5, 1.25],
+        [2.5, 1.5, 1.25],
+        [4.0, 2.325, 1.25],
+        [4.0, 2.325, 1.25],
+        [4.0, 2.325, 1.25],
+        [2.6, 1.55, 1.25],
+        [2.58, 1.53, 1.25]
+      ],
+      "adaptive_state": [
+        {"generation": 0, "at_plan": {"success": 0, "failure": 0, "panic": 0}},
+        {"generation": 1, "at_plan": {"success": 1, "failure": 0, "panic": 0}},
+        {
+          "generation": 2,
+          "at_plan": {"success": 2, "failure": 0, "panic": 0},
+          "terminal_outcome": "imposed-failure",
+          "after_terminal": {"success": 2, "failure": 1, "panic": 3}
+        },
+        {"generation": 3, "at_plan": {"success": 2, "failure": 1, "panic": 2}},
+        {"generation": 4, "at_plan": {"success": 3, "failure": 1, "panic": 1}},
+        {"generation": 5, "at_plan": {"success": 4, "failure": 1, "panic": 0}},
+        {"generation": 6, "at_plan": {"success": 5, "failure": 1, "panic": 0}},
+        {"generation": 7, "at_plan": {"success": 6, "failure": 1, "panic": 0}}
+      ]
+    }
+  },
+  "delivery": {
+    "timed-replay-v2": {
+      "fixed-minimum": ["8/8", "8/8"],
+      "fixed-class-aware": ["8/8", "8/8"],
+      "biological-adaptive": ["8/8", "8/8"]
+    },
+    "regime-change-v1": {
+      "fixed-minimum": ["7/8", "7/8"],
+      "fixed-class-aware": ["7/8", "7/8"],
+      "biological-adaptive": ["7/8", "7/8"]
+    }
+  },
+  "condition_means_across_two_blocks": [
+    {
+      "condition": "timed-replay-v2",
+      "policy": "fixed-minimum",
+      "initial_symbols": 384.0,
+      "repair_requested": 953.0,
+      "repair_emitted": 875.0,
+      "wire_symbols": 1259.0,
+      "terminal_feedback_rtt_mean_us": 189993.0,
+      "terminal_feedback_retry_rounds": 186.0
+    },
+    {
+      "condition": "timed-replay-v2",
+      "policy": "fixed-class-aware",
+      "initial_symbols": 584.0,
+      "repair_requested": 817.0,
+      "repair_emitted": 673.0,
+      "wire_symbols": 1257.0,
+      "terminal_feedback_rtt_mean_us": 211818.0,
+      "terminal_feedback_retry_rounds": 253.0
+    },
+    {
+      "condition": "timed-replay-v2",
+      "policy": "biological-adaptive",
+      "initial_symbols": 592.0,
+      "repair_requested": 458.5,
+      "repair_emitted": 454.0,
+      "wire_symbols": 1046.0,
+      "terminal_feedback_rtt_mean_us": 109623.0,
+      "terminal_feedback_retry_rounds": 75.0
+    },
+    {
+      "condition": "regime-change-v1",
+      "policy": "fixed-minimum",
+      "initial_symbols": 384.0,
+      "repair_requested": 2839.5,
+      "repair_emitted": 885.0,
+      "wire_symbols": 1269.0,
+      "terminal_feedback_rtt_mean_us": 379193.5,
+      "terminal_feedback_retry_rounds": 593.0
+    },
+    {
+      "condition": "regime-change-v1",
+      "policy": "fixed-class-aware",
+      "initial_symbols": 584.0,
+      "repair_requested": 2458.0,
+      "repair_emitted": 674.5,
+      "wire_symbols": 1258.5,
+      "terminal_feedback_rtt_mean_us": 202218.5,
+      "terminal_feedback_retry_rounds": 287.5
+    },
+    {
+      "condition": "regime-change-v1",
+      "policy": "biological-adaptive",
+      "initial_symbols": 712.0,
+      "repair_requested": 2185.5,
+      "repair_emitted": 446.0,
+      "wire_symbols": 1158.0,
+      "terminal_feedback_rtt_mean_us": 171654.0,
+      "terminal_feedback_retry_rounds": 203.5
+    }
+  ],
+  "post_shock": {
+    "generation_indices": [3, 4, 5, 6, 7],
+    "scheduled_generations": 5,
+    "source_symbols_per_lifecycle": 200,
+    "policies": {
+      "fixed-minimum": {
+        "critical_before_deadline": [5, 5],
+        "initial_symbols": [240, 240],
+        "repair_requested": [866, 1070],
+        "repair_emitted": [560, 560],
+        "wire_symbols": [800, 800]
+      },
+      "fixed-class-aware": {
+        "critical_before_deadline": [5, 5],
+        "initial_symbols": [365, 365],
+        "repair_requested": [583, 570],
+        "repair_emitted": [435, 435],
+        "wire_symbols": [800, 800]
+      },
+      "biological-adaptive": {
+        "critical_before_deadline": [5, 5],
+        "initial_symbols": [490, 490],
+        "repair_requested": [302, 398],
+        "repair_emitted": [242, 310],
+        "wire_symbols": [732, 800]
+      }
+    }
+  },
+  "descriptive_deltas": {
+    "post_shock_biological_vs_fixed_minimum": {
+      "initial_symbols_percent": 104.17,
+      "repair_requested_percent": -63.84,
+      "repair_emitted_percent": -50.71,
+      "wire_symbols_percent": -4.25
+    },
+    "post_shock_biological_vs_fixed_class_aware": {
+      "initial_symbols_percent": 34.25,
+      "repair_requested_percent": -39.29,
+      "repair_emitted_percent": -36.55,
+      "wire_symbols_percent": -4.25
+    }
+  },
+  "interpretation": {
+    "critical_delivery_discriminated": false,
+    "recovery_generation_discriminated": false,
+    "causal_policy_response_discriminated": true,
+    "repair_behavior_discriminated_descriptively": true,
+    "classification": "promising-for-efficiency-not-delivery"
+  },
+  "claims": {
+    "descriptive": true,
+    "confirmatory": false,
+    "policy_superiority": false,
+    "delivery_advantage": false,
+    "field_evidence": false,
+    "network_only_feedback_rtt": false,
+    "one_way_latency": false,
+    "shock_generation_is_treatment_outcome": false
+  }
+}
