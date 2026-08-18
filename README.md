@@ -25,7 +25,7 @@ claims stop at controlled simulation and emulation evidence.
 
 [Technical reference](AURORA_TECHNICAL_REFERENCE.md) ·
 [Pilot result](docs/raw-host-policy-pilot-v1-final-results.md) ·
-[Evidence explorer](docs/raw-host-policy-pilot-v1-explorer.html) ·
+[Live evidence explorer](https://daniele-cangi.github.io/Aurora/) ·
 [Post-shock study](docs/raw-host-post-shock-efficiency-study-v1.md) ·
 [Research frontier](docs/OPEN_RESEARCH_FRONTIER.md) ·
 [Contributing](CONTRIBUTING.md)
@@ -115,10 +115,12 @@ policy-superiority claim. The frozen evidence, analysis and checksums are
 published in the
 [`raw-host-policy-pilot-v1-study-v4` Release](https://github.com/Daniele-Cangi/Aurora/releases/tag/raw-host-policy-pilot-v1-study-v4).
 
-The standalone [evidence explorer](docs/raw-host-policy-pilot-v1-explorer.html)
-lets readers step through the causal response, switch pilot blocks and compare
+The [live evidence explorer](https://daniele-cangi.github.io/Aurora/) lets
+readers step through the causal response, switch pilot blocks and compare
 transport outcomes. It embeds the checksum-linked frozen input and performs no
-network request; download or clone the repository and open the file locally.
+network request after the page loads. The tracked
+[standalone HTML](docs/raw-host-policy-pilot-v1-explorer.html) remains available
+for offline use.
 
 ## Quick start
 
@@ -174,7 +176,7 @@ artifacts and include checksum-linked provenance.
 Key records:
 
 - [Completed descriptive policy pilot](docs/raw-host-policy-pilot-v1-final-results.md)
-- [Interactive frozen-evidence explorer](docs/raw-host-policy-pilot-v1-explorer.html)
+- [Interactive frozen-evidence explorer](https://daniele-cangi.github.io/Aurora/)
 - [Proposed confirmatory efficiency study](docs/raw-host-post-shock-efficiency-study-v1.md)
 - [Machine-readable study design](benchmarks/gcp_raw_post_shock_efficiency_study_v1.json)
 - [Frozen visualization contract](benchmarks/raw_host_post_shock_efficiency_visualization_v1.json)
