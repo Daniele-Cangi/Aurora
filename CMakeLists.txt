@@ -494,6 +494,15 @@ if(BUILD_TESTING)
       PROPERTIES
         LABELS "emulation;visualization;regression"
         TIMEOUT 20)
+    add_test(
+      NAME aurora.raw_host_evidence_explorer
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_raw_host_evidence_explorer.py")
+    set_tests_properties(
+      aurora.raw_host_evidence_explorer
+      PROPERTIES
+        LABELS "emulation;visualization;regression"
+        TIMEOUT 20)
   else()
     message(WARNING
       "Python3 was not found; Python emulation tests are disabled")

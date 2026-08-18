@@ -965,6 +965,22 @@ cmake -S . -B build-rq \
 
 ## Interactive dashboard
 
+### Frozen pilot evidence explorer
+
+The standalone explorer renders the published descriptive raw-host pilot from a
+checksum-linked, repository-tracked input. It supports generation, traffic-class,
+block, condition and metric selection without fetching data or contacting GCP:
+
+```bash
+python tools/render_raw_host_evidence_explorer.py
+```
+
+Open `docs/raw-host-policy-pilot-v1-explorer.html` directly in a browser. The
+regression test reproduces the tracked file byte-for-byte and rejects claim,
+deadline-clock or causal-adaptation drift.
+
+### Live monitoring prototype
+
 The dashboard can launch the engine in interactive-lab mode and visualize streamed health events:
 
 ```bash
