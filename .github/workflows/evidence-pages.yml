@@ -1,0 +1,79 @@
+name: Publish evidence explorer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/evidence-pages.yml"
+      - "site/**"
+      - "docs/**"
+      - "benchmarks/raw_host_policy_pilot_v1_explorer_input.json"
+      - "tools/render_raw_host_evidence_explorer.py"
+  pull_request:
+    paths:
+      - ".github/workflows/evidence-pages.yml"
+      - "site/**"
+      - "docs/**"
+      - "benchmarks/raw_host_policy_pilot_v1_explorer_input.json"
+      - "tools/render_raw_host_evidence_explorer.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Verify the tracked explorer is reproducible
+        shell: bash
+        run: |
+          mkdir -p pages-validation
+          python3 tools/render_raw_host_evidence_explorer.py \
+            --output pages-validation/raw-host-policy-pilot-v1-explorer.html
+          cmp \
+            docs/raw-host-policy-pilot-v1-explorer.html \
+            pages-validation/raw-host-policy-pilot-v1-explorer.html
+
+      - name: Assemble the static evidence site
+        shell: bash
+        run: |
+          mkdir -p _site/docs _site/benchmarks
+          cp site/index.html _site/index.html
+          cp -R docs/. _site/docs/
+          cp \
+            benchmarks/raw_host_policy_pilot_v1_explorer_input.json \
+            _site/benchmarks/raw_host_policy_pilot_v1_explorer_input.json
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
