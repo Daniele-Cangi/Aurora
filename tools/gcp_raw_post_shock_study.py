@@ -236,6 +236,39 @@ class Spec:
                 measurement_analysis.get("outcome_dependent_stopping") is not False:
             raise StudyError("registered measurement semantics changed")
 
+        visualization = value.get("visualization_spec", {})
+        visualization_path = ROOT / visualization.get("path", "")
+        if sha256_file(visualization_path) != visualization.get("sha256"):
+            raise StudyError("visualization specification checksum mismatch")
+        try:
+            visualization_value = json.loads(
+                visualization_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as error:
+            raise StudyError("invalid visualization specification") from error
+        figure_ids = {
+            figure.get("id")
+            for figure in visualization_value.get("figures", [])
+            if isinstance(figure, dict)
+        }
+        constraints = visualization_value.get(
+            "presentation_constraints", {}
+        )
+        if visualization_value.get("schema") != \
+                "aurora-raw-host-post-shock-efficiency-visualization-v1" or \
+                visualization_value.get("study_id") != STUDY_ID or \
+                visualization_value.get("registered_before_dispatch") is not True or \
+                figure_ids != {
+                    "primary-paired-contrast",
+                    "generation-protection-response",
+                    "post-shock-wire-composition",
+                    "delivery-guardrail",
+                } or constraints.get("show_all_blocks") is not True or \
+                constraints.get("rank_generation_2_by_policy") is not False or \
+                constraints.get("hide_delivery_misses") is not False or \
+                constraints.get("outcome_dependent_palette_or_order") is not False:
+            raise StudyError("registered visual analysis semantics changed")
+
         power = value.get("power", {})
         if power.get("test") != \
                 "two-sided-one-sample-t-on-paired-block-contrasts" or \
@@ -359,6 +392,7 @@ def build_plan(spec: Spec, context: Context) -> dict:
         "workload": spec.value["workload"],
         "condition": spec.value["condition"],
         "measurement_schema": spec.value["measurement_schema"],
+        "visualization_spec": spec.value["visualization_spec"],
         "lifecycles": [
             {
                 "sequence": run.sequence,

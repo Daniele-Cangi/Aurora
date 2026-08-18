@@ -1,0 +1,70 @@
+{
+  "schema": "aurora-raw-host-post-shock-efficiency-visualization-v1",
+  "study_id": "raw-host-post-shock-efficiency-study-v1",
+  "analysis_input_schema": "aurora-raw-post-shock-efficiency-analysis-v1",
+  "registered_before_dispatch": true,
+  "palette_assignment": {
+    "fixed-class-aware": "fixed-series",
+    "biological-adaptive": "adaptive-series",
+    "imposed-shock": "shock-series"
+  },
+  "windows": {
+    "pre_shock_generation_indices": [0, 1],
+    "imposed_shock_generation_index": 2,
+    "post_shock_generation_indices": [3, 4, 5, 6, 7]
+  },
+  "figures": [
+    {
+      "id": "primary-paired-contrast",
+      "file": "raw-host-post-shock-primary-contrast.svg",
+      "role": "confirmatory-primary",
+      "definition": "show all 23 biological-adaptive-minus-fixed-class-aware block contrasts in registered block order, the mean and two-sided 95-percent Student-t interval",
+      "reference_lines_wire_symbols": [0, -50],
+      "axis_includes": "all observations, confidence interval and both reference lines",
+      "sorting": "registered-block-order",
+      "lower_is_better": true
+    },
+    {
+      "id": "generation-protection-response",
+      "file": "raw-host-post-shock-generation-protection.svg",
+      "role": "causal-adaptation-secondary",
+      "definition": "for each traffic class and policy show the per-generation mean protection factor and full observed range across all lifecycles",
+      "generation_indices": [0, 1, 2, 3, 4, 5, 6, 7],
+      "shock_is_annotated_not_ranked": true
+    },
+    {
+      "id": "post-shock-wire-composition",
+      "file": "raw-host-post-shock-wire-composition.svg",
+      "role": "mechanism-secondary",
+      "definition": "show policy means for initial and emitted-repair symbols with every lifecycle total over the fixed five-generation post-shock window",
+      "components": ["initial_symbols", "repair_symbols_emitted"],
+      "denominator": "five-prescheduled-post-shock-generations"
+    },
+    {
+      "id": "delivery-guardrail",
+      "file": "raw-host-post-shock-delivery-guardrail.svg",
+      "role": "confirmatory-guardrail",
+      "definition": "show critical-before-receiver-deadline count out of five for both policies in every registered block",
+      "pass_value": 5,
+      "failure_interpretation": "efficiency-inconclusive-not-policy-win"
+    }
+  ],
+  "presentation_constraints": {
+    "show_all_blocks": true,
+    "show_shock_as_common_imposed_perturbation": true,
+    "rank_generation_2_by_policy": false,
+    "truncate_primary_axis": false,
+    "hide_delivery_misses": false,
+    "replace_missing_or_failed_generations": false,
+    "outcome_dependent_palette_or_order": false,
+    "include_provenance_manifest": true,
+    "provenance_manifest_fields": [
+      "analysis_sha256",
+      "source_commit",
+      "runtime_binary_sha256",
+      "frozen_evidence_archive_sha256",
+      "visualization_spec_sha256",
+      "figure_sha256"
+    ]
+  }
+}

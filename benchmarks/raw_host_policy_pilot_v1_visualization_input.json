@@ -1,0 +1,88 @@
+{
+  "schema": "aurora-raw-host-policy-pilot-visualization-input-v1",
+  "pilot_id": "raw-host-policy-pilot-v1-study-v4",
+  "experimental_source": "c523e8020c7d96587ce37638d82d728a2513f04c",
+  "evidence_archive_sha256": "bacad78c1c678c64b8c9c605186969d54db33904ef8a347d249b12b1a4112c99",
+  "analysis_json_sha256": "c67e82f01840bb51c6a0b0bd37aecc36b795c74fa48662b056e326c9ac274daa",
+  "condition": "regime-change-v1",
+  "windows": {
+    "pre_shock_generation_indices": [0, 1],
+    "imposed_shock_generation_index": 2,
+    "post_shock_generation_indices": [3, 4, 5, 6, 7]
+  },
+  "protection_factors": {
+    "fixed-minimum": [
+      [1.5, 1.0, 1.0],
+      [1.5, 1.0, 1.0],
+      [1.5, 1.0, 1.0],
+      [1.5, 1.0, 1.0],
+      [1.5, 1.0, 1.0],
+      [1.5, 1.0, 1.0],
+      [1.5, 1.0, 1.0],
+      [1.5, 1.0, 1.0]
+    ],
+    "fixed-class-aware": [
+      [2.5, 1.5, 1.1],
+      [2.5, 1.5, 1.1],
+      [2.5, 1.5, 1.1],
+      [2.5, 1.5, 1.1],
+      [2.5, 1.5, 1.1],
+      [2.5, 1.5, 1.1],
+      [2.5, 1.5, 1.1],
+      [2.5, 1.5, 1.1]
+    ],
+    "biological-adaptive": [
+      [2.5, 1.5, 1.25],
+      [2.5, 1.5, 1.25],
+      [2.5, 1.5, 1.25],
+      [4.0, 2.325, 1.25],
+      [4.0, 2.325, 1.25],
+      [4.0, 2.325, 1.25],
+      [2.6, 1.55, 1.25],
+      [2.58, 1.53, 1.25]
+    ]
+  },
+  "post_shock_blocks": [
+    {
+      "block": 1,
+      "fixed-class-aware": {
+        "critical_before_deadline": 5,
+        "scheduled_generations": 5,
+        "initial_symbols": 365,
+        "repair_symbols_emitted": 435,
+        "wire_symbol_datagrams": 800
+      },
+      "biological-adaptive": {
+        "critical_before_deadline": 5,
+        "scheduled_generations": 5,
+        "initial_symbols": 490,
+        "repair_symbols_emitted": 242,
+        "wire_symbol_datagrams": 732
+      }
+    },
+    {
+      "block": 2,
+      "fixed-class-aware": {
+        "critical_before_deadline": 5,
+        "scheduled_generations": 5,
+        "initial_symbols": 365,
+        "repair_symbols_emitted": 435,
+        "wire_symbol_datagrams": 800
+      },
+      "biological-adaptive": {
+        "critical_before_deadline": 5,
+        "scheduled_generations": 5,
+        "initial_symbols": 490,
+        "repair_symbols_emitted": 310,
+        "wire_symbol_datagrams": 800
+      }
+    }
+  ],
+  "claim_boundary": {
+    "descriptive": true,
+    "confirmatory": false,
+    "policy_superiority": false,
+    "delivery_advantage": false,
+    "shock_generation_is_treatment_outcome": false
+  }
+}

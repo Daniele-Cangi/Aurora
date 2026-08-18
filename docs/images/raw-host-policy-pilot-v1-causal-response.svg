@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" role="img" aria-labelledby="visual-title visual-desc">
+  <title id="visual-title">Pilot causal protection response</title>
+  <desc id="visual-desc">Three panels show critical, important and elastic protection factors across generations zero through seven for the three pilot policies. Biological-adaptive increases critical and important protection in the plan after the imposed generation-two failure while fixed policies remain unchanged.</desc>
+  <style>:root { color-scheme: light dark; }
+    .surface { fill: #FFFFFF; }
+    .title { fill: #101828; font: 700 26px system-ui, sans-serif; }
+    .subtitle { fill: #475467; font: 400 14px system-ui, sans-serif; }
+    .heading { fill: #101828; font: 700 16px system-ui, sans-serif; }
+    .label { fill: #344054; font: 500 13px system-ui, sans-serif; }
+    .small { fill: #475467; font: 400 12px system-ui, sans-serif; }
+    .tiny { fill: #667085; font: 400 11px system-ui, sans-serif; }
+    .value { fill: #101828; font: 700 14px system-ui, sans-serif; }
+    .panel { fill: #F8FAFC; stroke: #D0D5DD; stroke-width: 1; }
+    .box { fill: #FFFFFF; stroke: #98A2B3; stroke-width: 1.2; }
+    .fixed-box { fill: #EFF6FF; stroke: #2563EB; stroke-width: 1.5; }
+    .adaptive-box { fill: #FFF7ED; stroke: #EA580C; stroke-width: 1.5; }
+    .shock-box { fill: #FEF3F2; stroke: #D92D20; stroke-width: 1.5; }
+    .post-box { fill: #ECFDF3; stroke: #12B76A; stroke-width: 1.2; }
+    .grid { stroke: #E4E7EC; stroke-width: 1; }
+    .axis { stroke: #667085; stroke-width: 1.2; }
+    .flow { stroke: #475467; stroke-width: 1.6; fill: none; }
+    .shock-line { stroke: #D92D20; stroke-width: 1.4; stroke-dasharray: 5 4; }
+    .reference { stroke: #98A2B3; stroke-width: 1.2; stroke-dasharray: 5 4; }
+    .mre { stroke: #7F56D9; stroke-width: 1.4; stroke-dasharray: 4 4; }
+    .fixed-line { stroke: #2563EB; stroke-width: 2.5; fill: none; }
+    .adaptive-line { stroke: #EA580C; stroke-width: 2.5; fill: none; }
+    .minimum-line { stroke: #667085; stroke-width: 2.2; fill: none; }
+    .initial { fill: #2563EB; }
+    .repair { fill: #F79009; }
+    .success { fill: #12B76A; }
+    .failure { fill: #D92D20; }
+    .neutral { fill: #667085; }
+    .mean { stroke: #101828; stroke-width: 3; fill: #101828; }
+    .range { fill: #F2F4F7; stroke: none; opacity: .8; }
+    @media (prefers-color-scheme: dark) {
+      .surface { fill: #0B1220; }
+      .title, .heading, .value { fill: #F9FAFB; }
+      .subtitle, .label, .small, .tiny { fill: #D0D5DD; }
+      .panel { fill: #111827; stroke: #475467; }
+      .box { fill: #111827; stroke: #667085; }
+      .fixed-box { fill: #102A56; }
+      .adaptive-box { fill: #4A2410; }
+      .shock-box { fill: #451A1A; }
+      .post-box { fill: #123524; }
+      .grid { stroke: #344054; }
+      .axis, .flow, .reference { stroke: #98A2B3; }
+      .range { fill: #344054; }
+      .mean { stroke: #F9FAFB; fill: #F9FAFB; }
+    }</style>
+  <rect class="surface" width="1200" height="560"/>
+  <text x="55" y="45" class="title" text-anchor="start">Pilot causal response after the imposed failure</text>
+  <text x="55" y="72" class="subtitle" text-anchor="start">Protection factors are plans; generation 2 is the common perturbation, not a policy result</text>
+  <line x1="58" y1="102" x2="86" y2="102" class="grid" style="stroke:#667085;stroke-width:3"/>
+  <circle cx="72" cy="102" r="4" style="fill:#667085"/>
+  <text x="96" y="106" class="small" text-anchor="start">fixed-minimum</text>
+  <line x1="293" y1="102" x2="321" y2="102" class="grid" style="stroke:#2563EB;stroke-width:3"/>
+  <circle cx="307" cy="102" r="4" style="fill:#2563EB"/>
+  <text x="331" y="106" class="small" text-anchor="start">fixed-class-aware</text>
+  <line x1="528" y1="102" x2="556" y2="102" class="grid" style="stroke:#EA580C;stroke-width:3"/>
+  <circle cx="542" cy="102" r="4" style="fill:#EA580C"/>
+  <text x="566" y="106" class="small" text-anchor="start">biological-adaptive</text>
+  <text x="58" y="137" class="heading" text-anchor="start">Critical protection factor</text>
+  <line x1="58" y1="432.65" x2="400" y2="432.65" class="grid"/>
+  <text x="50" y="436.65" class="tiny" text-anchor="end">1</text>
+  <line x1="58" y1="345.88" x2="400" y2="345.88" class="grid"/>
+  <text x="50" y="349.88" class="tiny" text-anchor="end">2</text>
+  <line x1="58" y1="259.12" x2="400" y2="259.12" class="grid"/>
+  <text x="50" y="263.12" class="tiny" text-anchor="end">3</text>
+  <line x1="58" y1="172.35" x2="400" y2="172.35" class="grid"/>
+  <text x="50" y="176.35" class="tiny" text-anchor="end">4</text>
+  <rect x="144.14" y="155" width="36" height="295" fill="#FEF3F2"/>
+  <line x1="162.14" y1="155" x2="162.14" y2="450" class="shock-line"/>
+  <text x="73.0" y="473" class="tiny" text-anchor="middle">0</text>
+  <text x="117.57" y="473" class="tiny" text-anchor="middle">1</text>
+  <text x="162.14" y="473" class="tiny" text-anchor="middle">2</text>
+  <text x="206.71" y="473" class="tiny" text-anchor="middle">3</text>
+  <text x="251.29" y="473" class="tiny" text-anchor="middle">4</text>
+  <text x="295.86" y="473" class="tiny" text-anchor="middle">5</text>
+  <text x="340.43" y="473" class="tiny" text-anchor="middle">6</text>
+  <text x="385.0" y="473" class="tiny" text-anchor="middle">7</text>
+  <line x1="58" y1="450" x2="400" y2="450" class="axis"/>
+  <polyline points="73.00,389.26 117.57,389.26 162.14,389.26 206.71,389.26 251.29,389.26 295.86,389.26 340.43,389.26 385.00,389.26" style="stroke:#667085;stroke-width:2.5;fill:none"/>
+  <circle cx="73.0" cy="389.26" r="3.7" style="fill:#667085"/>
+  <circle cx="117.57" cy="389.26" r="3.7" style="fill:#667085"/>
+  <circle cx="162.14" cy="389.26" r="3.7" style="fill:#667085"/>
+  <circle cx="206.71" cy="389.26" r="3.7" style="fill:#667085"/>
+  <circle cx="251.29" cy="389.26" r="3.7" style="fill:#667085"/>
+  <circle cx="295.86" cy="389.26" r="3.7" style="fill:#667085"/>
+  <circle cx="340.43" cy="389.26" r="3.7" style="fill:#667085"/>
+  <circle cx="385.0" cy="389.26" r="3.7" style="fill:#667085"/>
+  <polyline points="73.00,302.50 117.57,302.50 162.14,302.50 206.71,302.50 251.29,302.50 295.86,302.50 340.43,302.50 385.00,302.50" style="stroke:#2563EB;stroke-width:2.5;fill:none"/>
+  <circle cx="73.0" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <circle cx="117.57" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <circle cx="162.14" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <circle cx="206.71" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <circle cx="251.29" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <circle cx="295.86" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <circle cx="340.43" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <circle cx="385.0" cy="302.5" r="3.7" style="fill:#2563EB"/>
+  <polyline points="73.00,302.50 117.57,302.50 162.14,302.50 206.71,172.35 251.29,172.35 295.86,172.35 340.43,293.82 385.00,295.56" style="stroke:#EA580C;stroke-width:2.5;fill:none"/>
+  <circle cx="73.0" cy="302.5" r="3.7" style="fill:#EA580C"/>
+  <circle cx="117.57" cy="302.5" r="3.7" style="fill:#EA580C"/>
+  <circle cx="162.14" cy="302.5" r="3.7" style="fill:#EA580C"/>
+  <circle cx="206.71" cy="172.35" r="3.7" style="fill:#EA580C"/>
+  <circle cx="251.29" cy="172.35" r="3.7" style="fill:#EA580C"/>
+  <circle cx="295.86" cy="172.35" r="3.7" style="fill:#EA580C"/>
+  <circle cx="340.43" cy="293.82" r="3.7" style="fill:#EA580C"/>
+  <circle cx="385.0" cy="295.56" r="3.7" style="fill:#EA580C"/>
+  <text x="229.0" y="497" class="small" text-anchor="middle">Generation index</text>
+  <text x="438" y="137" class="heading" text-anchor="start">Important protection factor</text>
+  <line x1="438" y1="432.65" x2="780" y2="432.65" class="grid"/>
+  <text x="430" y="436.65" class="tiny" text-anchor="end">1</text>
+  <line x1="438" y1="345.88" x2="780" y2="345.88" class="grid"/>
+  <text x="430" y="349.88" class="tiny" text-anchor="end">2</text>
+  <line x1="438" y1="259.12" x2="780" y2="259.12" class="grid"/>
+  <text x="430" y="263.12" class="tiny" text-anchor="end">3</text>
+  <line x1="438" y1="172.35" x2="780" y2="172.35" class="grid"/>
+  <text x="430" y="176.35" class="tiny" text-anchor="end">4</text>
+  <rect x="524.14" y="155" width="36" height="295" fill="#FEF3F2"/>
+  <line x1="542.14" y1="155" x2="542.14" y2="450" class="shock-line"/>
+  <text x="453.0" y="473" class="tiny" text-anchor="middle">0</text>
+  <text x="497.57" y="473" class="tiny" text-anchor="middle">1</text>
+  <text x="542.14" y="473" class="tiny" text-anchor="middle">2</text>
+  <text x="586.71" y="473" class="tiny" text-anchor="middle">3</text>
+  <text x="631.29" y="473" class="tiny" text-anchor="middle">4</text>
+  <text x="675.86" y="473" class="tiny" text-anchor="middle">5</text>
+  <text x="720.43" y="473" class="tiny" text-anchor="middle">6</text>
+  <text x="765.0" y="473" class="tiny" text-anchor="middle">7</text>
+  <line x1="438" y1="450" x2="780" y2="450" class="axis"/>
+  <polyline points="453.00,432.65 497.57,432.65 542.14,432.65 586.71,432.65 631.29,432.65 675.86,432.65 720.43,432.65 765.00,432.65" style="stroke:#667085;stroke-width:2.5;fill:none"/>
+  <circle cx="453.0" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="497.57" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="542.14" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="586.71" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="631.29" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="675.86" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="720.43" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="765.0" cy="432.65" r="3.7" style="fill:#667085"/>
+  <polyline points="453.00,389.26 497.57,389.26 542.14,389.26 586.71,389.26 631.29,389.26 675.86,389.26 720.43,389.26 765.00,389.26" style="stroke:#2563EB;stroke-width:2.5;fill:none"/>
+  <circle cx="453.0" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <circle cx="497.57" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <circle cx="542.14" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <circle cx="586.71" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <circle cx="631.29" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <circle cx="675.86" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <circle cx="720.43" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <circle cx="765.0" cy="389.26" r="3.7" style="fill:#2563EB"/>
+  <polyline points="453.00,389.26 497.57,389.26 542.14,389.26 586.71,317.68 631.29,317.68 675.86,317.68 720.43,384.93 765.00,386.66" style="stroke:#EA580C;stroke-width:2.5;fill:none"/>
+  <circle cx="453.0" cy="389.26" r="3.7" style="fill:#EA580C"/>
+  <circle cx="497.57" cy="389.26" r="3.7" style="fill:#EA580C"/>
+  <circle cx="542.14" cy="389.26" r="3.7" style="fill:#EA580C"/>
+  <circle cx="586.71" cy="317.68" r="3.7" style="fill:#EA580C"/>
+  <circle cx="631.29" cy="317.68" r="3.7" style="fill:#EA580C"/>
+  <circle cx="675.86" cy="317.68" r="3.7" style="fill:#EA580C"/>
+  <circle cx="720.43" cy="384.93" r="3.7" style="fill:#EA580C"/>
+  <circle cx="765.0" cy="386.66" r="3.7" style="fill:#EA580C"/>
+  <text x="609.0" y="497" class="small" text-anchor="middle">Generation index</text>
+  <text x="818" y="137" class="heading" text-anchor="start">Elastic protection factor</text>
+  <line x1="818" y1="432.65" x2="1160" y2="432.65" class="grid"/>
+  <text x="810" y="436.65" class="tiny" text-anchor="end">1</text>
+  <line x1="818" y1="345.88" x2="1160" y2="345.88" class="grid"/>
+  <text x="810" y="349.88" class="tiny" text-anchor="end">2</text>
+  <line x1="818" y1="259.12" x2="1160" y2="259.12" class="grid"/>
+  <text x="810" y="263.12" class="tiny" text-anchor="end">3</text>
+  <line x1="818" y1="172.35" x2="1160" y2="172.35" class="grid"/>
+  <text x="810" y="176.35" class="tiny" text-anchor="end">4</text>
+  <rect x="904.14" y="155" width="36" height="295" fill="#FEF3F2"/>
+  <line x1="922.14" y1="155" x2="922.14" y2="450" class="shock-line"/>
+  <text x="833.0" y="473" class="tiny" text-anchor="middle">0</text>
+  <text x="877.57" y="473" class="tiny" text-anchor="middle">1</text>
+  <text x="922.14" y="473" class="tiny" text-anchor="middle">2</text>
+  <text x="966.71" y="473" class="tiny" text-anchor="middle">3</text>
+  <text x="1011.29" y="473" class="tiny" text-anchor="middle">4</text>
+  <text x="1055.86" y="473" class="tiny" text-anchor="middle">5</text>
+  <text x="1100.43" y="473" class="tiny" text-anchor="middle">6</text>
+  <text x="1145.0" y="473" class="tiny" text-anchor="middle">7</text>
+  <line x1="818" y1="450" x2="1160" y2="450" class="axis"/>
+  <polyline points="833.00,432.65 877.57,432.65 922.14,432.65 966.71,432.65 1011.29,432.65 1055.86,432.65 1100.43,432.65 1145.00,432.65" style="stroke:#667085;stroke-width:2.5;fill:none"/>
+  <circle cx="833.0" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="877.57" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="922.14" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="966.71" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="1011.29" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="1055.86" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="1100.43" cy="432.65" r="3.7" style="fill:#667085"/>
+  <circle cx="1145.0" cy="432.65" r="3.7" style="fill:#667085"/>
+  <polyline points="833.00,423.97 877.57,423.97 922.14,423.97 966.71,423.97 1011.29,423.97 1055.86,423.97 1100.43,423.97 1145.00,423.97" style="stroke:#2563EB;stroke-width:2.5;fill:none"/>
+  <circle cx="833.0" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <circle cx="877.57" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <circle cx="922.14" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <circle cx="966.71" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <circle cx="1011.29" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <circle cx="1055.86" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <circle cx="1100.43" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <circle cx="1145.0" cy="423.97" r="3.7" style="fill:#2563EB"/>
+  <polyline points="833.00,410.96 877.57,410.96 922.14,410.96 966.71,410.96 1011.29,410.96 1055.86,410.96 1100.43,410.96 1145.00,410.96" style="stroke:#EA580C;stroke-width:2.5;fill:none"/>
+  <circle cx="833.0" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <circle cx="877.57" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <circle cx="922.14" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <circle cx="966.71" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <circle cx="1011.29" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <circle cx="1055.86" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <circle cx="1100.43" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <circle cx="1145.0" cy="410.96" r="3.7" style="fill:#EA580C"/>
+  <text x="989.0" y="497" class="small" text-anchor="middle">Generation index</text>
+  <text x="55" y="535" class="small" text-anchor="start">Published descriptive pilot · two blocks · no superiority claim</text>
+</svg>

@@ -657,6 +657,10 @@ class GcpRawHostHarnessTests(unittest.TestCase):
         self.assertTrue(
             plan["analysis"]["delivery_superiority_study_deferred"]
         )
+        self.assertEqual(
+            plan["visualization_spec"]["path"],
+            "benchmarks/raw_host_post_shock_efficiency_visualization_v1.json",
+        )
         self.assertEqual(len({run.run_id for run in runs}), 46)
         for block in range(1, 24):
             observed = runs[(block - 1) * 2:block * 2]
