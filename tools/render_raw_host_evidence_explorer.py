@@ -286,9 +286,48 @@ def validate_input(value: dict) -> None:
             raise ExplorerError(f"claims.{forbidden} must remain false")
 
 
+def format_copy_number(value: float) -> str:
+    if math.isclose(value, round(value), abs_tol=1e-9):
+        return str(int(round(value)))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def wire_comparison(biological: float, fixed: float) -> str:
+    delta = biological - fixed
+    if math.isclose(delta, 0.0, abs_tol=1e-9):
+        return "the wire totals tied"
+    direction = "fewer" if delta < 0 else "more"
+    return (
+        f"biological used {format_copy_number(abs(delta))} {direction} "
+        "wire symbols"
+    )
+
+
+def post_shock_comparisons(value: dict) -> dict[str, str]:
+    policies = value["post_shock"]["policies"]
+    fixed = policies["fixed-class-aware"]["wire_symbols"]
+    biological = policies["biological-adaptive"]["wire_symbols"]
+    return {
+        "mean": wire_comparison(
+            sum(biological) / len(biological),
+            sum(fixed) / len(fixed),
+        ),
+        **{
+            str(index): wire_comparison(biological[index], fixed[index])
+            for index in range(len(fixed))
+        },
+    }
+
+
 def render_explorer(value: dict, input_sha256: str) -> str:
     payload = json.dumps(
-        {"input_sha256": input_sha256, "evidence": value},
+        {
+            "input_sha256": input_sha256,
+            "evidence": value,
+            "copy": {
+                "post_shock_comparisons": post_shock_comparisons(value),
+            },
+        },
         ensure_ascii=False,
         separators=(",", ":"),
         allow_nan=False,
@@ -862,11 +901,8 @@ TEMPLATE = r'''<!DOCTYPE html>
             <div class="bar-value">${formatNumber(row.wire)}<small>wire symbols</small></div>
           </div>`;
         }).join("");
-        const fixed = rows.find(row => row.policy === "fixed-class-aware");
-        const biological = rows.find(row => row.policy === "biological-adaptive");
-        const delta = biological.wire - fixed.wire;
         const viewLabel = selectedBlock === "mean" ? "Across both blocks" : `In block ${Number(selectedBlock) + 1}`;
-        const comparison = delta === 0 ? "the wire totals tied" : `biological used ${formatNumber(Math.abs(delta))} fewer wire symbols`;
+        const comparison = payload.copy.post_shock_comparisons[selectedBlock];
         document.getElementById("post-shock-finding").innerHTML = `<strong>${viewLabel}, ${comparison} versus fixed-class-aware.</strong> Biological paid more initial protection and emitted fewer repair symbols; delivery remained 5/5 for both.`;
       }
 
@@ -888,7 +924,7 @@ TEMPLATE = r'''<!DOCTYPE html>
         if (selectedMetric === "terminal_feedback_rtt_mean_us") {
           note += " This is sender-steady application RTT, not one-way or network-only latency.";
         }
-        document.getElementById("condition-note").innerHTML = `<strong>${selectedCondition} · ${meta.label}</strong>${note}`;
+        document.getElementById("condition-note").innerHTML = `<strong>${selectedCondition} · ${meta.label}</strong><span>${note}</span>`;
       }
 
       function renderDelivery() {

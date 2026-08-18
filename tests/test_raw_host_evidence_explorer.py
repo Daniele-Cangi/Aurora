@@ -194,6 +194,29 @@ class RawHostEvidenceExplorerTests(unittest.TestCase):
                     expected[analysis_key],
                 )
 
+    def test_post_shock_comparison_copy_tracks_delta_sign(self):
+        value = explorer.load_json(self.input_path)
+        self.assertEqual(
+            explorer.post_shock_comparisons(value),
+            {
+                "mean": "biological used 34 fewer wire symbols",
+                "0": "biological used 68 fewer wire symbols",
+                "1": "the wire totals tied",
+            },
+        )
+
+        positive = copy.deepcopy(value)
+        biological = positive["post_shock"]["policies"][
+            "biological-adaptive"
+        ]
+        biological["repair_emitted"][0] = 330
+        biological["wire_symbols"][0] = 820
+        explorer.validate_input(positive)
+        self.assertEqual(
+            explorer.post_shock_comparisons(positive)["0"],
+            "biological used 20 more wire symbols",
+        )
+
     def test_superiority_or_clock_drift_is_rejected(self):
         value = explorer.load_json(self.input_path)
         superiority = copy.deepcopy(value)
