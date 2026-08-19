@@ -1,14 +1,14 @@
-# Contributing to Aurora-X
+# Contributing to Aurora
 
-Aurora-X welcomes contributions that make the transport system easier to **test, falsify, compare, replay, or operate without weakening its evidence boundaries**.
+Aurora welcomes contributions that make the transport system easier to **test, falsify, compare, replay, or operate without weakening its evidence boundaries**.
 
 Before starting substantial work, read:
 
 1. [`README.md`](README.md)
-2. [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md)
+2. [`AURORA_MASTER_PLAN.md`](AURORA_MASTER_PLAN.md)
 3. [`docs/OPEN_RESEARCH_FRONTIER.md`](docs/OPEN_RESEARCH_FRONTIER.md)
 
-Aurora-X is an active systems-research project. External contributions are not expected to follow the current implementation literally. Alternative controllers, codecs, verification approaches, orchestration designs, and negative results are welcome when their semantics are explicit and the comparison is fair.
+Aurora is an active systems-research project. External contributions are not expected to follow the current implementation literally. Alternative controllers, codecs, verification approaches, orchestration designs, and negative results are welcome when their semantics are explicit and the comparison is fair.
 
 ## Project invariants
 
@@ -200,7 +200,7 @@ Good bounded contributions may include:
 
 ## License of contributions
 
-Aurora-X is licensed under the Apache License, Version 2.0. Unless you explicitly state otherwise, every contribution intentionally submitted for inclusion in Aurora-X is provided under the same license, as described by Section 5 of the Apache License.
+Aurora is licensed under the Apache License, Version 2.0. Unless you explicitly state otherwise, every contribution intentionally submitted for inclusion in Aurora is provided under the same license, as described by Section 5 of the Apache License.
 
 Do not submit code, data, documentation, media, or other material unless you have the right to contribute it under those terms. Identify third-party material explicitly and preserve all applicable notices.
 

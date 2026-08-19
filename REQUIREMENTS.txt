@@ -1,6 +1,6 @@
-# Aurora-X Requirements
+# Aurora Requirements
 
-Aurora-X is a C++20 research project with optional cryptographic, RaptorQ, network-tool, and Python dashboard components.
+Aurora is a C++20 research project with optional cryptographic, RaptorQ, network-tool, and Python dashboard components.
 
 ## Core research build
 

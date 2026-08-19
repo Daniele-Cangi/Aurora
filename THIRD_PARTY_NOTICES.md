@@ -1,10 +1,10 @@
 # Third-party notices
 
-Aurora-X is licensed under the Apache License, Version 2.0. The Apache
-License applies only to Aurora-X's first-party material. Third-party
+Aurora is licensed under the Apache License, Version 2.0. The Apache
+License applies only to Aurora's first-party material. Third-party
 components retain their own copyright and license terms.
 
-Aurora-X does not vendor the optional system and Python packages listed
+Aurora does not vendor the optional system and Python packages listed
 below. Builds or installations that obtain them must preserve the license
 materials shipped by those projects.
 

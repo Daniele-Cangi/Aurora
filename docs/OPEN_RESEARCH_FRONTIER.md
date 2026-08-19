@@ -1,6 +1,6 @@
-# Aurora-X Open Research Frontier
+# Aurora Open Research Frontier
 
-Aurora-X already contains a large implemented and measured surface. The most useful external contributions are therefore not generic feature additions. They are **independent ways to challenge, simplify, extend, or validate the current architecture**.
+Aurora already contains a large implemented and measured surface. The most useful external contributions are therefore not generic feature additions. They are **independent ways to challenge, simplify, extend, or validate the current architecture**.
 
 This document lists the areas where outside work can add the most information without requiring the contributor to reproduce Aurora's entire development history.
 

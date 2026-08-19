@@ -1,8 +1,8 @@
-# Aurora-X Master Plan
+# Aurora Master Plan
 
 ## Maximum-Scope Engineering and Research Program
 
-Aurora-X is not being reduced to a small codec demonstration.
+Aurora is not being reduced to a small codec demonstration.
 
 The long-term objective remains the construction of an adaptive transport substrate for heterogeneous, energy-constrained, disruption-prone networks: a system that accepts application-declared transport requirements, protects declared byte classes, adapts coding and link behaviour, preserves safety constraints, retains custody across interruptions, and recovers from shocks without requiring continuous central control. Aurora does not infer payload semantics.
 
@@ -12,7 +12,7 @@ This document defines how to reach that objective without confusing architectura
 
 # 1. North Star
 
-Aurora-X should eventually accept an application transport contract such as:
+Aurora should eventually accept an application transport contract such as:
 
 ```text
 Deliver this state update before 800 ms.
@@ -43,7 +43,7 @@ Health state and safety supervision
 Constrained adaptation for the next action/generation
 ```
 
-Aurora-X reaches its maximum form when this loop works across multiple nodes, real heterogeneous links, intermittent connectivity and hardware-backed security while remaining reproducible in a digital twin.
+Aurora reaches its maximum form when this loop works across multiple nodes, real heterogeneous links, intermittent connectivity and hardware-backed security while remaining reproducible in a digital twin.
 
 ---
 
@@ -101,7 +101,7 @@ The optimizer may seek throughput, energy savings or exploration only inside con
 
 ## 2.5 Evidence levels never collapse into one another
 
-Aurora-X distinguishes:
+Aurora distinguishes:
 
 1. deterministic unit verification;
 2. stochastic simulation;
@@ -409,7 +409,7 @@ Each controller is deterministic under a fixed event stream, independently testa
 
 # 7. Scientific benchmark program
 
-Aurora-X requires a benchmark framework, not isolated successful runs.
+Aurora requires a benchmark framework, not isolated successful runs.
 
 ## Phase 3A — Baselines
 
@@ -478,7 +478,7 @@ For every scenario:
 
 ### Exit gate
 
-Aurora-X can state, with plots and uncertainty, where adaptation helps, where it does not and what it costs.
+Aurora can state, with plots and uncertainty, where adaptation helps, where it does not and what it costs.
 
 ---
 
@@ -526,7 +526,7 @@ A wall-clock mode remains for dashboard, emulation and hardware integration.
 
 ## Phase 4C — Digital-twin replay
 
-Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora-X can then replay the same observed conditions against different policies.
+Telemetry from emulation or hardware should be importable as a channel/contact trace. Aurora can then replay the same observed conditions against different policies.
 
 The current V6 `DecisionReplayLog` derives each proposal from recorded channel summaries, UCB/channel-selector state, epoch and isolated RNG state; verifies contact-aware safety decisions; replays each admitted action; applies UCB feedback; and reconstructs the bounded supervisory transition. The paired V7 `SimulationEventLedger` embeds canonical `ContactSchedule` and V2 `GenerationArrivalSchedule` inputs plus strict/fair discipline, the fixed 1000 ms scheduling quantum and configurable aging/fairness intervals. The deterministic event kernel releases and plans generations before transport work at the same timestamp, then drives scheduling from explicit quantum events. The ledger reconstructs last-scheduled-turn clocks and the fair turn-gap bound; paired verification binds HAL-accepted effective-service attempts to V6 execution. Channel delivery remains an outcome, not the definition of service, and no finite effective-service gap is claimed without serviceability assumptions. The next implementation phase is the complete contact/deadline-aware end-to-end transport benchmark; concurrent/mobile nodes and imported field/emulation traces remain pending.
 
@@ -724,7 +724,7 @@ At least one real link has a reproducible end-to-end experiment with measured en
 
 # 13. Maximum frontier research
 
-These are not immediate deliverables, but they remain part of Aurora-X's top-level direction.
+These are not immediate deliverables, but they remain part of Aurora's top-level direction.
 
 ## 13.1 Online system identification
 
@@ -905,7 +905,7 @@ docs/
 - formal safety invariants;
 - comparison with simpler controllers.
 
-## Aurora-X 1.0 Research System
+## Aurora 1.0 Research System
 
 A reproducible, multi-node, secure, heterogeneous adaptive transport research platform with:
 
@@ -939,4 +939,4 @@ Work should begin in this exact order:
 
 Only after step 10 should new biological mechanisms, additional links, learning policies or hardware claims be added.
 
-This is not a retreat from Aurora-X's maximum vision. It is the shortest path that makes the maximum vision technically possible.
+This is not a retreat from Aurora's maximum vision. It is the shortest path that makes the maximum vision technically possible.

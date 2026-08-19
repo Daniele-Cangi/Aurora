@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use Aurora in research, please cite the software using this metadata."
+type: software
+title: "Aurora"
+abstract: >-
+  A C++20 systems-research engine for bio-inspired adaptive transport,
+  deterministic heterogeneous-network simulation, and authenticated
+  process-separated UDP transport emulation.
+authors:
+  - family-names: "Cangi"
+    given-names: "Daniele"
+repository-code: "https://github.com/Daniele-Cangi/Aurora"
+url: "https://daniele-cangi.github.io/Aurora/"
+license: "Apache-2.0"
+keywords:
+  - "adaptive transport"
+  - "network simulation"
+  - "network emulation"
+  - "forward error correction"
+  - "resilient networking"

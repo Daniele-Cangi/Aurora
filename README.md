@@ -180,7 +180,7 @@ Key records:
 - [Proposed confirmatory efficiency study](docs/raw-host-post-shock-efficiency-study-v1.md)
 - [Machine-readable study design](benchmarks/gcp_raw_post_shock_efficiency_study_v1.json)
 - [Frozen visualization contract](benchmarks/raw_host_post_shock_efficiency_visualization_v1.json)
-- [Master research plan](AURORA_X_MASTER_PLAN.md)
+- [Master research plan](AURORA_MASTER_PLAN.md)
 
 ## Repository map
 
