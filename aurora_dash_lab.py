@@ -182,7 +182,7 @@ stderr_thread.start()
 # -----------------------------
 
 app = dash.Dash(__name__)
-app.title = "Aurora-X Advanced Lab Dashboard"
+app.title = "Aurora Advanced Lab Dashboard"
 
 # Aggiungi CSS personalizzato tramite index_string
 app.index_string = '''
@@ -304,7 +304,7 @@ app.layout = html.Div(
                         html.Div(
                             children=[
                                 html.H1(
-                                    "🔬 Aurora-X Advanced Lab Dashboard",
+                                    "🔬 Aurora Advanced Lab Dashboard",
                                     style={
                                         "margin": "0 0 10px 0",
                                         "color": DARK_THEME["primary"],
@@ -314,7 +314,7 @@ app.layout = html.Div(
                                     },
                                 ),
                                 html.P(
-                                    "Monitoraggio in tempo reale del sistema Aurora-X con controllo parametri interattivo",
+                                    "Monitoraggio in tempo reale del sistema Aurora con controllo parametri interattivo",
                                     style={
                                         "margin": "0",
                                         "color": DARK_THEME["text_muted"],
@@ -950,7 +950,7 @@ def update_all(n_intervals, reset_clicks):
 if __name__ == "__main__":
     time.sleep(1.0)
     print("\n" + "="*70)
-    print("🚀 Aurora-X Advanced Lab Dashboard")
+    print("🚀 Aurora Advanced Lab Dashboard")
     print("="*70)
     print(f"\n📊 Dashboard disponibile su: http://127.0.0.1:8050")
     print(f"   Oppure: http://localhost:8050")

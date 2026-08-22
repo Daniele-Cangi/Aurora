@@ -15,21 +15,21 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Aurora-X is an ambitious systems research project exploring a long-term goal:
+Aurora is an ambitious systems research project exploring a long-term goal:
 
 > Can a network transport substrate observe its own condition, protect different classes of information according to intent, adapt coding and physical-link decisions under stress, preserve energy and duty-cycle constraints, and recover safely after severe disruption?
 
 The current repository contains a substantial C++20 research implementation covering fountain-style forward error correction, adaptive redundancy, traffic classes, simulated RF/optical/backscatter links, energy and RIS models, supervisory state, cross-layer optimization, signed payloads, telemetry, UDP experiments, and an interactive dashboard.
 
-Aurora-X is **not yet a field-deployed extreme-network stack**, a validated replacement for established FEC standards, or a production security system. The internal LT-like simulator now has a coherent descriptor-driven path for deterministic concurrent generation arrivals and decoding, but its channel, energy, safety-state, HAL, dashboard, and security layers still include simulation or prototype behaviour that must not be used for quantitative field claims.
+Aurora is **not yet a field-deployed extreme-network stack**, a validated replacement for established FEC standards, or a production security system. The internal LT-like simulator now has a coherent descriptor-driven path for deterministic concurrent generation arrivals and decoding, but its channel, energy, safety-state, HAL, dashboard, and security layers still include simulation or prototype behaviour that must not be used for quantitative field claims.
 
-The project is not being reduced in scope. Its engineering path and maximum target architecture are defined in [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md).
+The project is not being reduced in scope. Its engineering path and maximum target architecture are defined in [`AURORA_MASTER_PLAN.md`](AURORA_MASTER_PLAN.md).
 
 ---
 
 ## Mission
 
-Aurora-X aims to become a contract-aware, self-observing transport layer for environments where conventional assumptions fail:
+Aurora aims to become a contract-aware, self-observing transport layer for environments where conventional assumptions fail:
 
 - intermittent and asymmetric connectivity;
 - severe packet loss and rapidly changing channels;
@@ -81,7 +81,7 @@ The biological terminology is a design metaphor for control behaviour, not a cla
 
 ### 1. A real fountain-style coding experiment
 
-Aurora-X includes an internal FEC implementation that:
+Aurora includes an internal FEC implementation that:
 
 1. splits a payload into source symbols;
 2. emits seeded XOR combinations;
@@ -135,7 +135,7 @@ The engine combines coding decisions with models of:
 
 ### 5. Supervisory and optimization layers
 
-Aurora-X includes experimental layers for:
+Aurora includes experimental layers for:
 
 - aggregated flow health;
 - safety state classification;
@@ -245,7 +245,7 @@ The current boundary is intentionally narrow:
 
 ## Target architecture
 
-Aurora-X is intended to evolve toward the following layered system:
+Aurora is intended to evolve toward the following layered system:
 
 ```text
 Application intent and mission constraints
@@ -280,7 +280,7 @@ The complete target includes:
 - formal safety invariants for adaptation boundaries;
 - comparison against established baselines.
 
-See [`AURORA_X_MASTER_PLAN.md`](AURORA_X_MASTER_PLAN.md) for the complete path.
+See [`AURORA_MASTER_PLAN.md`](AURORA_MASTER_PLAN.md) for the complete path.
 
 ---
 
@@ -998,7 +998,7 @@ Current status:
 
 ## Testing and validation policy
 
-Aurora-X will distinguish four levels of evidence:
+Aurora will distinguish four levels of evidence:
 
 1. **Unit evidence** — exact behaviour of codecs, parsers, controllers, and state machines.
 2. **Simulation evidence** — results under declared synthetic channel and energy models.
@@ -1036,7 +1036,7 @@ Primary metrics:
 
 ## License
 
-Aurora-X's first-party material is open source under the
+Aurora's first-party material is open source under the
 [Apache License 2.0](LICENSE). The license permits use, modification and
 redistribution, including commercial use, subject to its attribution, notice
 and other conditions. It also includes an express patent grant from
@@ -1049,4 +1049,4 @@ described in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
-Aurora-X should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Protocol V3 correlates each accepted feedback with an authenticated forward sequence, reports feedback RTT entirely on the sender steady clock and requires authenticated terminal completion. CI demonstrates the transport across container namespaces and two independent GitHub-hosted Ubuntu VMs; retained GCP evidence adds a manual run, an automated run, a same-commit N=10 campaign, a historical balanced 2×2 matrix, a completed randomized 12-lifecycle Measurement Contract V2 pilot and the completed preregistered eight-block, 32-lifecycle condition study over four UTC dates. The final study met its registered confirmatory criterion for the narrow declared emulation-condition contrast; it does not authorize regional, calibrated, hardware or field claims.
+Aurora should be judged neither as a finished product nor as a small disposable prototype. Its generation loop is causal, scheduling opportunity is distinct from HAL-accepted effective service, and the main research run is driven by a deterministic discrete-event kernel whose canonical V7/V6 output is byte-locked to the pre-migration oracle. The complete contact/deadline-aware sweep exercises that stack end to end under common declared inputs and includes a pinned external Wirehair comparison. A process-separated UDP path now multiplexes concurrent generations, replays independent forward/reverse impairment traces, rejects stale feedback and replayed datagrams, and uses direction/session-bound HMAC-SHA-256 when built with libsodium. Protocol V3 correlates each accepted feedback with an authenticated forward sequence, reports feedback RTT entirely on the sender steady clock and requires authenticated terminal completion. CI demonstrates the transport across container namespaces and two independent GitHub-hosted Ubuntu VMs; retained GCP evidence adds a manual run, an automated run, a same-commit N=10 campaign, a historical balanced 2×2 matrix, a completed randomized 12-lifecycle Measurement Contract V2 pilot and the completed preregistered eight-block, 32-lifecycle condition study over four UTC dates. The final study met its registered confirmatory criterion for the narrow declared emulation-condition contrast; it does not authorize regional, calibrated, hardware or field claims.

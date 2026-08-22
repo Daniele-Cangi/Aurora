@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Aurora-X will be documented in this file.
+All notable changes to Aurora will be documented in this file.
 
 ## [Unreleased]
 

@@ -1,5 +1,5 @@
 // aurora_x.cpp - UPDATED VERSION (Nexus patch)
-// AURORA-X - Extreme Field Orchestrator (3-file repo)
+// Aurora - Extreme Field Orchestrator (3-file repo)
 // Build Dev:   g++ -std=c++20 -O3 -pthread aurora_x.cpp -o aurora_x
 // Build Field: g++ -std=c++20 -O3 -pthread -DFIELD_BUILD -DAURORA_USE_REAL_CRYPTO -DAURORA_USE_RAPTORQ_REAL aurora_x.cpp -lsodium -o aurora_x_field
 
@@ -1452,7 +1452,7 @@ struct Engine {
 
 bool aurora_run(const std::string& intention, Engine* outE = nullptr) {
   ios::sync_with_stdio(false);
-  cout<<"=== AURORA-X - Extreme Field Orchestrator (UPDATED) ===\n";
+  cout<<"=== Aurora - Extreme Field Orchestrator (UPDATED) ===\n";
   std::unique_ptr<Engine> owned_engine;
   Engine* E = outE;
   if (!E) {
@@ -1470,7 +1470,7 @@ bool aurora_run_interactive_lab(Engine& engine, int max_steps = 5000) {
   // NON disabilitare sync per permettere flush immediato
   // ios::sync_with_stdio(false);  // COMMENTATO: causa problemi di buffering
   // Messaggio iniziale su stderr per non interferire con JSON su stdout
-  std::cerr << "=== AURORA-X - Interactive Lab Mode ===" << std::endl;
+  std::cerr << "=== Aurora - Interactive Lab Mode ===" << std::endl;
   std::cerr << "Running for up to " << max_steps << " steps. Press Ctrl+C to stop." << std::endl;
   std::cerr << "Emitting JSON health events to stdout..." << std::endl;
   

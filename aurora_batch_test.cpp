@@ -1,5 +1,5 @@
 // aurora_batch_test.cpp
-// Batch test runner for Aurora-X: adaptive, stress, RIS scaling, and channel degradation tests
+// Batch test runner for Aurora: adaptive, stress, RIS scaling, and channel degradation tests
 #define AURORA_NO_MAIN
 #include "aurora_x.cpp"
 #include <fstream>

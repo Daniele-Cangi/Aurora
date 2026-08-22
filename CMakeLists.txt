@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(AuroraX LANGUAGES CXX)
+project(Aurora LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -167,7 +167,7 @@ if(USE_SODIUM)
   target_link_libraries(aurora_sodium INTERFACE ${SODIUM_LIB})
 else()
   message(WARNING
-    "USE_SODIUM=OFF: Aurora-X will use deterministic placeholder signatures. "
+    "USE_SODIUM=OFF: Aurora will use deterministic placeholder signatures. "
     "This build is INSECURE_TEST and must not be described as using real Ed25519."
   )
 endif()
@@ -829,7 +829,7 @@ foreach(tgt ${_AURORA_ALL_TARGETS})
 endforeach()
 
 message(STATUS "")
-message(STATUS "==== Aurora-X Build Configuration ====")
+message(STATUS "==== Aurora Build Configuration ====")
 message(STATUS "  C++ standard      : ${CMAKE_CXX_STANDARD}")
 message(STATUS "  BUILD_FIELD       : ${BUILD_FIELD}")
 message(STATUS "  USE_SODIUM        : ${USE_SODIUM}")
